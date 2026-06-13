@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 
-// API_URL: khi deploy, đặt biến VITE_API_URL trỏ tới backend đã host. Local mặc định localhost.
-const API_URL = (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_URL) || "http://localhost:8000"
+// API_URL: trỏ tới backend đã deploy trên Render. Đổi link dưới nếu backend đổi URL.
+// (Có thể ghi đè bằng window.MEDIFLOW_API_URL trong index.html mà không cần sửa file này.)
+const API_URL = (typeof window !== "undefined" && window.MEDIFLOW_API_URL) || "https://mediflow-ai-8zhx.onrender.com"
 
 // ─── CSS ──────────────────────────────────────────────────────────────────────
 const CSS = `
@@ -798,20 +799,22 @@ function Sparkline({ values, color = "#1D6FE8", width = 80, height = 26, fluid =
 }
 
 // Donut chart (SVG, no lib)
-function DonutChart({ data, size = 64 }) {
+function DonutChart({ data, size = 64, centerValue = null, centerLabel = "vấn đề" }) {
   const total = data.reduce((s, d) => s + d.value, 0)
+  const shown = centerValue != null ? centerValue : total
   let offset = 0
   const R = 22, cx = size / 2, cy = size / 2
   const circ = 2 * Math.PI * R
-  const segments = data.map(d => {
+  const segments = total > 0 ? data.map(d => {
     const pct = d.value / total
     const len = pct * circ
     const seg = { ...d, offset: circ - offset, dasharray: `${len} ${circ - len}` }
     offset += len
     return seg
-  })
+  }) : []
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <circle cx={cx} cy={cy} r={R} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="10" />
       {segments.map((s, i) => (
         <circle key={i} cx={cx} cy={cy} r={R} fill="none"
           stroke={s.color} strokeWidth="10"
@@ -820,9 +823,9 @@ function DonutChart({ data, size = 64 }) {
           transform={`rotate(-90 ${cx} ${cy})`} />
       ))}
       <text x={cx} y={cy + 1} textAnchor="middle" dominantBaseline="middle"
-        fontSize="13" fontWeight="800" fill="#FFFFFF">{total}</text>
+        fontSize="13" fontWeight="800" fill="#FFFFFF">{shown}</text>
       <text x={cx} y={cy + 12} textAnchor="middle" dominantBaseline="middle"
-        fontSize="7.5" fill="rgba(225,238,255,0.92)" fontWeight="600">nguy cơ</text>
+        fontSize="7.5" fill="rgba(225,238,255,0.92)" fontWeight="600">{centerLabel}</text>
     </svg>
   )
 }
@@ -3041,11 +3044,23 @@ function ReportTab({ report: r, analysis }) {
       }))
   const trendSummary = analysis?.trend_summary || null
 
-  const donutData = [
-    { value: (r.canh_bao_nguy_co || []).filter(c=>c.muc_do==="cao").length,        color:"#EF4444" },
-    { value: (r.canh_bao_nguy_co || []).filter(c=>c.muc_do==="trung_binh").length, color:"#F59E0B" },
-    { value: (r.canh_bao_nguy_co || []).filter(c=>c.muc_do==="thap").length,       color:"#38BDF8" },
-  ]
+  // Donut: phản ánh TRẠNG THÁI VẤN ĐỀ (tách biến cố đã hồi phục khỏi vấn đề hiện tại).
+  // Ưu tiên problem_status; nếu hồ sơ thật thiếu thì rơi về mức nguy cơ HIỆN TẠI từ findings.
+  const ps = r.problem_status
+  let segActive, segMonitor, segResolved, donutLegend
+  if (ps) {
+    segActive   = (ps.hien_tai||[]).filter(p=>p.trang_thai==="active").length
+    segMonitor  = (ps.hien_tai||[]).filter(p=>p.trang_thai!=="active").length
+    segResolved = (ps.da_qua||[]).length
+    donutLegend = [["#22C55E","Đang hoạt động",segActive],["#F59E0B","Cần theo dõi",segMonitor],["#94A3B8","Đã hồi phục",segResolved]]
+  } else {
+    segActive   = findings.filter(f=>f.muc==="critical").length
+    segMonitor  = findings.filter(f=>f.muc==="warning").length
+    segResolved = findings.filter(f=>f.muc==="stable").length
+    donutLegend = [["#EF4444","Cần xử lý",segActive],["#F59E0B","Theo dõi",segMonitor],["#22C55E","Ổn định",segResolved]]
+  }
+  const donutData = donutLegend.map(([color,,value]) => ({ value, color }))
+  const donutCurrent = segActive + segMonitor   // số vấn đề CÒN tồn tại (không tính đã hồi phục)
 
   return (
     <div className="report-stack">
@@ -3068,11 +3083,11 @@ function ReportTab({ report: r, analysis }) {
             </div>
           </div>
         </div>
-        {/* Donut + legend */}
+        {/* Donut + legend: vấn đề còn tồn tại vs đã hồi phục (không trộn lẫn) */}
         <div className="banner-donut">
-          <DonutChart data={donutData} size={64}/>
+          <DonutChart data={donutData} size={64} centerValue={donutCurrent} centerLabel="vấn đề"/>
           <div className="donut-legend">
-            {[["#EF4444","Ưu tiên cao",donutData[0].value],["#F59E0B","Trung bình",donutData[1].value],["#38BDF8","Theo dõi",donutData[2].value]].map(([c,l,v])=>(
+            {donutLegend.map(([c,l,v])=>(
               <div key={l} className="donut-item"><span className="donut-dot" style={{background:c}}/>{l}: {v}</div>
             ))}
           </div>
