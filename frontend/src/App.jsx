@@ -3374,12 +3374,23 @@ export default function App() {
     }
     // Upload thật: gọi backend, KHÔNG tự rơi về hồ sơ mẫu khi lỗi
     setLoading(true); setUploadError(null)
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 170000)  // 170s: đủ cho hồ sơ dài + Render free khởi động
     try {
       const fd = new FormData(); fd.append("file", file)
-      const res = await fetch(`${API_URL}/analyze`, { method:"POST", body:fd })
-      const data = await res.json()
-      if (!data.success) {
-        setUploadError(data.error || "AI không phân tích được hồ sơ này. Vui lòng thử file khác.")
+      const res = await fetch(`${API_URL}/analyze`, { method:"POST", body:fd, signal:ctrl.signal })
+      clearTimeout(timer)
+      // Backend quá tải/timeout có thể trả 502/504 không phải JSON -> đọc an toàn
+      let data
+      try { data = await res.json() }
+      catch {
+        setUploadError(res.status >= 500
+          ? `Máy chủ phân tích gặp lỗi (mã ${res.status}). Hồ sơ có thể quá lớn so với giới hạn bộ nhớ của Render gói miễn phí. Hãy thử file ít trang hơn, hoặc xem log trên Render.`
+          : `Phản hồi không hợp lệ từ máy chủ (mã ${res.status}).`)
+        setLoading(false); return
+      }
+      if (!res.ok || !data.success) {
+        setUploadError(data.error || `Máy chủ trả lỗi (mã ${res.status}). Hãy thử lại hoặc dùng file ít trang hơn.`)
         setLoading(false); return
       }
       setReport(data.report)
@@ -3388,7 +3399,12 @@ export default function App() {
       initChat(data.report)
       setLoading(false); setState("report")
     } catch (e) {
-      setUploadError("Không kết nối được máy chủ phân tích. Hãy kiểm tra backend đang chạy (uvicorn main:app) và ANTHROPIC_API_KEY đã được cấu hình.")
+      clearTimeout(timer)
+      if (e.name === "AbortError") {
+        setUploadError("Quá thời gian xử lý. Backend Render gói miễn phí có thể đang khởi động lại (thử lại sau 30 đến 60 giây), hoặc hồ sơ quá nhiều trang. Gợi ý: thử file ít trang hơn trước.")
+      } else {
+        setUploadError("Không kết nối được máy chủ phân tích. Có thể backend đang khởi động lại (chờ rồi thử lại), hoặc trình duyệt chặn (CORS). Chatbot chạy được nghĩa là khóa API vẫn ổn.")
+      }
       setLoading(false)
     }
   }

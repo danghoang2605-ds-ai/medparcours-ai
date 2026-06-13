@@ -221,6 +221,13 @@ QUY TẮC:
 MIN_CHARS_PER_PAGE = 40
 # Tổng ký tự tối thiểu để coi cả file là text PDF (không cần OCR)
 MIN_TOTAL_CHARS = 200
+# ─── Giới hạn an toàn cho host RAM thấp (vd Render free 512MB) ─────────────────
+# Số trang tối đa được OCR (OCR rất tốn RAM). Vượt mức này thì bỏ qua OCR các
+# trang sau để tránh tràn bộ nhớ làm sập tiến trình.
+MAX_OCR_PAGES = 8
+# Số ký tự tối đa gửi cho LLM. Hồ sơ quá dài sẽ bị cắt (kèm ghi chú) để tránh
+# vượt thời gian phản hồi và chi phí token. ~120k ký tự là rất nhiều cho 1 ca.
+MAX_TEXT_CHARS = 120_000
 
 
 def extract_text_from_pdf(pdf_path: str) -> dict:
@@ -228,14 +235,16 @@ def extract_text_from_pdf(pdf_path: str) -> dict:
     Trích xuất text từ PDF.
 
     Chiến lược: ưu tiên text layer (HIS export là text thuần, nhanh và chính xác
-    100% ký tự gốc). Chỉ chạy OCR cho những trang KHÔNG có text layer (trang scan).
+    100% ký tự gốc). Chỉ chạy OCR cho những trang KHÔNG có text layer (trang scan),
+    và giới hạn số trang OCR để không tràn RAM trên host nhỏ.
 
     Trả về dict:
       {
-        "text": "...",        # toàn bộ text đã ghép
+        "text": "...",        # toàn bộ text đã ghép (đã giới hạn độ dài)
         "pages": int,         # số trang
         "method": "text" | "ocr" | "hybrid",  # cách trích xuất
-        "ocr_pages": [int]    # danh sách trang phải dùng OCR (1-indexed)
+        "ocr_pages": [int],   # danh sách trang đã OCR (1-indexed)
+        "truncated": bool     # text có bị cắt vì quá dài không
       }
     """
     page_texts = []
@@ -251,19 +260,29 @@ def extract_text_from_pdf(pdf_path: str) -> dict:
                 page_texts.append(text)
                 continue
 
-            # Trang rỗng/scan: thử OCR (nếu Tesseract khả dụng)
-            ocr_text = _ocr_single_page(page)
-            if ocr_text:
-                ocr_pages.append(i + 1)
-                page_texts.append(ocr_text)
+            # Trang rỗng/scan: thử OCR (nếu Tesseract khả dụng), nhưng giới hạn
+            # số trang OCR để không tràn RAM trên host nhỏ.
+            if len(ocr_pages) < MAX_OCR_PAGES:
+                ocr_text = _ocr_single_page(page)
+                if ocr_text:
+                    ocr_pages.append(i + 1)
+                    page_texts.append(ocr_text)
+                else:
+                    page_texts.append(text)
             else:
-                # Không OCR được: giữ lại text ít ỏi (nếu có) để không mất trang
+                # Đã đạt giới hạn OCR: giữ text ít ỏi (nếu có), không OCR thêm
                 page_texts.append(text)
 
     full_text = "\n\n".join(
         f"{'='*40}\nTRANG {i+1}\n{'='*40}\n{t}"
         for i, t in enumerate(page_texts)
     )
+
+    # Cắt bớt nếu quá dài để tránh vượt thời gian/token trên host nhỏ
+    truncated = False
+    if len(full_text) > MAX_TEXT_CHARS:
+        full_text = full_text[:MAX_TEXT_CHARS] + "\n\n[... hồ sơ quá dài, đã cắt bớt phần sau ...]"
+        truncated = True
 
     total_chars = sum(len(t) for t in page_texts)
     if not ocr_pages:
@@ -279,6 +298,7 @@ def extract_text_from_pdf(pdf_path: str) -> dict:
         "method": method,
         "ocr_pages": ocr_pages,
         "total_chars": total_chars,
+        "truncated": truncated,
     }
 
 
