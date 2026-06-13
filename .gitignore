@@ -1,0 +1,31 @@
+# ───── Bảo mật: KHÔNG BAO GIỜ commit khóa API ─────
+.env
+.env.*
+!.env.example
+*.key
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Node / Vite
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs / tạm
+*.log
+tmp/
