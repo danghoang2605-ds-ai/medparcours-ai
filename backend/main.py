@@ -15,9 +15,9 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import pdfplumber
-import pytesseract
-from PIL import Image
+# pypdf: đọc text PDF rất nhẹ RAM (thay cho pdfplumber vốn ngốn bộ nhớ).
+# HIS export là PDF text thuần nên không cần OCR; bỏ OCR giúp vừa RAM 512MB.
+from pypdf import PdfReader
 import anthropic
 import clinical_rules
 
@@ -194,12 +194,21 @@ TƯ DUY LÂM SÀNG VÀ DÒNG THỜI GIAN (BẮT BUỘC - cực kỳ quan trọng
 
 CHAT_SYSTEM = """Bạn là trợ lý y tế hỗ trợ bác sĩ Việt Nam. Bạn có đầy đủ hồ sơ bệnh nhân.
 
-QUY TẮC:
+QUY TẮC NỘI DUNG:
 1. Chỉ trả lời dựa trên thông tin TRONG hồ sơ được cung cấp
 2. Nếu không có thông tin: nói rõ "Không tìm thấy trong hồ sơ"
 3. Trích dẫn nguồn cụ thể (trang/phiếu nào) khi có thể
 4. Ngắn gọn, trực tiếp — bác sĩ cần thông tin nhanh
-5. KHÔNG đưa ra lời khuyên điều trị mới ngoài hồ sơ"""
+5. KHÔNG đưa ra lời khuyên điều trị mới ngoài hồ sơ
+
+QUY TẮC ĐỊNH DẠNG (bắt buộc, vì khung chat hiển thị dạng văn bản đơn giản):
+6. TUYỆT ĐỐI KHÔNG dùng bảng markdown (không dùng ký tự "|" để kẻ bảng). Khung chat
+   không kẻ được bảng nên sẽ hiện ra một mớ dấu gạch lộn xộn.
+7. Khi cần liệt kê nhiều mốc/giá trị, dùng gạch đầu dòng, mỗi dòng một ý, ví dụ:
+   "- 29/09: CRP 241 mg/L (đỉnh, phản ứng viêm mạnh)". Diễn tiến theo thời gian thì
+   liệt kê từng dòng như vậy, KHÔNG kẻ bảng.
+8. KHÔNG dùng emoji. Có thể dùng chữ in đậm bằng dấu ** cho từ khóa quan trọng.
+9. Trả lời bằng tiếng Việt, không dùng dấu gạch ngang dài, thay bằng "đến" hoặc "-"."""
 
 # BƯỚC 3: Diễn đạt diễn tiến. Claude CHỈ được dựa trên các mốc chênh lệch (delta)
 # mà rule engine đã trích, KHÔNG tự bịa, KHÔNG tự đánh giá tương tác thuốc.
@@ -219,104 +228,71 @@ QUY TẮC:
 
 # Ngưỡng ký tự tối thiểu để coi 1 trang là "có text thật"
 MIN_CHARS_PER_PAGE = 40
-# Tổng ký tự tối thiểu để coi cả file là text PDF (không cần OCR)
+# Tổng ký tự tối thiểu để coi cả file là text PDF (đọc được)
 MIN_TOTAL_CHARS = 200
-# ─── Giới hạn an toàn cho host RAM thấp (vd Render free 512MB) ─────────────────
-# Số trang tối đa được OCR (OCR rất tốn RAM). Vượt mức này thì bỏ qua OCR các
-# trang sau để tránh tràn bộ nhớ làm sập tiến trình.
-MAX_OCR_PAGES = 8
-# Số ký tự tối đa gửi cho LLM. Hồ sơ quá dài sẽ bị cắt (kèm ghi chú) để tránh
-# vượt thời gian phản hồi và chi phí token. ~120k ký tự là rất nhiều cho 1 ca.
-MAX_TEXT_CHARS = 120_000
+# ─── Giới hạn an toàn cho host RAM thấp (Render free 512MB) ────────────────────
+# Số trang tối đa xử lý. File quá nhiều trang sẽ chỉ đọc phần đầu (kèm ghi chú)
+# để không tràn RAM và không vượt thời gian.
+MAX_PAGES = 80
+# Số ký tự tối đa gửi cho LLM. Cắt bớt để bound token và thời gian phản hồi.
+MAX_TEXT_CHARS = 90_000
 
 
 def extract_text_from_pdf(pdf_path: str) -> dict:
     """
-    Trích xuất text từ PDF.
+    Trích xuất text từ PDF bằng pypdf (nhẹ RAM, đọc từng trang theo luồng).
 
-    Chiến lược: ưu tiên text layer (HIS export là text thuần, nhanh và chính xác
-    100% ký tự gốc). Chỉ chạy OCR cho những trang KHÔNG có text layer (trang scan),
-    và giới hạn số trang OCR để không tràn RAM trên host nhỏ.
+    HIS export là PDF text thuần nên đọc text layer là đủ, chính xác 100% ký tự gốc.
+    Không dùng OCR (OCR dựng ảnh rất tốn RAM, dễ làm sập host nhỏ). Nếu file là bản
+    scan không có text layer, total_chars sẽ rất thấp và endpoint sẽ báo lỗi rõ ràng.
 
     Trả về dict:
       {
-        "text": "...",        # toàn bộ text đã ghép (đã giới hạn độ dài)
-        "pages": int,         # số trang
-        "method": "text" | "ocr" | "hybrid",  # cách trích xuất
-        "ocr_pages": [int],   # danh sách trang đã OCR (1-indexed)
-        "truncated": bool     # text có bị cắt vì quá dài không
+        "text": str, "pages": int, "method": "text",
+        "ocr_pages": [], "total_chars": int,
+        "truncated": bool,      # bị cắt do quá nhiều trang hoặc quá dài
+        "empty_pages": int      # số trang không có text layer
       }
     """
-    page_texts = []
-    ocr_pages = []
+    reader = PdfReader(pdf_path)
+    n_pages = len(reader.pages)
+    pages_to_read = min(n_pages, MAX_PAGES)
 
-    with pdfplumber.open(pdf_path) as pdf:
-        n_pages = len(pdf.pages)
-        for i, page in enumerate(pdf.pages):
-            text = (page.extract_text() or "").strip()
+    parts = []
+    acc = 0
+    empty_pages = 0
+    truncated_chars = False
 
-            # Trang có text layer đầy đủ: dùng luôn
-            if len(text) >= MIN_CHARS_PER_PAGE:
-                page_texts.append(text)
-                continue
+    for i in range(pages_to_read):
+        try:
+            text = (reader.pages[i].extract_text() or "").strip()
+        except Exception:
+            text = ""
+        if len(text) < MIN_CHARS_PER_PAGE:
+            empty_pages += 1
+        part = f"{'='*40}\nTRANG {i+1}\n{'='*40}\n{text}"
+        if acc + len(part) > MAX_TEXT_CHARS:
+            remain = max(0, MAX_TEXT_CHARS - acc)
+            if remain > 0:
+                parts.append(part[:remain])
+            truncated_chars = True
+            break
+        parts.append(part)
+        acc += len(part) + 2
 
-            # Trang rỗng/scan: thử OCR (nếu Tesseract khả dụng), nhưng giới hạn
-            # số trang OCR để không tràn RAM trên host nhỏ.
-            if len(ocr_pages) < MAX_OCR_PAGES:
-                ocr_text = _ocr_single_page(page)
-                if ocr_text:
-                    ocr_pages.append(i + 1)
-                    page_texts.append(ocr_text)
-                else:
-                    page_texts.append(text)
-            else:
-                # Đã đạt giới hạn OCR: giữ text ít ỏi (nếu có), không OCR thêm
-                page_texts.append(text)
-
-    full_text = "\n\n".join(
-        f"{'='*40}\nTRANG {i+1}\n{'='*40}\n{t}"
-        for i, t in enumerate(page_texts)
-    )
-
-    # Cắt bớt nếu quá dài để tránh vượt thời gian/token trên host nhỏ
-    truncated = False
-    if len(full_text) > MAX_TEXT_CHARS:
-        full_text = full_text[:MAX_TEXT_CHARS] + "\n\n[... hồ sơ quá dài, đã cắt bớt phần sau ...]"
-        truncated = True
-
-    total_chars = sum(len(t) for t in page_texts)
-    if not ocr_pages:
-        method = "text"
-    elif len(ocr_pages) == n_pages:
-        method = "ocr"
-    else:
-        method = "hybrid"
+    full_text = "\n\n".join(parts)
+    if truncated_chars:
+        full_text += "\n\n[... hồ sơ quá dài, đã cắt bớt phần sau ...]"
 
     return {
         "text": full_text,
         "pages": n_pages,
-        "method": method,
-        "ocr_pages": ocr_pages,
-        "total_chars": total_chars,
-        "truncated": truncated,
+        "method": "text",
+        "ocr_pages": [],
+        "total_chars": acc,
+        "truncated": truncated_chars or (n_pages > MAX_PAGES),
+        "empty_pages": empty_pages,
     }
-
-
-def _ocr_single_page(page) -> str:
-    """
-    OCR 1 trang pdfplumber. Trả về "" nếu Tesseract không khả dụng hoặc lỗi.
-    Chỉ được gọi cho trang KHÔNG có text layer, nên chi phí OCR là tối thiểu.
-    """
-    try:
-        img = page.to_image(resolution=200)
-        return pytesseract.image_to_string(
-            img.original,
-            lang="vie+eng",
-            config="--psm 6",
-        ).strip()
-    except Exception:
-        # Tesseract chưa cài hoặc thiếu gói tiếng Việt: bỏ qua, không làm crash request
-        return ""
 
 
 def call_claude(system: str, user_message: str, max_tokens: int = 4000) -> str:
@@ -339,18 +315,11 @@ def call_claude(system: str, user_message: str, max_tokens: int = 4000) -> str:
 
 @app.get("/health")
 def health():
-    # Kiểm tra Tesseract có sẵn không (chỉ cần cho file scan)
-    try:
-        tesseract_version = str(pytesseract.get_tesseract_version())
-    except Exception:
-        tesseract_version = None
-
     return {
         "status": "ok",
         "service": "mediflow-ai",
         "model": "claude-haiku-4-5",
-        "tesseract_available": tesseract_version is not None,
-        "tesseract_version": tesseract_version,
+        "pdf_engine": "pypdf",
     }
 
 
@@ -376,8 +345,9 @@ async def analyze_record(file: UploadFile = File(...)):
         if extracted["total_chars"] < MIN_TOTAL_CHARS:
             return JSONResponse({
                 "success": False,
-                "error": "Không trích xuất được nội dung từ PDF. "
-                         "File có thể là bản scan và Tesseract OCR chưa được cài đặt.",
+                "error": "Không trích xuất được nội dung text từ PDF. File có thể là bản scan "
+                         "(ảnh chụp) không có lớp text. Hãy dùng bản PDF xuất trực tiếp từ HIS "
+                         "(dạng text), hoặc chuyển bản scan sang PDF có text trước khi tải lên.",
                 "meta": {
                     "pages": extracted["pages"],
                     "method": extracted["method"],
