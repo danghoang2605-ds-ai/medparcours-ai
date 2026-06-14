@@ -3415,9 +3415,9 @@ export default function App() {
     } catch (e) {
       clearTimeout(timer)
       if (e.name === "AbortError") {
-        setUploadError("Quá thời gian xử lý. Backend Render gói miễn phí có thể đang khởi động lại (thử lại sau 30 đến 60 giây), hoặc hồ sơ quá nhiều trang. Gợi ý: thử file ít trang hơn trước.")
+        setUploadError("Quá thời gian xử lý (hơn 170 giây). Hồ sơ có thể quá nhiều trang, hoặc máy chủ vừa khởi động lại nên chậm lần đầu. Hãy thử lại, hoặc dùng file ít trang hơn.")
       } else {
-        setUploadError("Không kết nối được máy chủ phân tích. Có thể backend đang khởi động lại (chờ rồi thử lại), hoặc trình duyệt chặn (CORS). Chatbot chạy được nghĩa là khóa API vẫn ổn.")
+        setUploadError("Không kết nối được máy chủ phân tích. Máy chủ có thể đang khởi động lại (chờ rồi thử lại), hoặc trình duyệt chặn (CORS). Chatbot chạy được nghĩa là khóa API vẫn ổn.")
       }
       setLoading(false)
     }

@@ -230,12 +230,11 @@ QUY TẮC:
 MIN_CHARS_PER_PAGE = 40
 # Tổng ký tự tối thiểu để coi cả file là text PDF (đọc được)
 MIN_TOTAL_CHARS = 200
-# ─── Giới hạn an toàn cho host RAM thấp (Render free 512MB) ────────────────────
-# Số trang tối đa xử lý. File quá nhiều trang sẽ chỉ đọc phần đầu (kèm ghi chú)
-# để không tràn RAM và không vượt thời gian.
-MAX_PAGES = 80
-# Số ký tự tối đa gửi cho LLM. Cắt bớt để bound token và thời gian phản hồi.
-MAX_TEXT_CHARS = 90_000
+# ─── Giới hạn để phân tích xong trong thời gian chờ (tránh timeout) ───────────
+# Hồ sơ rất dày chỉ đọc phần đầu (kèm ghi chú). Cắt vừa phải để Claude sinh JSON
+# nhanh, tránh vượt thời gian chờ của trình duyệt và proxy.
+MAX_PAGES = 60
+MAX_TEXT_CHARS = 80_000
 
 
 def extract_text_from_pdf(pdf_path: str) -> dict:
