@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 
-// API_URL: trỏ tới backend đã deploy trên Render. Đổi link dưới nếu backend đổi URL.
-// (Có thể ghi đè bằng window.MEDIFLOW_API_URL trong index.html mà không cần sửa file này.)
-const API_URL = (typeof window !== "undefined" && window.MEDIFLOW_API_URL) || "https://mediflow-ai-8zhx.onrender.com"
+// API_URL: trỏ tới backend trên Hugging Face Spaces.
+// SAU KHI tạo Space, thay URL bên dưới bằng URL thật, dạng:
+//   https://<tên-tài-khoản-HF>-mediflow-ai.hf.space   (chữ thường, dùng dấu gạch ngang)
+// Có thể ghi đè bằng window.MEDIFLOW_API_URL trong index.html mà không cần sửa file này.
+const API_URL = (typeof window !== "undefined" && window.MEDIFLOW_API_URL) || "https://danghoang2605-mediflow-ai.hf.space"
 
 // ASSET_BASE: thư mục gốc trang web lúc chạy. Trên GitHub Pages là "/mediflow-ai/",
 // chạy local là "/". Tự tính nên ảnh logo trỏ đúng dù deploy ở subpath nào.
@@ -131,9 +133,9 @@ const CSS = `
   .logo-group{display:flex;flex-direction:column;align-items:center;gap:14px}
   .logo-group-lbl{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--navy2);white-space:nowrap}
   .logo-group-imgs{display:flex;align-items:center;gap:22px}
-  .logo-slot{position:relative;height:64px;min-width:92px;display:flex;align-items:center;justify-content:center}
-  .logo-bar.compact .logo-slot{height:50px;min-width:76px}
-  .partner-logo{max-height:100%;max-width:172px;object-fit:contain;position:relative;z-index:1}
+  .logo-slot{position:relative;height:80px;min-width:100px;display:flex;align-items:center;justify-content:center}
+  .logo-bar.compact .logo-slot{height:64px;min-width:88px}
+  .partner-logo{max-height:100%;max-width:180px;object-fit:contain;position:relative;z-index:1}
   .partner-logo.hide{display:none}
   .partner-logo.hide + .logo-ph{display:flex}
   .logo-ph{display:none;align-items:center;justify-content:center;text-align:center;font-size:11px;color:#94A3B8;border:1px dashed #CBD5E1;border-radius:10px;padding:6px 12px;height:100%;width:100%;line-height:1.3}
@@ -185,11 +187,12 @@ const CSS = `
   .report-stack>*+*{margin-top:14px}
 
   /* SIDEBAR */
-  .sidebar{width:144px;flex-shrink:0;position:sticky;top:108px;align-self:flex-start;max-height:calc(100vh - 124px);overflow-y:auto}
-  .sidebar-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:8px;padding-left:10px}
-  .sidebar-item{display:flex;align-items:center;gap:7px;padding:7px 10px;border-radius:10px;font-size:11px;font-weight:500;color:var(--muted2);cursor:pointer;transition:all .15s;border:1px solid transparent;margin-bottom:3px;background:none;width:100%;text-align:left;font-family:inherit}
-  .sidebar-item:hover{background:rgba(255,255,255,0.7);color:var(--navy2);border-color:var(--border)}
-  .sidebar-item.active{background:rgba(255,255,255,0.9);color:var(--blue);border-color:rgba(29,111,232,0.2);font-weight:600}
+  .sidebar{width:186px;flex-shrink:0;position:sticky;top:108px;align-self:flex-start;max-height:calc(100vh - 124px);overflow-y:auto}
+  .sidebar-label{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:var(--navy2);margin-bottom:8px;padding-left:10px}
+  .sidebar-item{display:flex;align-items:center;gap:7px;padding:7px 10px;border-radius:10px;font-size:11.5px;font-weight:600;color:var(--navy3);cursor:pointer;transition:all .15s;border:1px solid transparent;margin-bottom:3px;background:none;width:100%;text-align:left;font-family:inherit;white-space:nowrap}
+  .sidebar-item svg{flex-shrink:0}
+  .sidebar-item:hover{background:rgba(255,255,255,0.7);color:var(--navy);border-color:var(--border)}
+  .sidebar-item.active{background:rgba(255,255,255,0.9);color:var(--blue);border-color:rgba(29,111,232,0.2);font-weight:700}
 
   /* BANNER */
   .banner{border-radius:16px;overflow:hidden;box-shadow:var(--shadow-md);border:1px solid var(--border)}
@@ -2173,6 +2176,10 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
         const el = document.getElementById(id)
         if (!el) continue
         if (el.getBoundingClientRect().top <= THRESHOLD) current = id
+      }
+      // Đã cuộn sát đáy trang: ép chọn mục cuối (Tóm tắt) dù đỉnh chưa vượt ngưỡng
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 8) {
+        current = SECTIONS[SECTIONS.length - 1]?.id || current
       }
       setActiveSection(prev => prev === current ? prev : current)
     }
