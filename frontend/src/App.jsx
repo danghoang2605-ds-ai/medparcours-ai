@@ -119,7 +119,10 @@ const CSS = `
   .status-dot{width:7px;height:7px;border-radius:50%;background:#2DD4BF;animation:blink 2s infinite}
   @keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
   .hero-wrap{position:relative;z-index:10;max-width:1180px;margin:0 auto;padding:52px 44px 32px;display:grid;grid-template-columns:3fr 2fr;gap:72px;align-items:center}
-  .hero-tag{display:inline-flex;align-items:center;gap:6px;background:rgba(29,111,232,0.08);border:1px solid rgba(29,111,232,0.18);color:var(--blue);font-size:12px;font-weight:700;padding:6px 14px;border-radius:999px;margin-bottom:18px}
+  .hero-tag{display:inline-flex;align-items:center;gap:9px;background:rgba(29,111,232,0.08);border:1px solid rgba(29,111,232,0.18);color:var(--blue);padding:10px 16px;border-radius:14px;margin-bottom:18px}
+  .hero-tag-lines{display:flex;flex-direction:column;gap:1px;line-height:1.34}
+  .hero-tag-lines span{font-size:12px;font-weight:600}
+  .hero-tag-lines span:first-child{font-size:13px;font-weight:800}
   .hero-h1{font-size:2.75rem;font-weight:700;line-height:1.14;letter-spacing:-.03em;color:var(--navy);margin-bottom:16px}
   .hero-h1 em{color:var(--blue);font-style:normal}
   .hero-desc{font-size:16.5px;color:var(--muted2);line-height:1.62;max-width:490px;margin-bottom:26px}
@@ -145,8 +148,9 @@ const CSS = `
   .upload-err-title{font-size:13px;font-weight:700;color:#B91C1C;flex:1}
   .upload-err-x{width:22px;height:22px;border-radius:6px;border:none;background:rgba(254,202,202,0.5);cursor:pointer;display:flex;align-items:center;justify-content:center}
   .upload-err-msg{font-size:12px;color:#7F1D1D;line-height:1.5;margin-top:6px}
-  .fmt-row{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px;margin-top:16px}
-  .fmt-lbl{font-size:11px;color:#94A3B8;margin-right:2px}
+  .fmt-row{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:16px}
+  .fmt-lbl{font-size:11px;color:#94A3B8}
+  .fmt-chips{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;max-width:320px}
   .fmt-chip{font-size:10px;font-weight:700;padding:3px 9px;border-radius:999px}
   .stage-wrap{border-radius:28px;padding:20px;background:rgba(255,255,255,0.9);backdrop-filter:blur(20px);box-shadow:0 8px 40px rgba(30,80,200,0.1);border:1px solid rgba(200,220,255,0.5)}
   .stage-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
@@ -2056,7 +2060,7 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError }) 
       </nav>
       <div className="hero-wrap">
         <div>
-          <div className="hero-tag"><Icon.Heart d={12} color="#1D6FE8" />HackAIthon 2026, Bảng B Challenger, Đề tài 5: Y tế</div>
+          <div className="hero-tag"><Icon.Heart d={12} color="#1D6FE8" /><div className="hero-tag-lines"><span>Vietnamese Student HackAIthon 2026</span><span>Bảng B Challenger</span><span>Đề tài 5: Y tế</span></div></div>
           <h1 className="hero-h1">Hồ sơ bệnh nhân<br /><em>phân tích trong 30 giây.</em></h1>
           <p className="hero-desc">Bác sĩ upload PDF xuất từ HIS. AI đọc toàn bộ hồ sơ, tổng hợp báo cáo có cấu trúc, phát hiện cảnh báo nguy cơ và sẵn sàng trả lời mọi câu hỏi lâm sàng.</p>
           <div className="feat-list">
@@ -2113,11 +2117,13 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError }) 
                 <p className="upload-sub">Thêm PDF, ảnh, Word, Excel, PowerPoint</p>
                 <button className="btn-primary" onClick={e=>{e.stopPropagation();inputRef.current.click()}}><Icon.Upload d={15} color="white"/>Chọn tài liệu</button>
                 <div className="fmt-row">
-                  <span className="fmt-lbl">Định dạng hỗ trợ:</span>
-                  {["PDF","DOC","XLS","PPT","PNG","JPG"].map(t=>{
-                    const k = FILE_KINDS[t.toLowerCase()] || kindOf("x."+t.toLowerCase())
-                    return <span key={t} className="fmt-chip" style={{color:k.color,background:k.bg}}>{t}</span>
-                  })}
+                  <span className="fmt-lbl">Định dạng hỗ trợ</span>
+                  <div className="fmt-chips">
+                    {["PDF","DOC","XLS","PPT","PNG","JPG"].map(t=>{
+                      const k = FILE_KINDS[t.toLowerCase()] || kindOf("x."+t.toLowerCase())
+                      return <span key={t} className="fmt-chip" style={{color:k.color,background:k.bg}}>{t}</span>
+                    })}
+                  </div>
                 </div>
               </div>
             </div>
@@ -3317,7 +3323,7 @@ function FloatingChat({ report, hoSoText, messages, setMessages, onExpand }) {
   return (
     <>
       {!open && (
-        <button className="fab-chat" onClick={()=>setOpen(true)} aria-label="Mở trợ lý">
+        <button className="fab-chat" onClick={()=>setOpen(true)} aria-label="Mở trợ lý ảo MedAmi">
           <Icon.Chat d={22} color="#fff"/>
           {unread > 0 && <span className="fab-badge">{unread}</span>}
         </button>
@@ -3326,9 +3332,9 @@ function FloatingChat({ report, hoSoText, messages, setMessages, onExpand }) {
         <div className="fc-panel">
           <div className="fc-head">
             <div className="fc-head-l">
-              <div className="fc-avatar"><Icon.Robot d={15} color="#fff"/></div>
+              <div className="fc-avatar"><img src={asset("medami.png")} alt="MedAmi" style={{width:"100%",height:"100%",objectFit:"cover",borderRadius:"50%"}} onError={e=>{e.currentTarget.style.display="none"}}/></div>
               <div>
-                <div className="fc-title">Trợ lý MedParcours</div>
+                <div className="fc-title">MedAmi</div>
                 <div className="fc-sub">{report.thong_tin_benh_nhan.ho_ten}</div>
               </div>
             </div>
@@ -3434,7 +3440,7 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState([])
 
   const initChat = useCallback((rpt) => {
-    setChatMessages([{role:"assistant", content:`Xin chào! Tôi đã đọc toàn bộ hồ sơ của bệnh nhân **${rpt.thong_tin_benh_nhan?.ho_ten || ""}**. Bác sĩ muốn hỏi gì?`}])
+    setChatMessages([{role:"assistant", content:`Xin chào, tôi là **MedAmi**, trợ lý ảo của bác sĩ. Tôi đã đọc toàn bộ hồ sơ của bệnh nhân **${rpt.thong_tin_benh_nhan?.ho_ten || ""}**. Bác sĩ muốn hỏi gì?`}])
   }, [])
 
   const handleUpload = async (file) => {
