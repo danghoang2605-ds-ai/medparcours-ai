@@ -766,17 +766,30 @@ function BrandMark({ size = 36, radius = 10 }) {
     <svg width={size} height={size} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ display:"block" }}>
       <defs>
         <linearGradient id={`${id}g`} x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#1A56DB"/><stop offset="0.55" stopColor="#1D6FE8"/><stop offset="1" stopColor="#06B6D4"/>
+          <stop stopColor="#1A56DB"/><stop offset="0.55" stopColor="#1D6FE8"/><stop offset="1" stopColor="#0E9488"/>
         </linearGradient>
+        <radialGradient id={`${id}h`} cx="0.3" cy="0.25" r="0.8">
+          <stop offset="0" stopColor="#fff" stopOpacity="0.22"/>
+          <stop offset="0.5" stopColor="#fff" stopOpacity="0"/>
+        </radialGradient>
+        <filter id={`${id}gl`} x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="1.4" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
       </defs>
       <rect width="40" height="40" rx={radius} fill={`url(#${id}g)`}/>
+      <rect width="40" height="40" rx={radius} fill={`url(#${id}h)`}/>
       <rect x="0.6" y="0.6" width="38.8" height="38.8" rx={radius-0.6} fill="none" stroke="#fff" strokeOpacity="0.18"/>
-      {/* Pulse line (the 'Flow') */}
-      <path d="M6 21 H13 L16 13 L20.5 27.5 L24 19 L26.5 21 H34"
+      {/* Tim viền mảnh (backdrop) */}
+      <path d="M20 30.5 C20 30.5 8 23.2 8 15 C8 11.2 10.8 8.6 14.2 8.6 C16.6 8.6 18.7 10 20 12.2 C21.3 10 23.4 8.6 25.8 8.6 C29.2 8.6 32 11.2 32 15 C32 23.2 20 30.5 20 30.5 Z"
+        fill="none" stroke="#fff" strokeWidth="1.4" strokeOpacity="0.28"/>
+      {/* Đường ECG (the 'Parcours') */}
+      <path d="M5.5 20.5 H13.5 L16 14.2 L20 27.2 L23 17.6 L25.5 20.5 H34.5"
         stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"/>
-      {/* Dot nhịp đập */}
-      <circle cx="20.5" cy="27.5" r="1.7" fill="#fff"/>
-      <circle cx="34" cy="21" r="1.6" fill="#7FE7F5"/>
+      {/* 3 nốt = 3 phase, sáng dần; nốt cuối phát sáng = phase hiện tại */}
+      <circle cx="10" cy="20.5" r="1.2" fill="#fff" fillOpacity="0.55"/>
+      <circle cx="20" cy="27.2" r="1.7" fill="#fff"/>
+      <circle cx="34.5" cy="20.5" r="2.1" fill="#7FE7F5" filter={`url(#${id}gl)`}/>
     </svg>
   )
 }
@@ -1418,7 +1431,7 @@ function triggerPrint(r) {
   win.document.write(`<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>Báo cáo: ${p.ho_ten}</title>
 <style>body{font-family:'Times New Roman',serif;color:#000;font-size:11pt;line-height:1.55;background:#fff;margin:0}.page{padding:18mm 16mm;max-width:210mm;margin:0 auto}h1{font-size:13pt;text-transform:uppercase;margin:0 0 2pt}h2{font-size:10pt;font-weight:700;text-transform:uppercase;border-bottom:1.5px solid #000;padding-bottom:3pt;margin:14pt 0 7pt}.hdr{border-bottom:2.5px solid #000;padding-bottom:10pt;margin-bottom:8pt;display:flex;justify-content:space-between}.hdr-r{text-align:right;font-size:9pt;color:#444}.sub{font-size:9pt;color:#444;margin:2pt 0}.row{display:flex;gap:6pt;font-size:10pt;margin:3pt 0}.lbl{color:#555;min-width:110pt}table{width:100%;border-collapse:collapse;font-size:10pt;margin:6pt 0 12pt}th{background:#eee;font-weight:700;text-align:left;padding:4pt 7pt;border:1px solid #aaa;font-size:9pt;text-transform:uppercase}td{padding:4pt 7pt;border:1px solid #ccc;vertical-align:top}tr:nth-child(even) td{background:#f9f9f9}.alert{border:1.5px solid #000;border-left:4px solid #000;padding:6pt 10pt;margin:5pt 0}.al{font-size:9pt;font-weight:700;text-transform:uppercase;margin-bottom:2pt}.as{font-size:9pt;color:#555}.footer{border-top:1px solid #999;margin-top:20pt;padding-top:7pt;font-size:8pt;color:#666;display:flex;justify-content:space-between}.stamp{border:1.5px solid #999;width:100pt;height:60pt;display:inline-block;margin-top:8pt;text-align:center;font-size:8pt;padding:5pt;color:#999}@media print{@page{size:A4;margin:18mm 16mm}}</style>
 </head><body><div class="page">
-<div class="hdr"><div><div style="font-size:9pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:4pt">MediFlow AI: Báo cáo lâm sàng tự động</div><h1>${p.ho_ten}</h1><div class="sub">Số bệnh án: ${p.so_benh_an} | ${p.tuoi} tuổi, ${p.gioi_tinh} | ${p.dia_chi}</div><div class="sub">Ngày sinh: ${p.ngay_sinh} | Vào viện: ${p.ngay_vao_vien} | Ra viện: ${p.ngay_ra_vien}</div></div><div class="hdr-r">In ngày: ${new Date().toLocaleDateString("vi-VN")}<br>MediFlow AI v1.2<br><span style="color:#c00;font-weight:700">Cần bác sĩ xác nhận</span></div></div>
+<div class="hdr"><div><div style="font-size:9pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:4pt">MedParcours AI: Báo cáo lâm sàng tự động</div><h1>${p.ho_ten}</h1><div class="sub">Số bệnh án: ${p.so_benh_an} | ${p.tuoi} tuổi, ${p.gioi_tinh} | ${p.dia_chi}</div><div class="sub">Ngày sinh: ${p.ngay_sinh} | Vào viện: ${p.ngay_vao_vien} | Ra viện: ${p.ngay_ra_vien}</div></div><div class="hdr-r">In ngày: ${new Date().toLocaleDateString("vi-VN")}<br>MedParcours AI v1.2<br><span style="color:#c00;font-weight:700">Cần bác sĩ xác nhận</span></div></div>
 <h2>I. Chẩn đoán</h2><div class="row"><span class="lbl">Chẩn đoán chính:</span><span>${r.chan_doan_chinh}</span></div><div class="row"><span class="lbl">Lý do nhập viện:</span><span>${r.ly_do_vao_vien}</span></div><div class="row"><span class="lbl">Tiền sử:</span><span>${r.tien_su_benh}</span></div>
 <h2>II. Phẫu thuật</h2><table><tr><th>Ngày</th><th>Phương pháp</th><th>Kết quả</th></tr><tr><td>${r.phau_thuat.ngay}</td><td>${r.phau_thuat.phuong_phap}</td><td>${r.phau_thuat.ket_qua}</td></tr></table><div class="row"><span class="lbl">Phẫu thuật viên:</span><span>${r.phau_thuat.bac_si_phau_thuat}</span></div>
 <h2>III. Xét nghiệm</h2><table><tr><th>Chỉ số</th><th>Kết quả</th><th>BT</th><th>Đánh giá</th></tr>${(r.xet_nghiem_key||r.xet_nghiem_meta||[]).map(m=>`<tr><td>${m.key} (${m.desc})</td><td>${m.val}</td><td>${m.normal}</td><td>${m.status==="high"?"Cao":m.status==="low"?"Thấp":"BT"}</td></tr>`).join("")}</table>
@@ -1429,7 +1442,7 @@ function triggerPrint(r) {
 ${(()=>{const{findings,egfr,ctx}=runPriorityScreens(r);const s=checkDrugSafety(r.thuoc_cuoi_ky,egfr,ctx);const act=findings.filter(f=>f.muc!=="stable").sort((a,b)=>TIER_ORDER[a.muc]-TIER_ORDER[b.muc]);let h="<h2>VIII. Phân tầng ưu tiên lâm sàng</h2>";h+=act.map(f=>`<div class="alert"><div class="al">[${TIER_META[f.muc].label}] ${f.ten}</div><div class="as">${f.ly_do} — Nguồn: ${f.nguon}</div></div>`).join("")||"<p>Không có cảnh báo cần xử trí ngay.</p>";h+=`<h2>IX. Kiểm tra an toàn đơn thuốc</h2><p>Chức năng thận: eGFR ${egfr} mL/phút/1.73m2 (CKD-EPI 2021).</p>`;if(s.interactions.length)h+="<table><tr><th>Cặp thuốc</th><th>Mức</th><th>Hậu quả</th><th>Đề xuất</th></tr>"+s.interactions.map(it=>`<tr><td>${it.thuoc_a} + ${it.thuoc_b}</td><td>${TIER_META[it.muc].label}</td><td>${it.hau_qua}</td><td>${it.de_xuat}</td></tr>`).join("")+"</table>";if(s.favorable.length)h+="<p>Phù hợp khuyến cáo: "+s.favorable.map(f=>`${f.thuoc} (${f.nguon})`).join("; ")+"</p>";return h})()}
 <h2>X. Tóm tắt</h2><p>${r.tom_tat_toan_canh}</p>
 <div style="display:flex;justify-content:space-between;margin-top:24pt"><div><div class="stamp">Xác nhận bác sĩ phụ trách</div></div><div><div class="stamp">Ký tên bác sĩ</div></div></div>
-<div class="footer"><span>Báo cáo tạo tự động bởi MediFlow AI v1.2. Cần bác sĩ xem xét trước khi dùng cho mục đích lâm sàng.</span><span>HackAIthon 2026</span></div>
+<div class="footer"><span>Báo cáo tạo tự động bởi MedParcours AI v1.2. Cần bác sĩ xem xét trước khi dùng cho mục đích lâm sàng.</span><span>HackAIthon 2026</span></div>
 </div><script>window.onload=function(){window.print()}<\/script></body></html>`)
   win.document.close()
 }
@@ -2037,7 +2050,7 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError }) 
       <nav className="top-nav">
         <div className="logo">
           <BrandMark size={36} radius={10}/>
-          <div><span className="logo-text">Medi<em>Flow</em></span> <span className="logo-sub">AI</span></div>
+          <div><span className="logo-text">Med<em>Parcours</em></span> <span className="logo-sub">AI</span></div>
         </div>
         <div className="status-pill"><span className="status-dot" />Hệ thống hoạt động</div>
       </nav>
@@ -2254,7 +2267,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
           <div className="nav-left">
             <div className="logo">
               <BrandMark size={30} radius={9}/>
-              <span className="logo-text" style={{fontSize:14}}>Medi<em>Flow</em></span>
+              <span className="logo-text" style={{fontSize:14}}>Med<em>Parcours</em></span>
               <span className="logo-sub" style={{fontSize:12}}>AI</span>
             </div>
             <span className="nav-sep">▶</span>
@@ -3315,7 +3328,7 @@ function FloatingChat({ report, hoSoText, messages, setMessages, onExpand }) {
             <div className="fc-head-l">
               <div className="fc-avatar"><Icon.Robot d={15} color="#fff"/></div>
               <div>
-                <div className="fc-title">Trợ lý MediFlow</div>
+                <div className="fc-title">Trợ lý MedParcours</div>
                 <div className="fc-sub">{report.thong_tin_benh_nhan.ho_ten}</div>
               </div>
             </div>
