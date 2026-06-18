@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback, Component } from "react"
 // API_URL: trỏ tới backend trên Hugging Face Spaces.
 // SAU KHI tạo Space, thay URL bên dưới bằng URL thật, dạng:
-//   https://<tên-tài-khoản-HF>-mediflow-ai.hf.space   (chữ thường, dùng dấu gạch ngang)
+// https://<tên-tài-khoản-HF>-mediflow-ai.hf.space (chữ thường, dùng dấu gạch ngang)
 // Có thể ghi đè bằng window.MEDIFLOW_API_URL trong index.html mà không cần sửa file này.
 const API_URL = (typeof window !== "undefined" && window.MEDIFLOW_API_URL) || "https://danghoang2605-mediflow-ai.hf.space"
 // ─── Bóc chữ PDF NGAY TRONG TRÌNH DUYỆT (pdf.js từ CDN) ───────────────────────
@@ -695,36 +695,36 @@ function Svg({ d = 20, children, style, color }) {
   )
 }
 const Icon = {
-  Cross:      p => <Svg {...p}><rect x="3" y="3" width="18" height="18" rx="3"/><line x1="12" y1="7" x2="12" y2="17"/><line x1="7" y1="12" x2="17" y2="12"/></Svg>,
-  Upload:     p => <Svg {...p}><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></Svg>,
-  FileText:   p => <Svg {...p}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></Svg>,
-  Chat:       p => <Svg {...p}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></Svg>,
-  Alert:      p => <Svg {...p}><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></Svg>,
-  Calendar:   p => <Svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></Svg>,
-  Scalpel:    p => <Svg {...p}><path d="m19 2-7 7-4 1 1-4 7-7 3 3z"/><path d="M13 9 4.5 17.5"/><path d="M4.5 17.5 3 22l4.5-1.5L19 9"/></Svg>,
-  Flask:      p => <Svg {...p}><path d="M9 3h6l2.5 9-8.5 0L9 3z"/><path d="M6.5 12c-.5 2-1.5 4-1.5 5.5A3.5 3.5 0 0 0 8.5 21h7a3.5 3.5 0 0 0 3.5-3.5c0-1.5-1-3.5-1.5-5.5"/></Svg>,
+  Cross: p => <Svg {...p}><rect x="3" y="3" width="18" height="18" rx="3"/><line x1="12" y1="7" x2="12" y2="17"/><line x1="7" y1="12" x2="17" y2="12"/></Svg>,
+  Upload: p => <Svg {...p}><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></Svg>,
+  FileText: p => <Svg {...p}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></Svg>,
+  Chat: p => <Svg {...p}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></Svg>,
+  Alert: p => <Svg {...p}><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></Svg>,
+  Calendar: p => <Svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></Svg>,
+  Scalpel: p => <Svg {...p}><path d="m19 2-7 7-4 1 1-4 7-7 3 3z"/><path d="M13 9 4.5 17.5"/><path d="M4.5 17.5 3 22l4.5-1.5L19 9"/></Svg>,
+  Flask: p => <Svg {...p}><path d="M9 3h6l2.5 9-8.5 0L9 3z"/><path d="M6.5 12c-.5 2-1.5 4-1.5 5.5A3.5 3.5 0 0 0 8.5 21h7a3.5 3.5 0 0 0 3.5-3.5c0-1.5-1-3.5-1.5-5.5"/></Svg>,
   Ultrasound: p => <Svg {...p}><circle cx="12" cy="12" r="3"/><path d="M6.3 6.3a8 8 0 0 0 0 11.4"/><path d="M17.7 6.3a8 8 0 0 1 0 11.4"/><path d="M3.5 3.5a14 14 0 0 0 0 17"/><path d="M20.5 3.5a14 14 0 0 1 0 17"/></Svg>,
-  Pill:       p => <Svg {...p}><rect x="2" y="8" width="20" height="8" rx="4"/><line x1="12" y1="8" x2="12" y2="16"/></Svg>,
-  Print:      p => <Svg {...p}><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></Svg>,
-  Back:       p => <Svg {...p}><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></Svg>,
-  Send:       p => <Svg {...p}><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></Svg>,
-  Robot:      p => <Svg {...p}><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></Svg>,
-  Heart:      p => <Svg {...p}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></Svg>,
-  Pulse:      p => <Svg {...p}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></Svg>,
-  Close:      p => <Svg {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></Svg>,
-  Clock:      p => <Svg {...p}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></Svg>,
-  Shield:     p => <Svg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></Svg>,
-  Search:     p => <Svg {...p}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></Svg>,
-  ChevUp:     p => <Svg {...p}><polyline points="18 15 12 9 6 15"/></Svg>,
-  ChevDown:   p => <Svg {...p}><polyline points="6 9 12 15 18 9"/></Svg>,
-  Layers:     p => <Svg {...p}><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></Svg>,
+  Pill: p => <Svg {...p}><rect x="2" y="8" width="20" height="8" rx="4"/><line x1="12" y1="8" x2="12" y2="16"/></Svg>,
+  Print: p => <Svg {...p}><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></Svg>,
+  Back: p => <Svg {...p}><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></Svg>,
+  Send: p => <Svg {...p}><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></Svg>,
+  Robot: p => <Svg {...p}><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></Svg>,
+  Heart: p => <Svg {...p}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></Svg>,
+  Pulse: p => <Svg {...p}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></Svg>,
+  Close: p => <Svg {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></Svg>,
+  Clock: p => <Svg {...p}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></Svg>,
+  Shield: p => <Svg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></Svg>,
+  Search: p => <Svg {...p}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></Svg>,
+  ChevUp: p => <Svg {...p}><polyline points="18 15 12 9 6 15"/></Svg>,
+  ChevDown: p => <Svg {...p}><polyline points="6 9 12 15 18 9"/></Svg>,
+  Layers: p => <Svg {...p}><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></Svg>,
   ShieldCheck:p => <Svg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></Svg>,
-  Octagon:    p => <Svg {...p}><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></Svg>,
-  TrendUp:    p => <Svg {...p}><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></Svg>,
-  Steps:      p => <Svg {...p}><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M8.5 19H15a3 3 0 0 0 3-3V7.5"/></Svg>,
-  Brain:      p => <Svg {...p}><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04Z"/></Svg>,
+  Octagon: p => <Svg {...p}><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></Svg>,
+  TrendUp: p => <Svg {...p}><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></Svg>,
+  Steps: p => <Svg {...p}><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M8.5 19H15a3 3 0 0 0 3-3V7.5"/></Svg>,
+  Brain: p => <Svg {...p}><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04Z"/></Svg>,
   Stethoscope:p => <Svg {...p}><path d="M4.8 2.3A.3.3 0 1 0 5 2H4a2 2 0 0 0-2 2v5a6 6 0 0 0 6 6 6 6 0 0 0 6-6V4a2 2 0 0 0-2-2h-1a.3.3 0 1 0 .2.3"/><path d="M8 15v1a6 6 0 0 0 6 6 6 6 0 0 0 6-6v-4"/><circle cx="20" cy="10" r="2"/></Svg>,
-  Dot:        ({color="#8B5CF6"}) => <svg width="11" height="11" viewBox="0 0 11 11"><circle cx="5.5" cy="5.5" r="4" fill={color}/></svg>,
+  Dot: ({color="#8B5CF6"}) => <svg width="11" height="11" viewBox="0 0 11 11"><circle cx="5.5" cy="5.5" r="4" fill={color}/></svg>,
 }
 // Logo mark: pulse/ECG flow trong khối bo tròn gradient (chủ đề tim mạch)
 let _brandId = 0
@@ -789,6 +789,9 @@ function expandAbbr(text) {
   result = result.replace(/\s*#\s*/g, " khoảng ")
   // Gọn khoảng trắng thừa
   result = result.replace(/\s{2,}/g, " ").trim()
+  // Vá lỗi tách chữ tiếng Việt do AI sinh ra (vd "v ấn đề" -> "vấn đề"):
+  // phụ âm đơn đứng tách giữa 2 dấu cách, ngay trước nguyên âm có dấu, không phải từ hợp lệ.
+  result = result.replace(/(^|\s)([bcdghklmnpqrstvxBCDGHKLMNPQRSTVX]) (?=[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ])/g, "$1$2")
   Object.entries(ABBR_MAP).forEach(([abbr, full]) => {
     let replaced = false
     result = result.replace(new RegExp(`(?<!\\()\\b${abbr}\\b(?! \\()(?![^(]*\\))`, "g"), m => {
@@ -800,7 +803,7 @@ function expandAbbr(text) {
 }
 // Split long text into bullet points on '. ' or '; '
 function textToBullets(text) {
-  const parts = text.split(/(?<=\.)\s+(?=[A-ZĐÁÀ ẢÃ ẠĂẮẰẲẴẶÂ ẤẦẨẪẬÉÈ ẺẼẸÊ ẾỀỂỄỆÍÌỈĨỊÓÒ ỎÕ ỌÔ ỐỒỔỖỘƠỚỜỞỠỢÚÙ ỦŨỤƯỨỪỬỮỰÝỲỶỸỴ])/u)
+  const parts = text.split(/(?<=\.)\s+(?=[A-ZĐÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ])/u)
     .filter(p => p.trim().length > 0)
   if (parts.length <= 1) return null
   return parts.map(p => p.replace(/\.$/, "").trim())
@@ -898,22 +901,22 @@ const MOCK_REPORT = {
     { ngay:"28/09", crp:130.2, wbc:16.6 },
     { ngay:"29/09", crp:241.4, wbc:15.3 },
     { ngay:"01/10", crp:106.6, wbc:14.5 },
-    { ngay:"03/10", crp:42.3,  wbc:11.8 },
+    { ngay:"03/10", crp:42.3, wbc:11.8 },
   ],
   // Dynamic lab list thay vì 4 trường cố định
   xet_nghiem_truoc_mo: { ghi_chu:"Xét nghiệm trước mổ: EF 61 đến 74%, chênh áp ĐMC tối đa 71 mmHg (SA MINERVA 12/09, hẹp khít). INR chưa dùng chống đông." },
   xet_nghiem_meta: [
-    { key:"HGB",       val:"116 g/L",      rawVal:116,   unit:"g/L",    desc:"Hemoglobin (hồng cầu)", normal:"130-172", status:"low",    trend:[122,127,115,116], trendDates:["26/09","27/09","01/10","03/10"], arrow:"down" },
-    { key:"WBC",       val:"11.79 G/L",    rawVal:11.79, unit:"G/L",    desc:"Bạch cầu",              normal:"4-10",    status:"high",   trend:[17.2,14.5,11.79], trendDates:["27/09","01/10","03/10"], arrow:"down" },
-    { key:"PLT",       val:"308 G/L",      rawVal:308,   unit:"G/L",    desc:"Tiểu cầu",              normal:"150-400", status:"normal", trend:[151,217,308], trendDates:["26/09","29/09","03/10"], arrow:"up" },
-    { key:"Creatinin", val:"77 µmol/L",    rawVal:77,    unit:"µmol/L", desc:"Chức năng thận",        normal:"62-106",  status:"normal", trend:[74,77,77], trendDates:["27/09","29/09","03/10"], arrow:"ok" },
-    { key:"Na+",       val:"131 mmol/L",   rawVal:131,   unit:"mmol/L", desc:"Natri máu",             normal:"135-145", status:"low",    trend:[133,127,131], trendDates:["29/09","30/09","03/10"], arrow:"up" },
-    { key:"K+",        val:"3.82 mmol/L",  rawVal:3.82,  unit:"mmol/L", desc:"Kali máu",              normal:"3.5-5.1", status:"normal", trend:[3.34,5.1,3.82], trendDates:["29/09","30/09","03/10"], arrow:"down" },
-    { key:"Albumin",   val:"31.8 g/L",     rawVal:31.8,  unit:"g/L",    desc:"Albumin máu",           normal:"35-52",   status:"low",    trend:[31.8], trendDates:["29/09"], arrow:"down" },
-    { key:"CRP",       val:"42.3 mg/L",    rawVal:42.3,  unit:"mg/L",   desc:"Viêm nhiễm (gần nhất)", normal:"<5",      status:"high",   trend:[241.4,106.6,42.3], trendDates:["29/09","01/10","03/10"], arrow:"down" },
-    { key:"INR",       val:"2.25",         rawVal:2.25,  unit:"",       desc:"Đông máu (ngày ra viện)",normal:"2.0-3.0", status:"normal", trend:[1.24,5.97,2.25], trendDates:["26/09","ra viện","03/10"], arrow:"down" },
-    { key:"NT-proBNP", val:"2280 pg/mL",   rawVal:2280,  unit:"pg/mL",  desc:"Marker suy tim",        normal:"<125",    status:"high",   trend:[317,2280], trendDates:["24/09","29/09"], ngay:"29/09/2025", arrow:"up" },
-    { key:"EF",        val:"71%",          rawVal:71,    unit:"%",      desc:"Phân suất tống máu (SA gần nhất 26/05/2026)", normal:"55-70", status:"high", trend:[50,44,58,71], trendDates:["30/09","10/10","28/10","26/05"], arrow:"up" },
+    { key:"HGB", val:"116 g/L", rawVal:116, unit:"g/L", desc:"Hemoglobin (hồng cầu)", normal:"130-172", status:"low", trend:[122,127,115,116], trendDates:["26/09","27/09","01/10","03/10"], arrow:"down" },
+    { key:"WBC", val:"11.79 G/L", rawVal:11.79, unit:"G/L", desc:"Bạch cầu", normal:"4-10", status:"high", trend:[17.2,14.5,11.79], trendDates:["27/09","01/10","03/10"], arrow:"down" },
+    { key:"PLT", val:"308 G/L", rawVal:308, unit:"G/L", desc:"Tiểu cầu", normal:"150-400", status:"normal", trend:[151,217,308], trendDates:["26/09","29/09","03/10"], arrow:"up" },
+    { key:"Creatinin", val:"77 µmol/L", rawVal:77, unit:"µmol/L", desc:"Chức năng thận", normal:"62-106", status:"normal", trend:[74,77,77], trendDates:["27/09","29/09","03/10"], arrow:"ok" },
+    { key:"Na+", val:"131 mmol/L", rawVal:131, unit:"mmol/L", desc:"Natri máu", normal:"135-145", status:"low", trend:[133,127,131], trendDates:["29/09","30/09","03/10"], arrow:"up" },
+    { key:"K+", val:"3.82 mmol/L", rawVal:3.82, unit:"mmol/L", desc:"Kali máu", normal:"3.5-5.1", status:"normal", trend:[3.34,5.1,3.82], trendDates:["29/09","30/09","03/10"], arrow:"down" },
+    { key:"Albumin", val:"31.8 g/L", rawVal:31.8, unit:"g/L", desc:"Albumin máu", normal:"35-52", status:"low", trend:[31.8], trendDates:["29/09"], arrow:"down" },
+    { key:"CRP", val:"42.3 mg/L", rawVal:42.3, unit:"mg/L", desc:"Viêm nhiễm (gần nhất)", normal:"<5", status:"high", trend:[241.4,106.6,42.3], trendDates:["29/09","01/10","03/10"], arrow:"down" },
+    { key:"INR", val:"2.25", rawVal:2.25, unit:"", desc:"Đông máu (ngày ra viện)",normal:"2.0-3.0", status:"normal", trend:[1.24,5.97,2.25], trendDates:["26/09","ra viện","03/10"], arrow:"down" },
+    { key:"NT-proBNP", val:"2280 pg/mL", rawVal:2280, unit:"pg/mL", desc:"Marker suy tim", normal:"<125", status:"high", trend:[317,2280], trendDates:["24/09","29/09"], ngay:"29/09/2025", arrow:"up" },
+    { key:"EF", val:"71%", rawVal:71, unit:"%", desc:"Phân suất tống máu (SA gần nhất 26/05/2026)", normal:"55-70", status:"high", trend:[50,44,58,71], trendDates:["30/09","10/10","28/10","26/05"], arrow:"up" },
   ],
   // Mảng động: tất cả lượt siêu âm theo thời gian. latest = lượt gần nhất.
   sieu_am_tim: {
@@ -955,7 +958,7 @@ const MOCK_REPORT = {
     { muc:"critical", phase:2, tieu_de:"Bệnh cảnh phức tạp: Hạ Na+ kèm sau mổ tim lớn và Albumin thấp",
       noi_dung:"Cùng ngày 29/09: (1) Na+ 131 mmol/L (hạ nhẹ) cộng (2) Albumin 31.8 g/L (thấp) cộng (3) CRP còn 130 mg/L. Hạ albumin làm giảm áp lực keo, dễ thoát dịch, giải thích dịch màng phổi và màng tim. Đồng thời albumin thấp ảnh hưởng phân bố Vincerol làm INR khó đoán. Cần dinh dưỡng hỗ trợ song song với lợi tiểu." },
     { muc:"critical", phase:2, tieu_de:"INR biến động nguy hiểm: 1.24 rồi 5.97 rồi 2.25",
-      noi_dung:"INR 1.24 (24/09): nguy cơ huyết khối van cơ học. INR 5.97 (27/09, đỉnh): nguy cơ chảy máu nghiêm trọng. Nguyên nhân: chuyển đổi phác đồ chống đông cộng Buflan (Cefoperazone có hoạt tính giống kháng vitamin K) làm tăng tác dụng Vincerol. INR ra viện 2.25 đã vào m ục tiêu 2.0 đến 3.0 của van cơ học On-X." },
+      noi_dung:"INR 1.24 (24/09): nguy cơ huyết khối van cơ học. INR 5.97 (27/09, đỉnh): nguy cơ chảy máu nghiêm trọng. Nguyên nhân: chuyển đổi phác đồ chống đông cộng Buflan (Cefoperazone có hoạt tính giống kháng vitamin K) làm tăng tác dụng Vincerol. INR ra viện 2.25 đã vào mục tiêu 2.0 đến 3.0 của van cơ học On-X." },
     { muc:"critical", phase:3, tieu_de:"EF 44% kèm dịch màng ngoài tim nhiều: Biến chứng sau mổ nghiêm trọng",
       noi_dung:"EF giảm từ 50% (30/09) còn 44% (10/10) kèm dịch màng ngoài tim nhiều và ép nhẹ thất phải: đây là biến chứng tràn dịch màng tim sau mổ (gặp khoảng 1 đến 3% trường hợp). Không phải suy tim mạn. Cần phân biệt với hội chứng Dressler. Kết cục: tự hồi phục ở lần tái khám 28/10 (EF 58%, hết dịch)." },
     { muc:"info", phase:3, tieu_de:"NT-proBNP 2280 pg/mL (ngày 29/09, Giai đoạn 2): Không kết luận suy tim giai đoạn này",
@@ -981,18 +984,18 @@ const MOCK_REPORT = {
   },
   // Hành động ưu tiên ở lần tái khám tới (Next Actions cho bác sĩ ngoại trú)
   hanh_dong_uu_tien: [
-    { uu_tien:1, viec:"Kiểm tra INR định kỳ", ly_do:"Van cơ học On-X cần chống đông lâu dài suốt đời, giữ INR trong mục tiêu 2.0 đến 3.0. Đây là l ý do hiện tại, không phụ thuộc kháng sinh ngắn ngày đã kết thúc." },
+    { uu_tien:1, viec:"Kiểm tra INR định kỳ", ly_do:"Van cơ học On-X cần chống đông lâu dài suốt đời, giữ INR trong mục tiêu 2.0 đến 3.0. Đây là lý do hiện tại, không phụ thuộc kháng sinh ngắn ngày đã kết thúc." },
     { uu_tien:2, viec:"Làm lại điện giải đồ Na+, K+ và Creatinin", ly_do:"Đang phối hợp lợi tiểu Agifuros với SGLT2i Forxiga kéo dài, nguy cơ hạ Natri máu và rối loạn điện giải." },
     { uu_tien:3, viec:"Đo ECG, cân nhắc Holter 24h tầm soát rung nhĩ", ly_do:"Nhĩ trái giãn dai dẳng (LAVI 50 đến 55 ml/m²) là yếu tố nguy cơ rung nhĩ trên bệnh nhân van cơ học." },
     { uu_tien:4, viec:"Đo lại NT-proBNP để có giá trị nền ngoại trú", ly_do:"NT-proBNP 2280 pg/mL đo ở hậu phẫu ngày 3, chưa phản ánh tình trạng suy tim ngoại trú hiện tại." },
   ],
   thuoc_cuoi_ky: [
-    { ten_thuoc:"Buflan 2g (Cefoperazone + Sulbactam)", nhom:"Kháng sinh",  lieu:"2 lọ/ngày",   cach_dung:"Tiêm truyền tĩnh mạch 9h-21h", bat_dau:"28/09", ket_thuc:"03/10", color:"#EF4444" },
-    { ten_thuoc:"Medoxasol 500mg (Levofloxacin)",        nhom:"Kháng sinh", lieu:"2 viên/ngày",  cach_dung:"Uống 9h và 20h", bat_dau:"03/10", so_luong:14, vien_moi_ngay:2, color:"#F97316" },
-    { ten_thuoc:"Vincerol 1mg (Acenocoumarol)",          nhom:"Chống đông", lieu:"1 viên/ngày",  cach_dung:"Uống 20h mỗi ngày",     bat_dau:"03/10", keo_dai:true, color:"#8B5CF6" },
-    { ten_thuoc:"Agifuros 40mg (Furosemid)",             nhom:"Lợi tiểu",   lieu:"1 viên/ngày",  cach_dung:"Uống 9h",               bat_dau:"28/09", keo_dai:true, color:"#06B6D4" },
-    { ten_thuoc:"Forxiga 10mg (Dapagliflozin)",          nhom:"Tim mạch",   lieu:"1 viên/ngày",  cach_dung:"Uống buổi sáng",        bat_dau:"26/09", keo_dai:true, color:"#10B981" },
-    { ten_thuoc:"Pantoloc 40mg (Pantoprazole)",          nhom:"Dạ dày",     lieu:"1 viên/ngày",  cach_dung:"Uống 6h trước ăn",      bat_dau:"24/09", keo_dai:true, color:"#3B82F6" },
+    { ten_thuoc:"Buflan 2g (Cefoperazone + Sulbactam)", nhom:"Kháng sinh", lieu:"2 lọ/ngày", cach_dung:"Tiêm truyền tĩnh mạch 9h-21h", bat_dau:"28/09", ket_thuc:"03/10", color:"#EF4444" },
+    { ten_thuoc:"Medoxasol 500mg (Levofloxacin)", nhom:"Kháng sinh", lieu:"2 viên/ngày", cach_dung:"Uống 9h và 20h", bat_dau:"03/10", so_luong:14, vien_moi_ngay:2, color:"#F97316" },
+    { ten_thuoc:"Vincerol 1mg (Acenocoumarol)", nhom:"Chống đông", lieu:"1 viên/ngày", cach_dung:"Uống 20h mỗi ngày", bat_dau:"03/10", keo_dai:true, color:"#8B5CF6" },
+    { ten_thuoc:"Agifuros 40mg (Furosemid)", nhom:"Lợi tiểu", lieu:"1 viên/ngày", cach_dung:"Uống 9h", bat_dau:"28/09", keo_dai:true, color:"#06B6D4" },
+    { ten_thuoc:"Forxiga 10mg (Dapagliflozin)", nhom:"Tim mạch", lieu:"1 viên/ngày", cach_dung:"Uống buổi sáng", bat_dau:"26/09", keo_dai:true, color:"#10B981" },
+    { ten_thuoc:"Pantoloc 40mg (Pantoprazole)", nhom:"Dạ dày", lieu:"1 viên/ngày", cach_dung:"Uống 6h trước ăn", bat_dau:"24/09", keo_dai:true, color:"#3B82F6" },
   ],
   tom_tat_toan_canh: "GIAI ĐOẠN TRƯỚC MỔ: Bệnh nhân nam 62 tuổi, tiền sử hở hẹp van ĐMC, nhập viện ngày 24/09/2025 vì đau ngực và khó thở. Siêu âm trước mổ cho thấy hẹp khít van ĐMC, chênh áp tối đa 71 mmHg, EF còn bảo tồn. GIAI ĐOẠN SAU MỔ - NỘI TRÚ: Ngày 26/09/2025 phẫu thuật thay van ĐMC cơ học On-X số 23 (ThS.BS Nguyễn Trọng X), kết quả thành công, van hoạt động tốt, chênh áp giảm còn 8 đến 16 mmHg. Hậu phẫu sớm có phản ứng viêm mạnh (CRP đỉnh 241 mg/L ngày 29/09 rồi giảm), NT-proBNP tăng 2280 pg/mL phù hợp giai đoạn ngay sau mổ tim. Ra viện ngày 03/10/2025 trong tình trạng ổn định, đơn ngoại trú gồm chống đông Vincerol, lợi tiểu, kháng sinh. GIAI ĐOẠN NGOẠI TRÚ - TÁI KHÁM: Tái khám 10/10/2025 (khoảng một tuần sau ra viện) ghi nhận EF giảm còn 44% kèm tràn dịch màng ngoài tim ép nhẹ thất phải - đây là v ấn đề cần theo dõi sát nhất. Các lần sau cho thấy cải thiện rõ: hết dịch màng tim, EF hồi phục 58% (28/10) rồi 71% (lần gần nhất 26/05/2026). INR dao động và đã về mục tiêu điều trị van cơ học 2.0 đến 3.0.",
   // Dấu hiệu sinh tồn lúc ra viện (dùng cho sàng lọc ưu tiên: hô hấp, nhiễm khuẩn)
@@ -1072,7 +1075,7 @@ const FAVORABLE = [
 // CKD-EPI 2021 (không dùng yếu tố chủng tộc). creat đơn vị µmol/L.
 function computeEGFR(creatUmol, age, sexMale) {
   if (!creatUmol || !age) return null
-  const scr = creatUmol / 88.4  // mg/dL
+  const scr = creatUmol / 88.4 // mg/dL
   const k = sexMale ? 0.9 : 0.7
   const alpha = sexMale ? -0.302 : -0.241
   let egfr = 142 * Math.pow(Math.min(scr/k, 1), alpha) * Math.pow(Math.max(scr/k, 1), -1.200) * Math.pow(0.9938, age)
@@ -1230,9 +1233,9 @@ function runPriorityScreens(report) {
   return { findings: F, egfr, ctx }
 }
 const TIER_META = {
-  critical: { label:"Xử lý", full:"Cần xử lý ngay", color:"#DC2626", bg:"#FEF2F2", border:"#FECACA", dot:"#DC2626", icon:"critical" },
-  warning:  { label:"Theo dõi", full:"Cần theo dõi sát", color:"#D97706", bg:"#FFFBEB", border:"#FDE68A", dot:"#D97706", icon:"warning" },
-  stable:   { label:"Ổn định", full:"Ổn định", color:"#059669", bg:"#F0FDF4", border:"#BBF7D0", dot:"#059669", icon:"stable" },
+  critical: { label:"Xử lý", full:"Cần xử lý ngay", color:"#DC2626", bg:"#FEF2F2", border:"#FECACA", dot:"●", icon:"critical" },
+  warning:  { label:"Theo dõi", full:"Cần theo dõi sát", color:"#D97706", bg:"#FFFBEB", border:"#FDE68A", dot:"●", icon:"warning" },
+  stable:   { label:"Ổn định", full:"Ổn định", color:"#059669", bg:"#F0FDF4", border:"#BBF7D0", dot:"●", icon:"stable" },
 }
 const TIER_ORDER = { critical:0, warning:1, stable:2 }
 // Nhận xét xu hướng từng chỉ số xét nghiệm dựa trên chuỗi giá trị theo thời gian
@@ -1242,14 +1245,14 @@ function labVerdict(m) {
   const delta = t[t.length - 1] - t[0]
   const down = delta < 0, up = delta > 0
   const V = {
-    CRP:        () => down ? { txt:"Nhiễm trùng đang cải thiện", good:true } : { txt:"Phản ứng viêm tăng", good:false },
-    WBC:        () => down ? { txt:"Đáp ứng viêm đang giảm", good:true } : { txt:"Bạch cầu tăng", good:false },
+    CRP: () => down ? { txt:"Nhiễm trùng đang cải thiện", good:true } : { txt:"Phản ứng viêm tăng", good:false },
+    WBC: () => down ? { txt:"Đáp ứng viêm đang giảm", good:true } : { txt:"Bạch cầu tăng", good:false },
     "NT-proBNP":() => ({ txt:"Đo hậu phẫu ngày 3 (29/09), chưa có giá trị ngoại trú để kết luận suy tim", neutral:true }),
-    EF:         () => up ? { txt:"Chức năng tim đang hồi phục", good:true } : { txt:"Chức năng tim giảm", good:false },
-    HGB:        () => down ? { txt:"Thiếu máu, cần theo dõi", good:false } : { txt:"Cải thiện", good:true },
-    "Na+":      () => up ? { txt:"Natri đang về bình thường", good:true } : { txt:"Hạ natri", good:false },
-    Albumin:    () => up ? { txt:"Dinh dưỡng cải thiện", good:true } : { txt:"Albumin thấp", good:false },
-    INR:        () => { const last = t[t.length-1]; return last < 2 ? { txt:"Dưới mục tiêu, nguy cơ huyết khối van", good:false } : last > 3 ? { txt:"Trên mục tiêu, nguy cơ chảy máu", good:false } : { txt:"Trong mục tiêu điều trị (van cơ học 2.0-3.0)", good:true } },
+    EF: () => up ? { txt:"Chức năng tim đang hồi phục", good:true } : { txt:"Chức năng tim giảm", good:false },
+    HGB: () => down ? { txt:"Thiếu máu, cần theo dõi", good:false } : { txt:"Cải thiện", good:true },
+    "Na+": () => up ? { txt:"Natri đang về bình thường", good:true } : { txt:"Hạ natri", good:false },
+    Albumin: () => up ? { txt:"Dinh dưỡng cải thiện", good:true } : { txt:"Albumin thấp", good:false },
+    INR: () => { const last = t[t.length-1]; return last < 2 ? { txt:"Dưới mục tiêu, nguy cơ huyết khối van", good:false } : last > 3 ? { txt:"Trên mục tiêu, nguy cơ chảy máu", good:false } : { txt:"Trong mục tiêu điều trị (van cơ học 2.0-3.0)", good:true } },
   }
   return V[m.key] ? V[m.key]() : null
 }
@@ -1337,9 +1340,9 @@ function assessTrajectory(report) {
   return { verdict, evidence: ev, score }
 }
 const TRAJECTORY_META = {
-  tot:      { label:"Đang đáp ứng điều trị tốt", color:"#059669", bg:"linear-gradient(120deg,#ECFDF5,#F0FDFA)", border:"#A7F3D0", icon:"up" },
-  on_dinh:  { label:"Tiến triển ổn định", color:"#1D6FE8", bg:"linear-gradient(120deg,#EFF6FF,#F0F9FF)", border:"#BFDBFE", icon:"flat" },
-  xau:      { label:"Có dấu hiệu xấu đi, cần chú ý", color:"#DC2626", bg:"linear-gradient(120deg,#FEF2F2,#FFF1F2)", border:"#FECACA", icon:"down" },
+  tot: { label:"Đang đáp ứng điều trị tốt", color:"#059669", bg:"linear-gradient(120deg,#ECFDF5,#F0FDFA)", border:"#A7F3D0", icon:"up" },
+  on_dinh: { label:"Tiến triển ổn định", color:"#1D6FE8", bg:"linear-gradient(120deg,#EFF6FF,#F0F9FF)", border:"#BFDBFE", icon:"flat" },
+  xau: { label:"Có dấu hiệu xấu đi, cần chú ý", color:"#DC2626", bg:"linear-gradient(120deg,#FEF2F2,#FFF1F2)", border:"#FECACA", icon:"down" },
 }
 // Sinh chip nhắc nhanh động từ hồ sơ (van cơ học, chống đông, chỉ số cao, hậu phẫu)
 function buildChips(report) {
@@ -1458,7 +1461,7 @@ function VitalSignsChart({ data, summary }) {
   const n = data.length
   const crpMax = Math.ceil(Math.max(...data.map(d => d.crp)) / 50) * 50
   const WBC_MAX = 20
-  const x    = (i) => PAD.l + (i / (n - 1)) * innerW
+  const x = (i) => PAD.l + (i / (n - 1)) * innerW
   const crpY = (v) => PAD.t + innerH - (v / crpMax) * innerH
   const wbcY = (v) => PAD.t + innerH - (v / WBC_MAX) * innerH
   const crpPts = data.map((d,i) => `${x(i)},${crpY(d.crp)}`).join(" ")
@@ -1640,13 +1643,13 @@ function normalizeEcho(sieu_am) {
   return out
 }
 const PHASE_META = {
-  truoc_mo: { label:"Trước mổ",   color:"#F59E0B", bg:"rgba(254,243,199,0.7)", border:"rgba(253,230,138,0.6)" },
-  sau_mo:   { label:"Sau mổ",     color:"#EF4444", bg:"rgba(254,242,242,0.8)", border:"rgba(254,202,202,0.6)" },
-  hoi_phuc: { label:"Hồi phục",   color:"#10B981", bg:"rgba(240,253,250,0.8)", border:"rgba(153,246,228,0.5)" },
-  tai_kham: { label:"Tái khám",   color:"#1D6FE8", bg:"rgba(235,244,255,0.8)", border:"rgba(191,219,254,0.5)" },
+  truoc_mo: { label:"Trước mổ", color:"#F59E0B", bg:"rgba(254,243,199,0.7)", border:"rgba(253,230,138,0.6)" },
+  sau_mo: { label:"Sau mổ", color:"#EF4444", bg:"rgba(254,242,242,0.8)", border:"rgba(254,202,202,0.6)" },
+  hoi_phuc: { label:"Hồi phục", color:"#10B981", bg:"rgba(240,253,250,0.8)", border:"rgba(153,246,228,0.5)" },
+  tai_kham: { label:"Tái khám", color:"#1D6FE8", bg:"rgba(235,244,255,0.8)", border:"rgba(191,219,254,0.5)" },
 }
 function EchoTimeline({ sieu_am, info }) {
-  const [mode, setMode] = useState("both")  // both | ef | grad
+  const [mode, setMode] = useState("both") // both | ef | grad
   const sessions = normalizeEcho(sieu_am)
   if (sessions.length < 2) return null
   // Câu nhận xét động: dựa trên EF và chênh áp lượt đầu -> cuối, lượt cảnh báo
@@ -1673,7 +1676,7 @@ function EchoTimeline({ sieu_am, info }) {
   const n = sessions.length
   // EF trục trái 30-80, chênh áp trục phải 0-80
   const EF_MIN = 30, EF_MAX = 80, GR_MAX = 80
-  const x   = (i) => PAD.l + (i / (n - 1)) * innerW
+  const x = (i) => PAD.l + (i / (n - 1)) * innerW
   const efY = (v) => PAD.t + innerH - ((v - EF_MIN) / (EF_MAX - EF_MIN)) * innerH
   const grY = (v) => PAD.t + innerH - (v / GR_MAX) * innerH
   const efPts = sessions.filter(s => s.ef != null).map(s => `${x(sessions.indexOf(s))},${efY(s.ef)}`).join(" ")
@@ -1788,7 +1791,7 @@ function EchoTimeline({ sieu_am, info }) {
 // Bảng tất cả lượt siêu âm, có sắp xếp và lọc theo giai đoạn
 function EchoSessionTable({ sieu_am }) {
   const all = normalizeEcho(sieu_am)
-  const [sortMode, setSortMode] = useState("latest")  // latest | oldest
+  const [sortMode, setSortMode] = useState("latest") // latest | oldest
   const [phaseFilter, setPhaseFilter] = useState("all")
   if (!all.length) return null
   const parseD = (s) => { const [d,m,y] = (s||"").split("/").map(Number); return new Date(y||0, (m||1)-1, d||1).getTime() }
@@ -1857,12 +1860,12 @@ function EchoSessionTable({ sieu_am }) {
 // ─── UPLOAD PAGE ──────────────────────────────────────────────────────────────
 // Phát hiện định dạng + màu badge theo đuôi file
 const FILE_KINDS = {
-  pdf:  { tag:"PDF", color:"#DC2626", bg:"#FEF2F2" },
-  doc:  { tag:"DOC", color:"#1D6FE8", bg:"#EFF6FF" }, docx: { tag:"DOC", color:"#1D6FE8", bg:"#EFF6FF" },
-  xls:  { tag:"XLS", color:"#059669", bg:"#F0FDF4" }, xlsx: { tag:"XLS", color:"#059669", bg:"#F0FDF4" },
-  ppt:  { tag:"PPT", color:"#EA580C", bg:"#FFF7ED" }, pptx: { tag:"PPT", color:"#EA580C", bg:"#FFF7ED" },
-  png:  { tag:"PNG", color:"#7C3AED", bg:"#F5F3FF" },
-  jpg:  { tag:"JPG", color:"#D97706", bg:"#FFFBEB" }, jpeg: { tag:"JPG", color:"#D97706", bg:"#FFFBEB" },
+  pdf: { tag:"PDF", color:"#DC2626", bg:"#FEF2F2" },
+  doc: { tag:"DOC", color:"#1D6FE8", bg:"#EFF6FF" }, docx: { tag:"DOC", color:"#1D6FE8", bg:"#EFF6FF" },
+  xls: { tag:"XLS", color:"#059669", bg:"#F0FDF4" }, xlsx: { tag:"XLS", color:"#059669", bg:"#F0FDF4" },
+  ppt: { tag:"PPT", color:"#EA580C", bg:"#FFF7ED" }, pptx: { tag:"PPT", color:"#EA580C", bg:"#FFF7ED" },
+  png: { tag:"PNG", color:"#7C3AED", bg:"#F5F3FF" },
+  jpg: { tag:"JPG", color:"#D97706", bg:"#FFFBEB" }, jpeg: { tag:"JPG", color:"#D97706", bg:"#FFFBEB" },
 }
 const kindOf = (name) => FILE_KINDS[(name.split(".").pop() || "").toLowerCase()] || { tag:"FILE", color:"#64748B", bg:"#F1F5F9" }
 const fmtSize = (b) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(0)} KB` : `${(b/1048576).toFixed(1)} MB`
@@ -1879,10 +1882,10 @@ async function countPdfPages(file) {
 // ─── LOGO ĐỐI TÁC / ĐƠN VỊ ─────────────────────────────────────────────────────
 // Đặt file ảnh vào thư mục public/logos/ với đúng tên bên dưới (khớp tên file thật).
 const PARTNER_GROUPS = [
-  { label:"Cuộc thi",            logos:[{ file:"hackaithon.png", alt:"HackAIthon 2026" }] },
-  { label:"Đơn vị tổ chức",      logos:[{ file:"hoi-sinh-vien.png", alt:"Hội Sinh viên Việt Nam" }, { file:"vietcombank.png", alt:"Vietcombank" }] },
-  { label:"Bảo trợ chuyên môn",  logos:[{ file:"vnpt_ai.png", alt:"VNPT AI" }] },
-  { label:"Đơn vị thực hiện",    logos:[{ file:"vsds.png", alt:"VSDS" }] },
+  { label:"Cuộc thi", logos:[{ file:"hackaithon.png", alt:"HackAIthon 2026" }] },
+  { label:"Đơn vị tổ chức", logos:[{ file:"hoi-sinh-vien.png", alt:"Hội Sinh viên Việt Nam" }, { file:"vietcombank.png", alt:"Vietcombank" }] },
+  { label:"Bảo trợ chuyên môn", logos:[{ file:"vnpt_ai.png", alt:"VNPT AI" }] },
+  { label:"Đơn vị thực hiện", logos:[{ file:"vsds.png", alt:"VSDS" }] },
 ]
 function LogoBar({ compact }) {
   return (
@@ -2070,23 +2073,23 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError }) 
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 const NAV_GROUPS = [
   { group:"Tổng quan", items:[
-    {id:"sec-status",   label:"Bệnh nhân",          icon:<Icon.Stethoscope d={11}/>},
-    {id:"sec-takeaway", label:"Kết luận nhanh",     icon:<Icon.ShieldCheck d={11}/>},
-    {id:"sec-problems", label:"Trạng thái vấn đề",  icon:<Icon.Octagon d={11}/>},
-    {id:"sec-actions",  label:"Hành động ưu tiên",  icon:<Icon.Layers d={11}/>},
+    {id:"sec-status", label:"Bệnh nhân", icon:<Icon.Stethoscope d={11}/>},
+    {id:"sec-takeaway", label:"Kết luận nhanh", icon:<Icon.ShieldCheck d={11}/>},
+    {id:"sec-problems", label:"Trạng thái vấn đề", icon:<Icon.Octagon d={11}/>},
+    {id:"sec-actions", label:"Hành động ưu tiên", icon:<Icon.Layers d={11}/>},
   ]},
   { group:"3 giai đoạn", items:[
     {id:"sec-phase1", label:"Giai đoạn 1: Tiền phẫu", icon:<Icon.Dot color="#8B5CF6"/>},
-    {id:"sec-phase2", label:"Giai đoạn 2: Hậu phẫu",  icon:<Icon.Dot color="#EF4444"/>},
+    {id:"sec-phase2", label:"Giai đoạn 2: Hậu phẫu", icon:<Icon.Dot color="#EF4444"/>},
     {id:"sec-phase3", label:"Giai đoạn 3: Ngoại trú", icon:<Icon.Dot color="#10B981"/>},
   ]},
   { group:"Phân tích", items:[
-    {id:"sec-echo",      label:"Biểu đồ siêu âm", icon:<Icon.Ultrasound d={11}/>},
-    {id:"sec-reasoning", label:"Lý luận lâm sàng",     icon:<Icon.Brain d={11}/>},
-    {id:"sec-labs",      label:"Xét nghiệm",     icon:<Icon.Flask d={11}/>},
-    {id:"sec-meds",      label:"Thuốc",          icon:<Icon.Pill d={11}/>},
-    {id:"sec-drug",      label:"eGFR & An toàn thuốc", icon:<Icon.ShieldCheck d={11}/>},
-    {id:"sec-summary",   label:"Tóm tắt",        icon:<Icon.FileText d={11}/>},
+    {id:"sec-echo", label:"Chẩn đoán hình ảnh", icon:<Icon.Ultrasound d={11}/>},
+    {id:"sec-reasoning", label:"Biện luận lâm sàng", icon:<Icon.Brain d={11}/>},
+    {id:"sec-labs", label:"Xét nghiệm", icon:<Icon.Flask d={11}/>},
+    {id:"sec-meds", label:"Thuốc", icon:<Icon.Pill d={11}/>},
+    {id:"sec-drug", label:"eGFR & An toàn thuốc", icon:<Icon.ShieldCheck d={11}/>},
+    {id:"sec-summary", label:"Tóm tắt", icon:<Icon.FileText d={11}/>},
   ]},
 ]
 const SECTIONS = NAV_GROUPS.flatMap(g => g.items)
@@ -2122,7 +2125,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
   useEffect(() => {
     if (tab !== "report") return
     const onScroll = () => {
-      if (Date.now() - navLock.current < 700) return  // đang cuộn do bấm, bỏ qua
+      if (Date.now() - navLock.current < 700) return // đang cuộn do bấm, bỏ qua
       const THRESHOLD = 160
       let current = SECTIONS[0]?.id
       for (const { id } of SECTIONS) {
@@ -2290,8 +2293,8 @@ function PatientTimeline({ info }) {
 // ─── TÓM TẮT TOÀN CẢNH (chia 3 giai đoạn + đóng/mở) ───────────────────────────
 const SUMMARY_PHASE_META = {
   1: { color:"#F59E0B", bg:"rgba(254,243,199,0.45)", border:"rgba(253,230,138,0.7)" },
-  2: { color:"#EF4444", bg:"rgba(254,242,242,0.5)",  border:"rgba(254,202,202,0.7)" },
-  3: { color:"#1D6FE8", bg:"rgba(235,244,255,0.5)",  border:"rgba(191,219,254,0.7)" },
+  2: { color:"#EF4444", bg:"rgba(254,242,242,0.5)", border:"rgba(254,202,202,0.7)" },
+  3: { color:"#1D6FE8", bg:"rgba(235,244,255,0.5)", border:"rgba(191,219,254,0.7)" },
 }
 function SummaryCard({ text }) {
   const [collapsed, setCollapsed] = useState(false)
@@ -2368,8 +2371,8 @@ function buildPhaseEvents(report, info) {
 }
 const PHASE_SECTION_META = {
   1: { name:"Giai đoạn 1: Tiền phẫu / Trước can thiệp", short:"Giai đoạn 1 - Diễn biến tiền phẫu", color:"#8B5CF6", bg:"rgba(243,240,255,0.5)", border:"#DDD6FE" },
-  2: { name:"Giai đoạn 2: Hậu phẫu nội trú",            short:"Giai đoạn 2 - Diễn biến hậu phẫu nội trú", color:"#EF4444", bg:"rgba(254,242,242,0.5)", border:"#FECACA" },
-  3: { name:"Giai đoạn 3: Ngoại trú / Tái khám",        short:"Giai đoạn 3 - Theo dõi ngoại trú / Tái khám", color:"#10B981", bg:"rgba(240,253,250,0.5)", border:"#A7F3D0" },
+  2: { name:"Giai đoạn 2: Hậu phẫu nội trú", short:"Giai đoạn 2 - Diễn biến hậu phẫu nội trú", color:"#EF4444", bg:"rgba(254,242,242,0.5)", border:"#FECACA" },
+  3: { name:"Giai đoạn 3: Ngoại trú / Tái khám", short:"Giai đoạn 3 - Theo dõi ngoại trú / Tái khám", color:"#10B981", bg:"rgba(240,253,250,0.5)", border:"#A7F3D0" },
 }
 // Dải mốc thời gian tương đối cho mỗi sự kiện trong giai đoạn
 function relMarker(dateStr, phase, info) {
@@ -2494,9 +2497,9 @@ function ClinicalStatusBanner({ info, report }) {
 }
 // ─── TRẠNG THÁI VẤN ĐỀ (Active / Monitoring / Resolved) ───────────────────────
 const PROB_META = {
-  active:     { label:"Đang hoạt động", color:"#059669" },
-  monitoring: { label:"Cần theo dõi",   color:"#D97706" },
-  urgent:     { label:"Cần xử lý ngay", color:"#DC2626" },
+  active: { label:"Đang hoạt động", color:"#059669" },
+  monitoring: { label:"Cần theo dõi", color:"#D97706" },
+  urgent: { label:"Cần xử lý ngay", color:"#DC2626" },
 }
 function ProblemStatus({ data }) {
   const [collapsed, setCollapsed] = useState(false)
@@ -2600,8 +2603,8 @@ function NextActions({ items }) {
 // ─── LÝ LUẬN LÂM SÀNG (multi-variable reasoning theo giai đoạn) ────────────────
 const REASON_SEV = {
   critical: { label:"Quan trọng", color:"#DC2626", bg:"rgba(254,242,242,0.75)", border:"#FECACA" },
-  warning:  { label:"Chú ý",      color:"#D97706", bg:"rgba(255,251,235,0.8)",  border:"#FDE68A" },
-  info:     { label:"Thông tin",  color:"#1D6FE8", bg:"rgba(239,246,255,0.8)",  border:"#BFDBFE" },
+  warning: { label:"Chú ý", color:"#D97706", bg:"rgba(255,251,235,0.8)", border:"#FDE68A" },
+  info: { label:"Thông tin", color:"#1D6FE8", bg:"rgba(239,246,255,0.8)", border:"#BFDBFE" },
 }
 const PHASE_TAG = {
   1: { label:"Giai đoạn 1", color:"#8B5CF6" },
@@ -2612,7 +2615,10 @@ function ReasoningItem({ item }) {
   const [open, setOpen] = useState(true)
   const sv = REASON_SEV[item.muc] || REASON_SEV.info
   const pt = PHASE_TAG[item.phase]
-  const bullets = String(item.noi_dung).split(/(?<=\.)\s+/).map(s=>s.trim().replace(/\.$/,"")).filter(Boolean)
+  const bullets = String(item.noi_dung)
+    .split(/(?<=\.)\s+|\s*•\s*|\n+/)
+    .map(s => s.trim().replace(/^\s*([•·●○*]\s*|-\s+)/, "").replace(/\.$/, "").trim())
+    .filter(Boolean)
   return (
     <div className="reason-item" style={{ background:sv.bg, borderColor:sv.border }}>
       <div className="reason-head" onClick={()=>setOpen(o=>!o)}>
@@ -2642,7 +2648,7 @@ function ClinicalReasoning({ items }) {
   const sevSeg = [["all","Tất cả"],["critical","Quan trọng"],["warning","Chú ý"],["info","Thông tin"]]
   const phSeg = [["all","Mọi giai đoạn"],["1","Giai đoạn 1"],["2","Giai đoạn 2"],["3","Giai đoạn 3"]]
   return (
-    <Card id="sec-reasoning" title="Lý luận lâm sàng theo giai đoạn" icon={<Icon.Brain d={16}/>}>
+    <Card id="sec-reasoning" title="Biện luận lâm sàng theo giai đoạn" icon={<Icon.Brain d={16}/>}>
       <div className="reason-filters">
         <div className="echo-seg lab-seg">
           {sevSeg.map(([k,lbl]) => <button key={k} className={sev===k?"on":""} onClick={()=>setSev(k)}>{lbl}</button>)}
@@ -2983,18 +2989,18 @@ function ReportTab({ report: r, analysis }) {
   const ps = r.problem_status
   let segActive, segMonitor, segResolved, donutLegend
   if (ps) {
-    segActive   = (ps.hien_tai||[]).filter(p=>p.trang_thai==="active").length
-    segMonitor  = (ps.hien_tai||[]).filter(p=>p.trang_thai!=="active").length
+    segActive = (ps.hien_tai||[]).filter(p=>p.trang_thai==="active").length
+    segMonitor = (ps.hien_tai||[]).filter(p=>p.trang_thai!=="active").length
     segResolved = (ps.da_qua||[]).length
     donutLegend = [["#1D6FE8","Đang hoạt động",segActive],["#F59E0B","Cần theo dõi",segMonitor],["#22C55E","Đã hồi phục",segResolved]]
   } else {
-    segActive   = findings.filter(f=>f.muc==="critical").length
-    segMonitor  = findings.filter(f=>f.muc==="warning").length
+    segActive = findings.filter(f=>f.muc==="critical").length
+    segMonitor = findings.filter(f=>f.muc==="warning").length
     segResolved = findings.filter(f=>f.muc==="stable").length
     donutLegend = [["#EF4444","Cần xử lý",segActive],["#F59E0B","Theo dõi",segMonitor],["#22C55E","Ổn định",segResolved]]
   }
   const donutData = donutLegend.map(([color,,value]) => ({ value, color }))
-  const donutCurrent = segActive + segMonitor   // số vấn đề CÒN tồn tại (không tính đã hồi phục)
+  const donutCurrent = segActive + segMonitor // số vấn đề CÒN tồn tại (không tính đã hồi phục)
   return (
     <div className="report-stack">
       {modalSource && <SourceModal source={modalSource} onClose={()=>setModalSource(null)}/>}
@@ -3066,8 +3072,8 @@ function ReportTab({ report: r, analysis }) {
             : null
         })()
       )}
-      {/* PHÂN TÍCH: Biểu đồ siêu âm */}
-      <Card id="sec-echo" title="Biểu đồ siêu âm tim qua 3 giai đoạn" icon={<Icon.Ultrasound d={16}/>}>
+      {/* PHÂN TÍCH: Chẩn đoán hình ảnh */}
+      <Card id="sec-echo" title="Chẩn đoán hình ảnh qua 3 giai đoạn" icon={<Icon.Ultrasound d={16}/>}>
         <EchoTimeline sieu_am={r.sieu_am_tim} info={phaseInfo}/>
         <EchoSessionTable sieu_am={r.sieu_am_tim}/>
       </Card>
@@ -3110,10 +3116,10 @@ function ReportTab({ report: r, analysis }) {
 // ─── CHAT TAB ─────────────────────────────────────────────────────────────────
 const DEMO_CHAT = {
   "biến chứng": "Sau mổ, bệnh nhân có **phản ứng viêm nặng sau phẫu thuật**:\n- CRP tăng rất cao: 241.42 mg/L ngay ngày 26/09 sau mổ\n- Giảm dần nhưng vẫn còn 42.3 mg/L khi ra viện (bình thường dưới 5)\n- EF tạm giảm từ 61% xuống 50% sau mổ, phục hồi về 58% khi ra viện\n- NT-proBNP 2280 pg/mL: chỉ điểm suy tim cần theo dõi tiếp",
-  "kháng sinh":  "Phác đồ kháng sinh điều trị sau mổ:\n- **Buflan 2g (Cefoperazone + Sulbactam)**: dùng từ ngày 26/09, tiêm truyền tĩnh mạch\n- Ra viện bổ sung **Medoxasol 500mg (Levofloxacin)** uống ngoại trú\n- Lý do: CRP tăng cao sau mổ, bạch cầu WBC 10.21 đến 14.47 G/L",
-  "chống đông":  "Bệnh nhân đang dùng **Vincerol 1mg (Acenocoumarol)** uống lúc 20h.\n\nLý do dùng suốt đời:\n- Van tim cơ học On-X cần chống đông để ngăn huyết khối\n- Mục tiêu INR: 2.0 đến 3.0 với van ĐMC cơ học\n- INR ra viện ngày 03/10: 2.25, trong ngưỡng điều trị\n- Cần xét nghiệm INR định kỳ mỗi tuần ban đầu",
+  "kháng sinh": "Phác đồ kháng sinh điều trị sau mổ:\n- **Buflan 2g (Cefoperazone + Sulbactam)**: dùng từ ngày 26/09, tiêm truyền tĩnh mạch\n- Ra viện bổ sung **Medoxasol 500mg (Levofloxacin)** uống ngoại trú\n- Lý do: CRP tăng cao sau mổ, bạch cầu WBC 10.21 đến 14.47 G/L",
+  "chống đông": "Bệnh nhân đang dùng **Vincerol 1mg (Acenocoumarol)** uống lúc 20h.\n\nLý do dùng suốt đời:\n- Van tim cơ học On-X cần chống đông để ngăn huyết khối\n- Mục tiêu INR: 2.0 đến 3.0 với van ĐMC cơ học\n- INR ra viện ngày 03/10: 2.25, trong ngưỡng điều trị\n- Cần xét nghiệm INR định kỳ mỗi tuần ban đầu",
   "siêu âm":     "Bệnh nhân có 9 lượt siêu âm tim, diễn biến chính:\n\n- **Trước mổ (12/09):** hẹp van ĐMC khít, chênh áp 71/51 mmHg, EF 74%\n- **Sau mổ (30/09):** van On-X hoạt động, chênh áp giảm còn 16 mmHg. EF tụt còn 50%, có dịch màng phổi 2 bên\n- **10/10:** EF giảm nặng 44%, dịch màng ngoài tim nhiều, dấu hiệu ép nhẹ thất phải (cảnh báo)\n- **Phục hồi (28/10 đến 25/11):** EF lên lại 58 rồi 71%, hết dịch\n- **Gần nhất (26/05/2026):** chênh áp 8 mmHg, EF 71%, van hoạt động bình thường\n\nTóm lại: van thay tốt (chênh áp giảm mạnh), EF tụt tạm thời do dịch màng ngoài tim rồi phục hồi hoàn toàn.",
-  "crp":         "Diễn biến CRP theo thời gian:\n- 26/09 (sau mổ): **241.42 mg/L** (rất cao)\n- 27/09: 130.17 mg/L\n- 30/09: 106.61 mg/L\n- 03/10 (ra viện): **42.3 mg/L** (vẫn còn cao, bình thường dưới 5)\n\nXu hướng giảm tốt nhưng chưa về bình thường. Cần kiểm tra lại ở lần tái khám 10/10.",
+  "crp": "Diễn biến CRP theo thời gian:\n- 26/09 (sau mổ): **241.42 mg/L** (rất cao)\n- 27/09: 130.17 mg/L\n- 30/09: 106.61 mg/L\n- 03/10 (ra viện): **42.3 mg/L** (vẫn còn cao, bình thường dưới 5)\n\nXu hướng giảm tốt nhưng chưa về bình thường. Cần kiểm tra lại ở lần tái khám 10/10.",
 }
 function renderMd(text) {
   if (!text) return null
@@ -3265,6 +3271,31 @@ function ChatTab({ report, hoSoText, messages, setMessages }) {
   )
 }
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { err: null } }
+  static getDerivedStateFromError(err) { return { err } }
+  componentDidCatch(err, info) { console.error("MedParcours render error:", err, info) }
+  render() {
+    if (this.state.err) {
+      const e = this.state.err
+      return (
+        <div style={{ maxWidth: 680, margin: "60px auto", padding: 24, fontFamily: "system-ui, -apple-system, sans-serif" }}>
+          <h2 style={{ color: "#B42318", marginBottom: 8 }}>Đã xảy ra lỗi hiển thị</h2>
+          <p style={{ color: "#33485F", lineHeight: 1.6 }}>
+            Giao diện gặp sự cố khi dựng phần này (dữ liệu phân tích vẫn an toàn). Hãy thử tải lại trang.
+          </p>
+          <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", background: "#FEF3F2", border: "1px solid #FCD9D3", borderRadius: 8, padding: 12, fontSize: 12, color: "#7A271A", overflow: "auto", maxHeight: 280 }}>
+            {String((e && (e.stack || e.message)) || e)}
+          </pre>
+          <button onClick={() => location.reload()} style={{ marginTop: 12, border: "none", background: "#1D6FE8", color: "#fff", padding: "10px 18px", borderRadius: 10, fontWeight: 600, cursor: "pointer" }}>
+            Tải lại trang
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 export default function App() {
   const [state, setState] = useState("upload")
   const [report, setReport] = useState(null)
@@ -3274,7 +3305,22 @@ export default function App() {
   const [loadingMsg, setLoadingMsg] = useState("")
   const [uploadError, setUploadError] = useState(null)
   const [chatMessages, setChatMessages] = useState([])
-  useEffect(() => { document.title = "MedParcours AI" }, [])
+  useEffect(() => {
+    document.title = "MedParcours AI"
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">'
+      + '<defs><linearGradient id="f" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">'
+      + '<stop stop-color="#1A56DB"/><stop offset="0.55" stop-color="#1D6FE8"/><stop offset="1" stop-color="#0E9488"/>'
+      + '</linearGradient></defs>'
+      + '<rect width="40" height="40" rx="9" fill="url(#f)"/>'
+      + '<path d="M20 30.5 C20 30.5 8 23.2 8 15 C8 11.2 10.8 8.6 14.2 8.6 C16.6 8.6 18.7 10 20 12.2 C21.3 10 23.4 8.6 25.8 8.6 C29.2 8.6 32 11.2 32 15 C32 23.2 20 30.5 20 30.5 Z" fill="none" stroke="#fff" stroke-width="1.6" stroke-opacity="0.3"/>'
+      + '<path d="M5.5 20.5 H13.5 L16 14.2 L20 27.2 L23 17.6 L25.5 20.5 H34.5" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>'
+      + '<circle cx="34.5" cy="20.5" r="2.6" fill="#7FE7F5"/></svg>'
+    const href = "data:image/svg+xml," + encodeURIComponent(svg)
+    let link = document.querySelector("link[rel~='icon']")
+    if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link) }
+    link.type = "image/svg+xml"
+    link.href = href
+  }, [])
   const initChat = useCallback((rpt) => {
     setChatMessages([{role:"assistant", content:`Xin chào, tôi là **MedAmi**, trợ lý ảo của bác sĩ. Tôi đã đọc toàn bộ hồ sơ của bệnh nhân **${rpt.thong_tin_benh_nhan?.ho_ten || ""}**. Bác sĩ muốn hỏi gì?`}])
   }, [])
@@ -3286,7 +3332,7 @@ export default function App() {
     }
     setLoading(true); setUploadError(null); setLoadingMsg("")
     const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), 240000)  // 240s cho hồ sơ rất dày
+    const timer = setTimeout(() => ctrl.abort(), 240000) // 240s cho hồ sơ rất dày
     // Áp dụng kết quả trả về từ backend (dùng chung cho cả 2 đường)
     const applyData = (data, status) => {
       if (!data || !data.success) {
@@ -3351,12 +3397,14 @@ export default function App() {
   return (
     <>
       <style>{CSS}</style>
-      {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)}/>}
-      {state === "report" && report && (
-        <ReportPage report={report} hoSoText={hoSoText} analysis={analysis}
-          onReset={()=>{setState("upload");setReport(null);setAnalysis(null);setChatMessages([])}}
-          chatMessages={chatMessages} setChatMessages={setChatMessages}/>
-      )}
+      <ErrorBoundary>
+        {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)}/>}
+        {state === "report" && report && (
+          <ReportPage report={report} hoSoText={hoSoText} analysis={analysis}
+            onReset={()=>{setState("upload");setReport(null);setAnalysis(null);setChatMessages([])}}
+            chatMessages={chatMessages} setChatMessages={setChatMessages}/>
+        )}
+      </ErrorBoundary>
     </>
   )
 }
