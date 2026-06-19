@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect, useCallback, Component } from "react"
+
 // API_URL: trỏ tới backend trên Hugging Face Spaces.
 // SAU KHI tạo Space, thay URL bên dưới bằng URL thật, dạng:
 //   https://<tên-tài-khoản-HF>-mediflow-ai.hf.space   (chữ thường, dùng dấu gạch ngang)
 // Có thể ghi đè bằng window.MEDIFLOW_API_URL trong index.html mà không cần sửa file này.
 const API_URL = (typeof window !== "undefined" && window.MEDIFLOW_API_URL) || "https://danghoang2605-mediflow-ai.hf.space"
+
 // ─── Bóc chữ PDF NGAY TRONG TRÌNH DUYỆT (pdf.js từ CDN) ───────────────────────
 // File lớn (vd 100 trang, 14MB) chỉ chứa vài trăm KB chữ. Bóc chữ ở client rồi
 // gửi mình phần chữ lên server, nên không bị nghẽn ở giới hạn dung lượng upload.
@@ -28,6 +30,7 @@ function ensurePdfJs() {
   })
   return _pdfjsPromise
 }
+
 // Bóc toàn bộ text của 1 file PDF (đọc HẾT trang để không bỏ sót; có trần an toàn
 // 1500 trang). Server sẽ lọc giữ phần lâm sàng. onProgress(done,total) để báo tiến độ.
 async function extractPdfText(file, onProgress) {
@@ -45,12 +48,14 @@ async function extractPdfText(file, onProgress) {
   }
   return { text: parts.join("\n\n"), pages: pdf.numPages }
 }
+
 // ASSET_BASE: thư mục gốc trang web lúc chạy. Trên GitHub Pages là "/mediflow-ai/",
 // chạy local là "/". Tự tính nên ảnh logo trỏ đúng dù deploy ở subpath nào.
 // (Không dùng import.meta để tránh lỗi "import.meta outside a module" ở môi trường preview.)
 const ASSET_BASE = (typeof window !== "undefined" && window.MEDIFLOW_BASE)
   || (typeof window !== "undefined" ? window.location.pathname.replace(/[^/]*$/, "") : "/")
 const asset = (p) => ASSET_BASE + String(p).replace(/^\/+/, "")
+
 // ─── CSS ──────────────────────────────────────────────────────────────────────
 const CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap');
@@ -67,6 +72,7 @@ const CSS = `
   *{box-sizing:border-box;margin:0;padding:0}
   html{scroll-behavior:smooth}
   body{font-family:'Be Vietnam Pro',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--page-bg);min-height:100vh;color:var(--navy);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+
   /* SHARED */
   .card{background:var(--glass);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:var(--shadow-sm);transition:box-shadow .2s}
   .card.collapsed .card-body{display:none}
@@ -77,6 +83,7 @@ const CSS = `
   .card-body{padding:20px}
   .collapse-btn{width:24px;height:24px;border-radius:7px;border:none;background:rgba(29,111,232,0.07);cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--muted);transition:all .15s;flex-shrink:0;font-size:11px}
   .collapse-btn:hover{background:rgba(29,111,232,0.14);color:var(--blue)}
+
   .badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:4px 10px;border-radius:8px;border:1px solid;white-space:nowrap}
   .badge-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
   .badge.cao{background:#FEF2F2;color:#B91C1C;border-color:#FECACA}
@@ -87,14 +94,17 @@ const CSS = `
   .badge.low .badge-dot{background:#38BDF8}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+
   /* SOURCE CHIP */
   .src-chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:500;color:var(--muted);background:rgba(200,220,255,0.15);border:1px solid rgba(200,220,255,0.4);padding:3px 9px;border-radius:999px;cursor:pointer;margin-top:6px;transition:all .15s}
   .src-chip:hover{background:rgba(29,111,232,0.1);border-color:rgba(29,111,232,0.25);color:var(--blue)}
+
   /* BULLET LIST */
   .bullet-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:5px;text-align:left}
   .alert-item,.risk-item,.prio-box,.ai-insight,.traj-card,.drug-alert,.prio-col{text-align:left}
   .bullet-list li{display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--navy2);line-height:1.5}
   .bullet-list li::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--blue);flex-shrink:0;margin-top:6px}
+
   /* UPLOAD */
   .upload-page{min-height:100vh;position:relative;overflow:hidden;background:var(--page-bg)}
   .upload-bg-circle1{position:absolute;top:-80px;right:-80px;width:400px;height:400px;border-radius:50%;background:radial-gradient(circle,rgba(29,111,232,0.07) 0%,transparent 70%);pointer-events:none}
@@ -189,6 +199,7 @@ const CSS = `
   .load-arr{font-size:10px;color:#BDD0EE}
   .loading-spin{width:48px;height:48px;border-radius:50%;margin:0 auto 16px;border:3px solid rgba(29,111,232,0.15);border-top:3px solid var(--blue);animation:spin .8s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
+
   /* REPORT NAV */
   .report-nav{position:sticky;top:0;z-index:50;background:rgba(255,255,255,0.92);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom:1px solid var(--border);box-shadow:0 1px 0 rgba(16,41,66,0.04),0 4px 16px rgba(16,41,66,0.04)}
   .report-nav-inner{max-width:1120px;margin:0 auto;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between}
@@ -207,6 +218,7 @@ const CSS = `
   .btn-print:hover{background:rgba(29,111,232,0.14)}
   .btn-back{background:transparent;color:var(--muted);border:1px solid var(--border)}
   .btn-back:hover{background:rgba(235,244,255,0.8)}
+
   /* PATIENT CHIP BAR */
   .chip-bar{background:rgba(255,255,255,0.6);backdrop-filter:blur(8px);border-bottom:1px solid var(--border);padding:7px 24px}
   .chip-bar-inner{max-width:1120px;margin:0 auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
@@ -215,10 +227,12 @@ const CSS = `
   .chip-tag.info{background:#F0F9FF;color:#075985;border-color:#BAE6FD}
   .chip-tag.med{background:#F0FDF4;color:#166534;border-color:#BBF7D0}
   .chip-lbl{font-size:10px;color:var(--muted);font-weight:500}
+
   /* REPORT LAYOUT */
   .report-outer{max-width:1120px;margin:0 auto;padding:24px 24px 60px;display:flex;gap:20px;align-items:flex-start}
   .report-main{flex:1;min-width:0}
   .report-stack>*+*{margin-top:14px}
+
   /* SIDEBAR */
   .sidebar{width:186px;flex-shrink:0;position:sticky;top:108px;align-self:flex-start;max-height:calc(100vh - 124px);overflow-y:auto}
   .sidebar-label{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:var(--navy2);margin-bottom:8px;padding-left:10px}
@@ -226,6 +240,7 @@ const CSS = `
   .sidebar-item svg{flex-shrink:0}
   .sidebar-item:hover{background:rgba(255,255,255,0.7);color:var(--navy);border-color:var(--border)}
   .sidebar-item.active{background:rgba(255,255,255,0.9);color:var(--blue);border-color:rgba(29,111,232,0.2);font-weight:700}
+
   /* BANNER */
   .banner{border-radius:16px;overflow:hidden;box-shadow:var(--shadow-md);border:1px solid var(--border)}
   .banner-top{padding:22px 24px;background:linear-gradient(118deg,#13335E 0%,#1B56A8 100%)}
@@ -241,11 +256,13 @@ const CSS = `
   .banner-bot{padding:12px 24px;background:rgba(26,63,143,0.92)}
   .diag-lbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:rgba(180,210,255,0.6);margin-bottom:4px}
   .diag-val{font-size:13px;font-weight:500;color:#fff;line-height:1.5}
+
   /* RISK DONUT */
   .banner-donut{display:flex;align-items:center;gap:18px;padding:14px 24px;background:rgba(26,63,143,0.78);border-top:1px solid rgba(255,255,255,0.1)}
   .donut-legend{display:flex;flex-direction:column;gap:5px}
   .donut-item{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:rgba(238,246,255,0.95)}
   .donut-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+
   /* HERO STATUS (tong quan 15 giay) */
   .hero-status{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:22px;align-items:center;background:#fff;border:1px solid var(--border);border-left:4px solid var(--hero-accent,#1B5FCB);border-radius:14px;padding:15px 20px;box-shadow:var(--shadow-sm)}
   .hero-status-phase{display:flex;flex-direction:column;gap:4px}
@@ -263,6 +280,7 @@ const CSS = `
   .hs-count-lbl{font-size:10px;font-weight:700}
   @media(max-width:1040px){.hero-status{grid-template-columns:1fr;gap:13px}.hero-status-verdict{padding-left:0;border-left:none;border-top:1px solid var(--border);padding-top:12px}.hs-verdict-txt{white-space:nowrap}.hero-status-counts{justify-content:flex-start}}
   @media(max-width:430px){.hs-verdict-txt{white-space:normal}.hero-status-counts{justify-content:space-between}}
+
   /* PRIORITY ALERTS */
   .prio-wrap{border-radius:18px;overflow:hidden;border:1px solid rgba(200,220,255,0.5);box-shadow:0 4px 20px rgba(29,111,232,0.10)}
   .prio-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;padding:13px 18px;background:linear-gradient(120deg,#1A3F8F,var(--blue))}
@@ -342,6 +360,7 @@ const CSS = `
   .drug-suggest{font-size:12px;color:var(--navy3);line-height:1.5;margin-bottom:6px}
   .drug-suggest strong{color:var(--navy)}
   .drug-disclaimer{font-size:10px;color:#94A3B8;font-style:italic;margin-top:10px;padding-top:10px;border-top:1px solid rgba(200,220,255,0.3)}
+
   /* ALERTS */
   .alerts-hi{background:rgba(254,242,242,0.88);border:1px solid rgba(252,165,165,0.5);border-radius:18px;padding:16px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
   .alerts-hi-hd{display:flex;align-items:center;gap:8px;margin-bottom:12px}
@@ -349,6 +368,7 @@ const CSS = `
   .alert-item{background:rgba(255,255,255,0.72);border:1px solid rgba(252,165,165,0.4);border-radius:12px;padding:12px 14px}
   .alert-item+.alert-item{margin-top:8px}
   .alert-item-title{font-size:13px;font-weight:600;color:#7F1D1D;line-height:1.5;margin-bottom:2px}
+
   /* SURGERY */
   .surg-row{display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:10px}
   .surg-lbl{color:var(--muted)}
@@ -360,6 +380,7 @@ const CSS = `
   .surg-grid{display:grid;grid-template-columns:1.6fr 1fr;gap:20px;align-items:start}
   .surg-grid .surg-doc{border-top:none;padding-top:0;margin-top:0;border-left:1px solid rgba(200,220,255,0.3);padding-left:20px;height:100%}
   @media(max-width:720px){.surg-grid{grid-template-columns:1fr}.surg-grid .surg-doc{border-left:none;border-top:1px solid rgba(200,220,255,0.3);padding-left:0;padding-top:10px}}
+
   /* LABS */
   .lab-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
   .lab-cell{border-radius:12px;padding:11px 12px;background:rgba(235,244,255,0.6);border:1px solid rgba(200,220,255,0.4);display:flex;flex-direction:column}
@@ -404,7 +425,9 @@ const CSS = `
   .traj-list{list-style:none;display:flex;flex-direction:column;gap:6px}
   .traj-list li{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:var(--navy3);line-height:1.5}
   .traj-mark{font-size:9px;line-height:1.5;flex-shrink:0;margin-top:1px}
+
   /* VITAL SIGNS CHART: dùng chung style .echo-tl-wrap */
+
   /* TIMELINE */
   .tl-filters{display:flex;gap:6px;flex-wrap:wrap}
   .tl-filter-btn{font-size:11px;font-weight:600;padding:4px 12px;border-radius:999px;border:1px solid var(--border);background:rgba(255,255,255,0.6);color:var(--muted2);cursor:pointer;transition:all .15s;font-family:inherit}
@@ -426,6 +449,7 @@ const CSS = `
   .tl-tag{font-size:10px;font-weight:700;padding:2px 8px;border-radius:6px}
   .tl-tag.canh_bao{background:rgba(239,68,68,0.1);color:#DC2626}
   .tl-tag.bat_thuong{background:rgba(245,158,11,0.1);color:#B45309}
+
   /* ECHO */
   .echo-card{border-radius:14px;padding:14px;border:1px solid}
   .echo-card.pre{background:rgba(255,251,235,0.8);border-color:rgba(253,230,138,0.5)}
@@ -433,6 +457,7 @@ const CSS = `
   .echo-card.post2{background:rgba(235,244,255,0.8);border-color:rgba(191,219,254,0.4)}
   .echo-lbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--navy3);margin-bottom:4px}
   .echo-date{font-size:11px;color:var(--muted);margin-bottom:8px}
+
   /* ECHO BAR CHART */
   .echo-bar-wrap{background:rgba(235,244,255,0.5);border:1px solid rgba(200,220,255,0.4);border-radius:14px;padding:16px;margin-top:14px}
   .echo-bar-title{font-size:11px;font-weight:700;color:var(--navy3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:12px}
@@ -476,12 +501,15 @@ const CSS = `
   .echo-tbl tr.latest{background:rgba(235,244,255,0.7)}
   .echo-tbl-badge{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;background:var(--blue);color:#fff;font-size:9px;font-weight:700;vertical-align:middle}
   .echo-phase-pill{display:inline-block;padding:2px 9px;border-radius:999px;border:1px solid;font-size:10px;font-weight:600;white-space:nowrap}
+
+
   /* MEDS */
   .med-item{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;background:rgba(235,244,255,0.5);border:1px solid rgba(200,220,255,0.35);border-radius:14px}
   .med-icon{width:32px;height:32px;border-radius:10px;background:rgba(29,111,232,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0}
   .med-name{font-size:13px;font-weight:600;color:var(--navy);line-height:1.3}
   .med-nhom{font-size:11px;font-weight:600;color:var(--blue);margin-top:2px}
   .med-dose{font-size:11px;color:var(--muted2);margin-top:2px}
+
   /* MED GANTT */
   .gantt-wrap{background:rgba(235,244,255,0.5);border:1px solid rgba(200,220,255,0.4);border-radius:14px;padding:16px;margin-top:14px}
   .gantt-title{font-size:11px;font-weight:700;color:var(--navy3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:14px}
@@ -509,12 +537,14 @@ const CSS = `
   .gantt-axis-track span{position:absolute;transform:translateX(-50%);font-size:9px;color:#94A3B8;font-variant-numeric:tabular-nums}
   .gantt-axis-track span:first-child{transform:translateX(0)}
   .gantt-axis-track span:last-child{transform:translateX(-100%)}
+
   /* RISKS */
   .risks-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .risk-item{padding:14px;border-radius:14px;display:flex;flex-direction:column;gap:8px;border:1px solid}
   .risk-item.cao{background:rgba(254,242,242,0.72);border-color:rgba(252,165,165,0.5)}
   .risk-item.trung_binh{background:rgba(255,251,235,0.72);border-color:rgba(253,230,138,0.5)}
   .risk-item.thap{background:rgba(240,249,255,0.72);border-color:rgba(186,230,253,0.5)}
+
   /* SUMMARY */
   .summary-card{background:var(--glass);backdrop-filter:blur(12px);border:1px solid var(--border);border-radius:18px;padding:20px;box-shadow:0 2px 16px rgba(30,80,200,0.06)}
   .summary-hd{display:flex;align-items:center;gap:8px;margin-bottom:12px}
@@ -609,6 +639,7 @@ const CSS = `
   .phase-ev-tag.warn{background:#FEF2F2;color:#DC2626}
   .phase-ketluan{font-size:12.5px;color:var(--navy2);line-height:1.6;margin-top:6px;padding:11px 14px;background:rgba(235,244,255,0.45);border-left:3px solid;border-radius:0 10px 10px 0}
   .phase-ketluan-lbl{font-weight:700}
+
   /* MODAL */
   .modal-overlay{position:fixed;inset:0;background:rgba(10,22,40,0.45);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:center;justify-content:center;padding:24px;animation:fadeIn .15s ease}
   @keyframes fadeIn{from{opacity:0}to{opacity:1}}
@@ -620,10 +651,12 @@ const CSS = `
   .modal-body{padding:20px}
   .modal-highlight{background:#FEF9C3;border-left:3px solid #EAB308;padding:10px 14px;border-radius:8px;font-size:13px;line-height:1.65;color:#713F12;margin-bottom:12px}
   .modal-footer{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px}
+
   /* SCROLL TO TOP */
   .scroll-top{position:fixed;bottom:28px;right:28px;width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,var(--blue),var(--cyan));border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(29,111,232,0.35);transition:all .2s;z-index:100}
   .scroll-top:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(29,111,232,0.4)}
   .scroll-top.hidden{opacity:0;pointer-events:none;transform:translateY(8px)}
+
   /* FLOATING CHAT (Messenger-style) */
   .fab-chat{position:fixed;bottom:24px;right:24px;z-index:200;width:56px;height:56px;border-radius:50%;border:none;cursor:pointer;background:linear-gradient(135deg,#1D6FE8,#06B6D4);box-shadow:0 8px 24px rgba(29,111,232,0.4);display:flex;align-items:center;justify-content:center;transition:transform .15s}
   .fab-chat:hover{transform:scale(1.07)}
@@ -649,6 +682,7 @@ const CSS = `
   .fc-input input{flex:1;border:1px solid rgba(200,220,255,0.6);border-radius:999px;padding:8px 14px;font-size:13px;font-family:inherit;outline:none;color:var(--navy)}
   .fc-input input:focus{border-color:var(--blue)}
   .send-btn.sm{width:32px;height:32px;flex-shrink:0}
+
   /* CHAT */
   .chat-page{max-width:960px;margin:0 auto;padding:16px 24px}
   .chat-wrap{display:flex;flex-direction:column;height:calc(100vh - 130px)}
@@ -684,6 +718,7 @@ const CSS = `
   .kbd-hint{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px}
   .kbd{background:rgba(200,220,255,0.3);border:1px solid rgba(200,220,255,0.6);border-radius:4px;padding:1px 5px;font-size:9px;color:var(--muted2)}
 `
+
 // ─── SVG ICONS ────────────────────────────────────────────────────────────────
 function Svg({ d = 20, children, style, color }) {
   return (
@@ -726,6 +761,7 @@ const Icon = {
   Stethoscope:p => <Svg {...p}><path d="M4.8 2.3A.3.3 0 1 0 5 2H4a2 2 0 0 0-2 2v5a6 6 0 0 0 6 6 6 6 0 0 0 6-6V4a2 2 0 0 0-2-2h-1a.3.3 0 1 0 .2.3"/><path d="M8 15v1a6 6 0 0 0 6 6 6 6 0 0 0 6-6v-4"/><circle cx="20" cy="10" r="2"/></Svg>,
   Dot:        ({color="#8B5CF6"}) => <svg width="11" height="11" viewBox="0 0 11 11"><circle cx="5.5" cy="5.5" r="4" fill={color}/></svg>,
 }
+
 // Logo mark: pulse/ECG flow trong khối bo tròn gradient (chủ đề tim mạch)
 let _brandId = 0
 function BrandMark({ size = 36, radius = 10 }) {
@@ -761,6 +797,7 @@ function BrandMark({ size = 36, radius = 10 }) {
     </svg>
   )
 }
+
 // Ảnh avatar MedAmi nhúng sẵn (base64) — luôn hiển thị, không phụ thuộc file/deploy
 const MEDAMI_AVATAR = "data:image/png;base64,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"
 // Avatar MedAmi: ưu tiên ảnh medami.png, tự fallback về icon robot nếu ảnh lỗi/chưa deploy
@@ -773,6 +810,7 @@ function MedAmiAvatar({ robotSize = 13 }) {
       onError={()=>setErr(true)}/>
   )
 }
+
 // ─── UTILS ────────────────────────────────────────────────────────────────────
 const ABBR_MAP = {
   "ĐMC":"Động Mạch Chủ (ĐMC)", "ĐMP":"Động Mạch Phổi (ĐMP)",
@@ -791,7 +829,7 @@ function expandAbbr(text) {
   result = result.replace(/\s{2,}/g, " ").trim()
   // Vá lỗi tách chữ tiếng Việt do AI sinh ra (vd "v ấn đề" -> "vấn đề"):
   // phụ âm đơn đứng tách giữa 2 dấu cách, ngay trước nguyên âm có dấu, không phải từ hợp lệ.
-  result = result.replace(/(^|\s)([bcdghklmnpqrstvxBCDGHKLMNPQRSTVX]) (?=[àáảã ạăắằẳẵặâ ấầẩẫậèé ẻẽẹêếềểễệìí ỉĩịòó ỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ])/g, "$1$2")
+  result = result.replace(/(^|\s)([bcdghklmnpqrstvxBCDGHKLMNPQRSTVX]) (?=[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ])/g, "$1$2")
   Object.entries(ABBR_MAP).forEach(([abbr, full]) => {
     let replaced = false
     result = result.replace(new RegExp(`(?<!\\()\\b${abbr}\\b(?! \\()(?![^(]*\\))`, "g"), m => {
@@ -801,13 +839,15 @@ function expandAbbr(text) {
   })
   return result
 }
+
 // Split long text into bullet points on '. ' or '; '
 function textToBullets(text) {
-  const parts = text.split(/(?<=\.)\s+(?=[A-ZĐÁÀ ẢÃ ẠĂẮẰẲẴẶÂ ẤẦẨẪẬÉÈ ẺẼẸÊ ẾỀỂỄỆÍÌỈĨỊÓÒ ỎÕ ỌÔ ỐỒỔỖỘƠỚỜỞỠỢÚÙ ỦŨỤƯỨỪỬỮỰÝỲỶỸỴ])/u)
+  const parts = text.split(/(?<=\.)\s+(?=[A-ZĐÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ])/u)
     .filter(p => p.trim().length > 0)
   if (parts.length <= 1) return null
   return parts.map(p => p.replace(/\.$/, "").trim())
 }
+
 function BulletText({ text, className = "" }) {
   const bullets = textToBullets(text)
   if (!bullets) return <span className={className}>{expandAbbr(text)}</span>
@@ -817,6 +857,7 @@ function BulletText({ text, className = "" }) {
     </ul>
   )
 }
+
 // Sparkline
 function Sparkline({ values, color = "#1D6FE8", width = 80, height = 26, fluid = false, dates = null }) {
   if (!values || values.length < 2) return null
@@ -842,6 +883,7 @@ function Sparkline({ values, color = "#1D6FE8", width = 80, height = 26, fluid =
     </svg>
   )
 }
+
 // Donut chart (SVG, no lib)
 function DonutChart({ data, size = 64, centerValue = null, centerLabel = "vấn đề" }) {
   const total = data.reduce((s, d) => s + d.value, 0)
@@ -873,6 +915,7 @@ function DonutChart({ data, size = 64, centerValue = null, centerLabel = "vấn 
     </svg>
   )
 }
+
 // Source chip (replaces underline link)
 function SrcChip({ text, onClick }) {
   return (
@@ -882,6 +925,7 @@ function SrcChip({ text, onClick }) {
     </span>
   )
 }
+
 // ─── MOCK DATA ────────────────────────────────────────────────────────────────
 const MOCK_REPORT = {
   thong_tin_benh_nhan: { ho_ten:"NGUYỄN VĂN A", ngay_sinh:"09/11/1963", tuoi:62, gioi_tinh:"Nam", dia_chi:"Phường Chương Mỹ, Hà Nội", ngay_vao_vien:"24/09/2025", ngay_ra_vien:"03/10/2025", so_benh_an:"25.019647" },
@@ -958,7 +1002,7 @@ const MOCK_REPORT = {
     { muc:"critical", phase:2, tieu_de:"Bệnh cảnh phức tạp: Hạ Na+ kèm sau mổ tim lớn và Albumin thấp",
       noi_dung:"Cùng ngày 29/09: (1) Na+ 131 mmol/L (hạ nhẹ) cộng (2) Albumin 31.8 g/L (thấp) cộng (3) CRP còn 130 mg/L. Hạ albumin làm giảm áp lực keo, dễ thoát dịch, giải thích dịch màng phổi và màng tim. Đồng thời albumin thấp ảnh hưởng phân bố Vincerol làm INR khó đoán. Cần dinh dưỡng hỗ trợ song song với lợi tiểu." },
     { muc:"critical", phase:2, tieu_de:"INR biến động nguy hiểm: 1.24 rồi 5.97 rồi 2.25",
-      noi_dung:"INR 1.24 (24/09): nguy cơ huyết khối van cơ học. INR 5.97 (27/09, đỉnh): nguy cơ chảy máu nghiêm trọng. Nguyên nhân: chuyển đổi phác đồ chống đông cộng Buflan (Cefoperazone có hoạt tính giống kháng vitamin K) làm tăng tác dụng Vincerol. INR ra viện 2.25 đã vào m ục tiêu 2.0 đến 3.0 của van cơ học On-X." },
+      noi_dung:"INR 1.24 (24/09): nguy cơ huyết khối van cơ học. INR 5.97 (27/09, đỉnh): nguy cơ chảy máu nghiêm trọng. Nguyên nhân: chuyển đổi phác đồ chống đông cộng Buflan (Cefoperazone có hoạt tính giống kháng vitamin K) làm tăng tác dụng Vincerol. INR ra viện 2.25 đã vào mục tiêu 2.0 đến 3.0 của van cơ học On-X." },
     { muc:"critical", phase:3, tieu_de:"EF 44% kèm dịch màng ngoài tim nhiều: Biến chứng sau mổ nghiêm trọng",
       noi_dung:"EF giảm từ 50% (30/09) còn 44% (10/10) kèm dịch màng ngoài tim nhiều và ép nhẹ thất phải: đây là biến chứng tràn dịch màng tim sau mổ (gặp khoảng 1 đến 3% trường hợp). Không phải suy tim mạn. Cần phân biệt với hội chứng Dressler. Kết cục: tự hồi phục ở lần tái khám 28/10 (EF 58%, hết dịch)." },
     { muc:"info", phase:3, tieu_de:"NT-proBNP 2280 pg/mL (ngày 29/09, Giai đoạn 2): Không kết luận suy tim giai đoạn này",
@@ -984,7 +1028,7 @@ const MOCK_REPORT = {
   },
   // Hành động ưu tiên ở lần tái khám tới (Next Actions cho bác sĩ ngoại trú)
   hanh_dong_uu_tien: [
-    { uu_tien:1, viec:"Kiểm tra INR định kỳ", ly_do:"Van cơ học On-X cần chống đông lâu dài suốt đời, giữ INR trong mục tiêu 2.0 đến 3.0. Đây là l ý do hiện tại, không phụ thuộc kháng sinh ngắn ngày đã kết thúc." },
+    { uu_tien:1, viec:"Kiểm tra INR định kỳ", ly_do:"Van cơ học On-X cần chống đông lâu dài suốt đời, giữ INR trong mục tiêu 2.0 đến 3.0. Đây là lý do hiện tại, không phụ thuộc kháng sinh ngắn ngày đã kết thúc." },
     { uu_tien:2, viec:"Làm lại điện giải đồ Na+, K+ và Creatinin", ly_do:"Đang phối hợp lợi tiểu Agifuros với SGLT2i Forxiga kéo dài, nguy cơ hạ Natri máu và rối loạn điện giải." },
     { uu_tien:3, viec:"Đo ECG, cân nhắc Holter 24h tầm soát rung nhĩ", ly_do:"Nhĩ trái giãn dai dẳng (LAVI 50 đến 55 ml/m²) là yếu tố nguy cơ rung nhĩ trên bệnh nhân van cơ học." },
     { uu_tien:4, viec:"Đo lại NT-proBNP để có giá trị nền ngoại trú", ly_do:"NT-proBNP 2280 pg/mL đo ở hậu phẫu ngày 3, chưa phản ánh tình trạng suy tim ngoại trú hiện tại." },
@@ -997,13 +1041,15 @@ const MOCK_REPORT = {
     { ten_thuoc:"Forxiga 10mg (Dapagliflozin)",          nhom:"Tim mạch",   lieu:"1 viên/ngày",  cach_dung:"Uống buổi sáng",        bat_dau:"26/09", keo_dai:true, color:"#10B981" },
     { ten_thuoc:"Pantoloc 40mg (Pantoprazole)",          nhom:"Dạ dày",     lieu:"1 viên/ngày",  cach_dung:"Uống 6h trước ăn",      bat_dau:"24/09", keo_dai:true, color:"#3B82F6" },
   ],
-  tom_tat_toan_canh: "GIAI ĐOẠN TRƯỚC MỔ: Bệnh nhân nam 62 tuổi, tiền sử hở hẹp van ĐMC, nhập viện ngày 24/09/2025 vì đau ngực và khó thở. Siêu âm trước mổ cho thấy hẹp khít van ĐMC, chênh áp tối đa 71 mmHg, EF còn bảo tồn. GIAI ĐOẠN SAU MỔ - NỘI TRÚ: Ngày 26/09/2025 phẫu thuật thay van ĐMC cơ học On-X số 23 (ThS.BS Nguyễn Trọng X), kết quả thành công, van hoạt động tốt, chênh áp giảm còn 8 đến 16 mmHg. Hậu phẫu sớm có phản ứng viêm mạnh (CRP đỉnh 241 mg/L ngày 29/09 rồi giảm), NT-proBNP tăng 2280 pg/mL phù hợp giai đoạn ngay sau mổ tim. Ra viện ngày 03/10/2025 trong tình trạng ổn định, đơn ngoại trú gồm chống đông Vincerol, lợi tiểu, kháng sinh. GIAI ĐOẠN NGOẠI TRÚ - TÁI KHÁM: Tái khám 10/10/2025 (khoảng một tuần sau ra viện) ghi nhận EF giảm còn 44% kèm tràn dịch màng ngoài tim ép nhẹ thất phải - đây là v ấn đề cần theo dõi sát nhất. Các lần sau cho thấy cải thiện rõ: hết dịch màng tim, EF hồi phục 58% (28/10) rồi 71% (lần gần nhất 26/05/2026). INR dao động và đã về mục tiêu điều trị van cơ học 2.0 đến 3.0.",
+  tom_tat_toan_canh: "GIAI ĐOẠN TRƯỚC MỔ: Bệnh nhân nam 62 tuổi, tiền sử hở hẹp van ĐMC, nhập viện ngày 24/09/2025 vì đau ngực và khó thở. Siêu âm trước mổ cho thấy hẹp khít van ĐMC, chênh áp tối đa 71 mmHg, EF còn bảo tồn. GIAI ĐOẠN SAU MỔ - NỘI TRÚ: Ngày 26/09/2025 phẫu thuật thay van ĐMC cơ học On-X số 23 (ThS.BS Nguyễn Trọng X), kết quả thành công, van hoạt động tốt, chênh áp giảm còn 8 đến 16 mmHg. Hậu phẫu sớm có phản ứng viêm mạnh (CRP đỉnh 241 mg/L ngày 29/09 rồi giảm), NT-proBNP tăng 2280 pg/mL phù hợp giai đoạn ngay sau mổ tim. Ra viện ngày 03/10/2025 trong tình trạng ổn định, đơn ngoại trú gồm chống đông Vincerol, lợi tiểu, kháng sinh. GIAI ĐOẠN NGOẠI TRÚ - TÁI KHÁM: Tái khám 10/10/2025 (khoảng một tuần sau ra viện) ghi nhận EF giảm còn 44% kèm tràn dịch màng ngoài tim ép nhẹ thất phải - đây là vấn đề cần theo dõi sát nhất. Các lần sau cho thấy cải thiện rõ: hết dịch màng tim, EF hồi phục 58% (28/10) rồi 71% (lần gần nhất 26/05/2026). INR dao động và đã về mục tiêu điều trị van cơ học 2.0 đến 3.0.",
   // Dấu hiệu sinh tồn lúc ra viện (dùng cho sàng lọc ưu tiên: hô hấp, nhiễm khuẩn)
   dau_hieu_sinh_ton: { ngay:"03/10/2025", ha_tt:120, ha_ttr:70, mach:78, nhiet_do:36.8, nhip_tho:18, spo2:97, lactate:1.4 },
 }
+
 // ─── CLINICAL ENGINE: tri thức + luật xác định (deterministic) ─────────────────
 // Lớp này KHÔNG dùng AI. Code thuần tra bảng và so ngưỡng để đảm bảo chính xác.
 // AI (Claude) chỉ diễn giải kết quả mà lớp này bắt được.
+
 // Bản đồ biệt dược Việt -> hoạt chất gốc (fallback khi hồ sơ không ghi trong ngoặc)
 const BRAND_TO_GENERIC = {
   "vincerol":"acenocoumarol", "sintrom":"acenocoumarol", "coumadin":"warfarin",
@@ -1014,6 +1060,7 @@ const BRAND_TO_GENERIC = {
   "betaloc zok":"metoprolol", "concor":"bisoprolol", "lipitor":"atorvastatin",
   "glucophage":"metformin", "aldactone":"spironolactone", "cordarone":"amiodarone",
 }
+
 // Hoạt chất -> nhóm dược lý (để tra tương tác theo nhóm)
 const GENERIC_INFO = {
   "acenocoumarol":{ ten:"Acenocoumarol", nhom:["khang_vitamin_k"] },
@@ -1033,6 +1080,7 @@ const GENERIC_INFO = {
   "atorvastatin":{ ten:"Atorvastatin", nhom:["statin"] },
   "amiodarone":{ ten:"Amiodarone", nhom:["chong_loan_nhip"] },
 }
+
 // Bảng tương tác theo nhóm dược lý (MVP: các cặp phổ biến + cặp có trong ca demo)
 const INTERACTIONS = [
   { a:"khang_vitamin_k", b:"fluoroquinolon", muc:"warning",
@@ -1056,6 +1104,7 @@ const INTERACTIONS = [
     hau_qua:"Cộng gộp ức chế tim, nguy cơ nhịp chậm, block nhĩ thất.", de_xuat:"Theo dõi nhịp tim, ECG.",
     nguon:"Tương tác chẹn beta-chống loạn nhịp" },
 ]
+
 // Luật chỉnh liều theo chức năng thận (eGFR)
 const RENAL_RULES = [
   { generic:"metformin", egfr_lt:30, muc:"critical",
@@ -1065,6 +1114,7 @@ const RENAL_RULES = [
   { generic:"levofloxacin", egfr_lt:50, muc:"warning",
     note:"Cần chỉnh liều khi độ thanh thải creatinin dưới 50 mL/phút.", nguon:"Hướng dẫn kê đơn fluoroquinolon" },
 ]
+
 // Thuốc phù hợp guideline trong bối cảnh cụ thể (gắn nhãn xanh, không cảnh báo)
 const FAVORABLE = [
   { generic:"dapagliflozin", dieu_kien:(ctx)=>ctx.suy_tim,
@@ -1072,6 +1122,7 @@ const FAVORABLE = [
     caution_if:(ctx)=>ctx.ha_natri,
     caution_note:"Bệnh nhân đang hạ natri máu: SGLT2i có thể gây lợi niệu thẩm thấu làm rối loạn điện giải nặng hơn. Theo dõi sát natri máu khi dùng." },
 ]
+
 // CKD-EPI 2021 (không dùng yếu tố chủng tộc). creat đơn vị µmol/L.
 function computeEGFR(creatUmol, age, sexMale) {
   if (!creatUmol || !age) return null
@@ -1082,6 +1133,7 @@ function computeEGFR(creatUmol, age, sexMale) {
   if (!sexMale) egfr *= 1.012
   return Math.round(egfr)
 }
+
 // Trả về chi tiết công thức + đầu vào để hiển thị minh bạch
 function buildEgfrDetail(creatUmol, age, sexMale) {
   if (!creatUmol || !age) {
@@ -1102,6 +1154,7 @@ function buildEgfrDetail(creatUmol, age, sexMale) {
     dien_giai:`Scr ${Math.round(scrMgdl*100)/100} mg/dL (${Math.round(creatUmol*10)/10} µmol/L), tuổi ${age}, giới ${sexMale?"Nam":"Nữ"} (k=${k}, a=${alpha}) → eGFR ${value}`,
   }
 }
+
 // Chuẩn hóa danh sách thuốc -> hoạt chất gốc + nhóm
 function resolveGenerics(meds) {
   return (meds || []).map(m => {
@@ -1119,6 +1172,7 @@ function resolveGenerics(meds) {
     return { ...m, generic, ten_goc: info?.ten || paren || m.ten_thuoc, nhom_duoc: info?.nhom || [] }
   })
 }
+
 // Kiểm tra an toàn đơn thuốc: tương tác + chỉnh liều thận + thuốc phù hợp
 function checkDrugSafety(meds, egfr, ctx) {
   const resolved = resolveGenerics(meds)
@@ -1151,6 +1205,7 @@ function checkDrugSafety(meds, egfr, ctx) {
   }
   return { resolved, interactions, renalFlags, favorable }
 }
+
 // Sàng lọc ưu tiên: so ngưỡng vital + lab, trả về findings 3 mức
 function runPriorityScreens(report) {
   const v = report.dau_hieu_sinh_ton || {}
@@ -1166,10 +1221,12 @@ function runPriorityScreens(report) {
   }
   const F = []
   const add = (muc, ten, ly_do, nguon) => F.push({ muc, ten, ly_do, nguon })
+
   // Hô hấp (ESC): SpO2, nhịp thở
   if (v.spo2 != null && v.spo2 < 92) add("critical","Suy hô hấp", `SpO2 ${v.spo2}% (dưới 92%)`, "ESC")
   else if (v.nhip_tho >= 25) add("warning","Theo dõi hô hấp", `Nhịp thở ${v.nhip_tho} lần/phút`, "ESC")
   else if (v.spo2 != null) add("stable","Hô hấp ổn định", `SpO2 ${v.spo2}%, nhịp thở ${v.nhip_tho} lần/phút`, "ESC")
+
   // Nhiễm khuẩn huyết (qSOFA rút gọn): HA tâm thu, nhịp thở, lactate, nhiệt độ
   let qsofa = 0
   if (v.ha_tt != null && v.ha_tt <= 100) qsofa++
@@ -1179,6 +1236,7 @@ function runPriorityScreens(report) {
   if (v.lactate >= 2) sepsisSigns.push(`lactate ${v.lactate} mmol/L`)
   if (qsofa >= 2 || sepsisSigns.length >= 2) add("critical","Nghi ngờ nhiễm khuẩn huyết", `qSOFA ${qsofa}, ${sepsisSigns.join(", ")||"dấu hiệu sinh tồn bất thường"}`, "Sepsis 2026 / KDIGO")
   else add("stable","Không dấu hiệu nhiễm khuẩn huyết cấp", `Huyết áp ${v.ha_tt}/${v.ha_ttr}, lactate ${v.lactate} mmol/L, nhiệt độ ${v.nhiet_do} độ`, "Sepsis 2026")
+
   // Suy thận (KDIGO): eGFR
   const creat = labOf("Creatinin")?.rawVal
   const egfr = computeEGFR(creat, report.thong_tin_benh_nhan?.tuoi, /nam/i.test(report.thong_tin_benh_nhan?.gioi_tinh))
@@ -1187,6 +1245,7 @@ function runPriorityScreens(report) {
     else if (egfr < 45) add("warning","Suy giảm chức năng thận", `eGFR ${egfr} mL/phút/1.73m2`, "KDIGO 2026")
     else add("stable","Chức năng thận bình thường", `eGFR ${egfr} mL/phút/1.73m2, creatinin ${creat} µmol/L`, "KDIGO 2026")
   }
+
   // Kali máu (KDIGO tăng kali)
   const k = labOf("K+")?.rawVal
   if (k != null) {
@@ -1194,12 +1253,14 @@ function runPriorityScreens(report) {
     else if (k > 5.5) add("warning","Tăng kali máu", `Kali ${k} mmol/L (trên 5.5)`, "KDIGO tăng kali")
     else add("stable","Kali máu trong giới hạn", `Kali ${k} mmol/L`, "KDIGO")
   }
+
   // Natri máu
   const na = labOf("Na+")?.rawVal
   if (na != null) {
     if (na < 125) add("critical","Hạ natri máu nặng", `Na ${na} mmol/L (dưới 125)`, "Điện giải đồ")
     else if (na < 135) add("warning","Hạ natri máu", `Na ${na} mmol/L (dưới 135)`, "Điện giải đồ")
   }
+
   // Suy tim (NT-proBNP) - diễn giải theo GIAI ĐOẠN ĐO (không phải phase hiện tại)
   const bnpLab = labOf("NT-proBNP")
   const bnp = bnpLab?.rawVal
@@ -1214,10 +1275,12 @@ function runPriorityScreens(report) {
     else if (bnpPhase === 3) add(bnp > 2000 && ctx.suy_tim ? "critical" : "warning","NT-proBNP vẫn tăng ở giai đoạn ngoại trú", `NT-proBNP ${bnp} pg/mL đo ở giai đoạn ngoại trú, gợi ý nguy cơ suy giảm chức năng tim, cần đối chiếu lâm sàng.`, "ESC suy tim 2025")
     else add("warning","Marker suy tim tăng", `NT-proBNP ${bnp} pg/mL`, "ESC suy tim 2025")
   }
+
   // Viêm nhiễm (CRP)
   const crp = labOf("CRP")?.rawVal
   if (crp != null && crp > 100) add("warning","Phản ứng viêm cao", `CRP ${crp} mg/L`, "Xét nghiệm")
   else if (crp != null && crp > 10) add("warning","Phản ứng viêm còn cao", `CRP ${crp} mg/L (chưa về dưới 5)`, "Xét nghiệm")
+
   // Tổng hợp bệnh cảnh phối hợp (không đánh giá lẻ)
   const picture = []
   if (na != null && na < 135) picture.push("hạ natri máu")
@@ -1230,14 +1293,17 @@ function runPriorityScreens(report) {
     add(picture.length >= 3 ? "critical" : "warning", "Bệnh cảnh lâm sàng phối hợp",
       `Cùng thời điểm (${phaseLbl}) ghi nhận: ${picture.join(", ")}. Cần xử trí theo bệnh cảnh tổng thể thay vì từng chỉ số riêng lẻ, đối chiếu lâm sàng.`, "Tổng hợp đa chỉ số")
   }
+
   return { findings: F, egfr, ctx }
 }
+
 const TIER_META = {
   critical: { label:"Xử lý", full:"Cần xử lý ngay", color:"#DC2626", bg:"#FEF2F2", border:"#FECACA", dot:"🔴", icon:"critical" },
   warning:  { label:"Theo dõi", full:"Cần theo dõi sát", color:"#D97706", bg:"#FFFBEB", border:"#FDE68A", dot:"🟡", icon:"warning" },
   stable:   { label:"Ổn định", full:"Ổn định", color:"#059669", bg:"#F0FDF4", border:"#BBF7D0", dot:"🟢", icon:"stable" },
 }
 const TIER_ORDER = { critical:0, warning:1, stable:2 }
+
 // Nhận xét xu hướng từng chỉ số xét nghiệm dựa trên chuỗi giá trị theo thời gian
 function labVerdict(m) {
   const t = m.trend
@@ -1256,6 +1322,7 @@ function labVerdict(m) {
   }
   return V[m.key] ? V[m.key]() : null
 }
+
 // ─── DÒNG THỜI GIAN & PHÂN GIAI ĐOẠN ──────────────────────────────────────────
 function parseVNDate(s) {
   if (!s) return null
@@ -1300,6 +1367,7 @@ function phaseOf(dateStr, info) {
   return 2
 }
 const PHASE_NAMES = { 1:"Trước phẫu thuật", 2:"Sau mổ - Nội trú", 3:"Ngoại trú - Tái khám" }
+
 // Đánh giá tiến triển tổng thể: bệnh nhân đang tốt lên hay xấu đi
 function assessTrajectory(report) {
   const labs = report.xet_nghiem_key || report.xet_nghiem_meta || []
@@ -1307,6 +1375,7 @@ function assessTrajectory(report) {
   const ev = []
   let score = 0
   const push = (good, txt) => { ev.push({ good, txt }); score += good ? 1 : -1 }
+
   const crp = lab("CRP")
   if (crp?.trend?.length > 1) {
     const d = crp.trend[crp.trend.length-1] - crp.trend[0]
@@ -1334,16 +1403,19 @@ function assessTrajectory(report) {
   if (bnp?.rawVal > 2000) ev.push({ good:false, txt:`NT-proBNP ${bnp.rawVal} pg/mL còn cao: cần tiếp tục theo dõi suy tim` })
   const na = lab("Na+")
   if (na?.rawVal != null && na.rawVal < 135) ev.push({ good:false, txt:`Natri ${na.rawVal} mmol/L vẫn dưới ngưỡng: theo dõi điện giải` })
+
   // Phân loại: chủ yếu dựa trên các chỉ số có xu hướng rõ (viêm, tim).
   // proBNP cao và hạ Na chỉ là lưu ý theo dõi, không kéo tụt đánh giá khi đang hồi phục.
   const verdict = score >= 2 ? "tot" : score >= 1 ? "on_dinh" : score <= -1 ? "xau" : "on_dinh"
   return { verdict, evidence: ev, score }
 }
+
 const TRAJECTORY_META = {
   tot:      { label:"Đang đáp ứng điều trị tốt", color:"#059669", bg:"linear-gradient(120deg,#ECFDF5,#F0FDFA)", border:"#A7F3D0", icon:"up" },
   on_dinh:  { label:"Tiến triển ổn định", color:"#1D6FE8", bg:"linear-gradient(120deg,#EFF6FF,#F0F9FF)", border:"#BFDBFE", icon:"flat" },
   xau:      { label:"Có dấu hiệu xấu đi, cần chú ý", color:"#DC2626", bg:"linear-gradient(120deg,#FEF2F2,#FFF1F2)", border:"#FECACA", icon:"down" },
 }
+
 // Sinh chip nhắc nhanh động từ hồ sơ (van cơ học, chống đông, chỉ số cao, hậu phẫu)
 function buildChips(report) {
   const chips = []
@@ -1370,6 +1442,8 @@ function buildChips(report) {
   if (crp && crp.status === "high" && chips.length < 4) chips.push({ label:"CRP còn cao", cls:"med" })
   return chips.length ? chips : [{ label: report.chan_doan_chinh ? report.chan_doan_chinh.slice(0,40) : "Hồ sơ bệnh nhân", cls:"info" }]
 }
+
+
 // ─── PRINT ────────────────────────────────────────────────────────────────────
 function triggerPrint(r) {
   const p = r.thong_tin_benh_nhan
@@ -1392,12 +1466,14 @@ ${(()=>{const{findings,egfr,ctx}=runPriorityScreens(r);const s=checkDrugSafety(r
 </div><script>window.onload=function(){window.print()}<\/script></body></html>`)
   win.document.close()
 }
+
 // ─── SHARED COMPONENTS ────────────────────────────────────────────────────────
 function StatusBadge({ level }) {
   const map = { cao:["cao","Ưu tiên cao"], trung_binh:["medio","Trung bình"], thap:["low","Theo dõi"] }
   const [cls, label] = map[level] || map.thap
   return <span className={`badge ${cls}`}><span className="badge-dot" />{label}</span>
 }
+
 function Card({ id, title, icon, children, headRight, defaultCollapsed = false }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   return (
@@ -1416,6 +1492,7 @@ function Card({ id, title, icon, children, headRight, defaultCollapsed = false }
     </div>
   )
 }
+
 function SourceModal({ source, onClose }) {
   if (!source) return null
   return (
@@ -1439,6 +1516,7 @@ function SourceModal({ source, onClose }) {
     </div>
   )
 }
+
 function ScrollToTop() {
   const [visible, setVisible] = useState(false)
   useEffect(() => {
@@ -1453,20 +1531,25 @@ function ScrollToTop() {
     </button>
   )
 }
+
 // ─── VITAL SIGNS CHART (SVG, no lib) ─────────────────────────────────────────
 function VitalSignsChart({ data, summary }) {
   if (!data || data.length < 2) return null
   const W = 760, H = 240, PAD = { t:28, r:46, b:40, l:42 }
   const innerW = W - PAD.l - PAD.r, innerH = H - PAD.t - PAD.b
   const n = data.length
+
   const crpMax = Math.ceil(Math.max(...data.map(d => d.crp)) / 50) * 50
   const WBC_MAX = 20
+
   const x    = (i) => PAD.l + (i / (n - 1)) * innerW
   const crpY = (v) => PAD.t + innerH - (v / crpMax) * innerH
   const wbcY = (v) => PAD.t + innerH - (v / WBC_MAX) * innerH
+
   const crpPts = data.map((d,i) => `${x(i)},${crpY(d.crp)}`).join(" ")
   const wbcPts = data.map((d,i) => `${x(i)},${wbcY(d.wbc)}`).join(" ")
   const peakIdx = data.reduce((mi,d,i,a) => d.crp > a[mi].crp ? i : mi, 0)
+
   return (
     <div className="echo-tl-wrap" style={{ marginTop:14 }}>
       <div className="echo-tl-head">
@@ -1494,12 +1577,15 @@ function VitalSignsChart({ data, summary }) {
         ))}
         <text x={PAD.l - 5} y={PAD.t - 14} textAnchor="end" fontSize="8" fill="#EF4444" fontWeight="700">CRP</text>
         <text x={W - PAD.r + 5} y={PAD.t - 14} textAnchor="start" fontSize="8" fill="#D97706" fontWeight="700">WBC</text>
+
         {/* Ngưỡng CRP=5 */}
         <line x1={PAD.l} x2={W - PAD.r} y1={crpY(5)} y2={crpY(5)} stroke="#DC2626" strokeWidth="1" strokeDasharray="4 3" opacity="0.4" />
+
         {/* Đường WBC (amber) */}
         <polyline points={wbcPts} fill="none" stroke="#F59E0B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         {/* Đường CRP (red) */}
         <polyline points={crpPts} fill="none" stroke="#EF4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+
         {/* Điểm + nhãn */}
         {data.map((d,i) => (
           <g key={i}>
@@ -1520,6 +1606,7 @@ function VitalSignsChart({ data, summary }) {
     </div>
   )
 }
+
 // ─── MED GANTT ────────────────────────────────────────────────────────────────
 function MedGantt({ meds }) {
   const [hover, setHover] = useState(null)
@@ -1541,8 +1628,10 @@ function MedGantt({ meds }) {
     if (s && m.so_luong && m.vien_moi_ngay) return s + Math.ceil(m.so_luong / m.vien_moi_ngay) * DAY
     return s ? s + 3 * DAY : null
   }
+
   const startsTs = meds.map(m => toTs(m.bat_dau)).filter(Boolean)
   const concreteEnds = meds.map(medEnd).filter(Boolean)
+
   if (startsTs.length === 0) {
     return (
       <div className="gantt-wrap">
@@ -1554,12 +1643,14 @@ function MedGantt({ meds }) {
       </div>
     )
   }
+
   const minT = Math.min(...startsTs)
   const lastConcrete = Math.max(...concreteEnds, ...startsTs)
   const maxT = lastConcrete + 5 * DAY
   const span = maxT - minT || 1
   const pct = (ts) => ((ts - minT) / span) * 100
   const ticks = Array.from({ length: 5 }, (_, i) => minT + (span * i) / 4)
+
   return (
     <div className="gantt-wrap">
       <div className="gantt-title">Lịch sử sử dụng thuốc</div>
@@ -1603,6 +1694,7 @@ function MedGantt({ meds }) {
     </div>
   )
 }
+
 // ─── ECHO TIMELINE ────────────────────────────────────────────────────────────
 // Box "Phân tích AI": nhận xét diễn tiến hiển thị dưới mỗi biểu đồ
 function AiInsight({ children }) {
@@ -1618,6 +1710,7 @@ function AiInsight({ children }) {
     </div>
   )
 }
+
 // Chuẩn hóa: nhận mảng lan_kham mới, hoặc tự dựng từ format 3 ô cũ (tương thích ngược)
 function normalizeEcho(sieu_am) {
   if (!sieu_am) return []
@@ -1642,16 +1735,19 @@ function normalizeEcho(sieu_am) {
   if (out.length) out[out.length - 1].latest = true
   return out
 }
+
 const PHASE_META = {
   truoc_mo: { label:"Trước mổ",   color:"#F59E0B", bg:"rgba(254,243,199,0.7)", border:"rgba(253,230,138,0.6)" },
   sau_mo:   { label:"Sau mổ",     color:"#EF4444", bg:"rgba(254,242,242,0.8)", border:"rgba(254,202,202,0.6)" },
   hoi_phuc: { label:"Hồi phục",   color:"#10B981", bg:"rgba(240,253,250,0.8)", border:"rgba(153,246,228,0.5)" },
   tai_kham: { label:"Tái khám",   color:"#1D6FE8", bg:"rgba(235,244,255,0.8)", border:"rgba(191,219,254,0.5)" },
 }
+
 function EchoTimeline({ sieu_am, info }) {
   const [mode, setMode] = useState("both")  // both | ef | grad
   const sessions = normalizeEcho(sieu_am)
   if (sessions.length < 2) return null
+
   // Câu nhận xét động: dựa trên EF và chênh áp lượt đầu -> cuối, lượt cảnh báo
   const efVals = sessions.filter(s => s.ef != null)
   const grVals = sessions.filter(s => s.grad_max != null)
@@ -1671,20 +1767,25 @@ function EchoTimeline({ sieu_am, info }) {
       parts.push(`EF gần nhất ${efLast}%.`)
     return parts.join(" ") || "Theo dõi diễn biến EF và chênh áp qua các lần siêu âm."
   })()
+
   const W = 760, H = 300, PAD = { t:30, r:46, b:58, l:38 }
   const innerW = W - PAD.l - PAD.r, innerH = H - PAD.t - PAD.b
   const n = sessions.length
+
   // EF trục trái 30-80, chênh áp trục phải 0-80
   const EF_MIN = 30, EF_MAX = 80, GR_MAX = 80
   const x   = (i) => PAD.l + (i / (n - 1)) * innerW
   const efY = (v) => PAD.t + innerH - ((v - EF_MIN) / (EF_MAX - EF_MIN)) * innerH
   const grY = (v) => PAD.t + innerH - (v / GR_MAX) * innerH
+
   const efPts = sessions.filter(s => s.ef != null).map(s => `${x(sessions.indexOf(s))},${efY(s.ef)}`).join(" ")
   const grPts = sessions.filter(s => s.grad_max != null).map(s => `${x(sessions.indexOf(s))},${grY(s.grad_max)}`).join(" ")
+
   // Mốc phẫu thuật: giữa lượt trước mổ cuối và lượt sau mổ đầu
   let surgX = null
   const lastPre = sessions.map(s => s.phase).lastIndexOf("truoc_mo")
   if (lastPre >= 0 && lastPre < n - 1) surgX = (x(lastPre) + x(lastPre + 1)) / 2
+
   // Vạch chia giai đoạn theo ngày (Giai đoạn 2 tại mổ, Giai đoạn 3 tại ra viện)
   const dividerX = (targetDate) => {
     if (!targetDate) return null
@@ -1710,6 +1811,7 @@ function EchoTimeline({ sieu_am, info }) {
     phaseDividers[0].labelX = mid - 44
     phaseDividers[1].labelX = mid + 44
   }
+
   return (
     <div className="echo-tl-wrap">
       <div className="echo-tl-head">
@@ -1731,6 +1833,7 @@ function EchoTimeline({ sieu_am, info }) {
           <rect x={PAD.l} y={efY(70)} width={innerW} height={efY(55) - efY(70)} fill="rgba(16,185,129,0.10)" />
           <text x={PAD.l + 4} y={efY(70) - 3} fontSize="8" fill="#10B981">EF bình thường</text>
         </>}
+
         {/* Lưới ngang theo EF */}
         {[30,40,50,60,70,80].map(v => (
           <g key={v}>
@@ -1744,6 +1847,7 @@ function EchoTimeline({ sieu_am, info }) {
         ))}
         {mode!=="grad" && <text x={PAD.l - 5} y={PAD.t - 14} textAnchor="end" fontSize="8" fill="#1D6FE8" fontWeight="700">EF%</text>}
         {mode!=="ef" && <text x={W - PAD.r + 5} y={PAD.t - 14} textAnchor="start" fontSize="8" fill="#D97706" fontWeight="700">mmHg</text>}
+
         {/* Vạch chia giai đoạn (Giai đoạn 2 tại mổ, Giai đoạn 3 tại ra viện) */}
         {phaseDividers.map((pd,i) => (
           <g key={i}>
@@ -1753,10 +1857,12 @@ function EchoTimeline({ sieu_am, info }) {
             <text x={pd.labelX} y={PAD.t - 13.5} textAnchor="middle" fontSize="8.5" fill="#fff" fontWeight="700">{pd.label}</text>
           </g>
         ))}
+
         {/* Đường chênh áp (amber) */}
         {mode!=="ef" && <polyline points={grPts} fill="none" stroke="#F59E0B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />}
         {/* Đường EF (blue) */}
         {mode!=="grad" && <polyline points={efPts} fill="none" stroke="#1D6FE8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />}
+
         {/* Điểm + nhãn */}
         {sessions.map((s, i) => (
           <g key={i}>
@@ -1788,18 +1894,23 @@ function EchoTimeline({ sieu_am, info }) {
     </div>
   )
 }
+
 // Bảng tất cả lượt siêu âm, có sắp xếp và lọc theo giai đoạn
 function EchoSessionTable({ sieu_am }) {
   const all = normalizeEcho(sieu_am)
   const [sortMode, setSortMode] = useState("latest")  // latest | oldest
   const [phaseFilter, setPhaseFilter] = useState("all")
   if (!all.length) return null
+
   const parseD = (s) => { const [d,m,y] = (s||"").split("/").map(Number); return new Date(y||0, (m||1)-1, d||1).getTime() }
+
   // Các giai đoạn thực sự có trong dữ liệu (giữ thứ tự lâm sàng)
   const phaseOrder = ["truoc_mo","sau_mo","hoi_phuc","tai_kham"]
   const presentPhases = phaseOrder.filter(p => all.some(s => s.phase === p))
+
   let rows = phaseFilter === "all" ? [...all] : all.filter(s => s.phase === phaseFilter)
   rows.sort((a,b) => sortMode === "latest" ? parseD(b.ngay) - parseD(a.ngay) : parseD(a.ngay) - parseD(b.ngay))
+
   return (
     <div className="echo-tbl-wrap">
       <div className="echo-tbl-bar">
@@ -1857,6 +1968,7 @@ function EchoSessionTable({ sieu_am }) {
     </div>
   )
 }
+
 // ─── UPLOAD PAGE ──────────────────────────────────────────────────────────────
 // Phát hiện định dạng + màu badge theo đuôi file
 const FILE_KINDS = {
@@ -1869,6 +1981,7 @@ const FILE_KINDS = {
 }
 const kindOf = (name) => FILE_KINDS[(name.split(".").pop() || "").toLowerCase()] || { tag:"FILE", color:"#64748B", bg:"#F1F5F9" }
 const fmtSize = (b) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(0)} KB` : `${(b/1048576).toFixed(1)} MB`
+
 // Đếm số trang PDF phía client (heuristic, không cần thư viện)
 async function countPdfPages(file) {
   if (!file.name.toLowerCase().endsWith(".pdf")) return null
@@ -1879,6 +1992,7 @@ async function countPdfPages(file) {
     return m ? m.length : null
   } catch { return null }
 }
+
 // ─── LOGO ĐỐI TÁC / ĐƠN VỊ ─────────────────────────────────────────────────────
 // Đặt file ảnh vào thư mục public/logos/ với đúng tên bên dưới (khớp tên file thật).
 const PARTNER_GROUPS = [
@@ -1906,11 +2020,13 @@ function LogoBar({ compact }) {
     </div>
   )
 }
-function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError }) {
+
+function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, onOpenHistory }) {
   const [dragging, setDragging] = useState(false)
   const [staged, setStaged] = useState([])
   const [preview, setPreview] = useState(null)
   const inputRef = useRef()
+
   const addFiles = async (fileList) => {
     const arr = Array.from(fileList || [])
     const entries = await Promise.all(arr.map(async f => ({
@@ -1925,11 +2041,13 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError }) 
     const t = prev[i]; if (t?.url) try { URL.revokeObjectURL(t.url) } catch {}
     return prev.filter((_, idx) => idx !== i)
   })
+
   const analyze = () => {
     // MVP: backend xử lý 1 PDF. Gửi file PDF đầu tiên trong danh sách.
     const pdf = staged.find(s => s.name.toLowerCase().endsWith(".pdf"))
     onUpload(pdf ? pdf.file : staged[0]?.file || null)
   }
+
   return (
     <div className="upload-page">
       <div className="upload-bg-circle1" /><div className="upload-bg-circle2" />
@@ -2063,13 +2181,15 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError }) 
               <p className="upload-privacy">Bác sĩ kiểm tra định dạng và số trang trước khi quét. Dữ liệu xử lý bảo mật.</p>
             </div>
           )}
-          {!isLoading&&staged.length===0&&<div style={{textAlign:"center"}}><span className="demo-link" onClick={()=>onUpload(null)}>Xem demo: hồ sơ Nguyễn Văn A <span style={{fontSize:10}}>▶</span></span></div>}
+          {!isLoading&&staged.length===0&&<div style={{textAlign:"center"}}><span className="demo-link" onClick={()=>onUpload(null)}>Xem demo: hồ sơ Nguyễn Văn A <span style={{fontSize:10}}>▶</span></span> <button className="hist-link" onClick={onOpenHistory}><Icon.FileText d={13} color="#1D6FE8"/>Lịch sử bệnh án</button></div>}
+          {!isLoading && <AudioRecorder/>}
         </div>
       </div>
       <LogoBar/>
     </div>
   )
 }
+
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 const NAV_GROUPS = [
   { group:"Tổng quan", items:[
@@ -2109,18 +2229,22 @@ function SidebarMinimap({ activeId, onNavigate }) {
     </nav>
   )
 }
+
 // ─── REPORT PAGE ──────────────────────────────────────────────────────────────
-function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChatMessages }) {
+function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChatMessages, onOpenHistory }) {
   const [tab, setTab] = useState("report")
+  const [viewMode, setViewMode] = useState("clinical")
   const [activeSection, setActiveSection] = useState("sec-status")
   const navLock = useRef(0)
   const r = report
+
   // Điều hướng khi bấm: set active ngay + cuộn + khóa scroll-spy 700ms để không bị nhảy
   const navigateTo = useCallback((id) => {
     navLock.current = Date.now()
     setActiveSection(id)
     document.getElementById(id)?.scrollIntoView({ behavior:"smooth", block:"start" })
   }, [])
+
   // Scroll-spy xác định: chọn section có đỉnh vừa vượt qua ngưỡng gần đầu khung
   useEffect(() => {
     if (tab !== "report") return
@@ -2143,6 +2267,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
     window.addEventListener("scroll", onScroll, { passive:true })
     return () => window.removeEventListener("scroll", onScroll)
   }, [tab])
+
   // Keyboard shortcut Ctrl+K to focus chat
   useEffect(() => {
     const handler = e => {
@@ -2155,8 +2280,10 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
   }, [])
+
   // Chip nhắc nhanh: sinh động từ hồ sơ, không hardcode theo bệnh nhân
   const chips = buildChips(report)
+
   return (
     <div>
       <header className="report-nav">
@@ -2175,16 +2302,19 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
             </div>
           </div>
           <div className="nav-right">
+            <ModeDropdown mode={viewMode} onChange={setViewMode}/>
             <div className="tab-group">
               {[["report",<Icon.FileText d={13}/>,"Báo cáo"],["chat",<Icon.Chat d={13}/>,"Chatbot"]].map(([key,ic,label])=>(
                 <button key={key} className={`tab-btn${tab===key?" active":""}`} onClick={()=>setTab(key)}>{ic} {label}</button>
               ))}
             </div>
+            <button className="btn-action" onClick={onOpenHistory}><Icon.FileText d={13} color="#1D6FE8"/>Lịch sử</button>
             <button className="btn-action btn-print" onClick={()=>triggerPrint(report)}><Icon.Print d={13} color="#1D6FE8"/>Xuất báo cáo</button>
             <button className="btn-action btn-back" onClick={onReset}><Icon.Back d={12} color="#7A96C8"/>Báo cáo mới</button>
           </div>
         </div>
       </header>
+
       {/* Patient chip bar */}
       <div className="chip-bar">
         <div className="chip-bar-inner">
@@ -2192,11 +2322,20 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
           {chips.map(c=><span key={c.label} className={`chip-tag ${c.cls}`}>{c.label}</span>)}
         </div>
       </div>
+
       {tab === "report" ? (
-        <div className="report-outer">
-          <SidebarMinimap activeId={activeSection} onNavigate={navigateTo}/>
-          <div className="report-main"><ReportTab report={report} analysis={analysis}/></div>
-        </div>
+        viewMode === "clinical" ? (
+          <div className="report-outer">
+            <SidebarMinimap activeId={activeSection} onNavigate={navigateTo}/>
+            <div className="report-main"><ReportTab report={report} analysis={analysis}/></div>
+          </div>
+        ) : (
+          <div className="report-outer">
+            <div className="report-main" style={{maxWidth:"none"}}>
+              {viewMode === "hoi_chan" ? <MDTView report={report}/> : <TeachingView report={report}/>}
+            </div>
+          </div>
+        )
       ) : (
         <div className="chat-page">
           <ChatTab report={report} hoSoText={hoSoText} messages={chatMessages} setMessages={setChatMessages}/>
@@ -2210,6 +2349,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
     </div>
   )
 }
+
 // ─── REPORT TAB ───────────────────────────────────────────────────────────────
 // ─── TRAJECTORY (đánh giá tiến triển tổng thể) ─────────────────────────────────
 function TrajectoryCard({ assessment }) {
@@ -2246,6 +2386,7 @@ function TrajectoryCard({ assessment }) {
     </div>
   )
 }
+
 // ─── DẢI MỐC THỜI GIAN BỆNH NHÂN (3 giai đoạn) ────────────────────────────────
 function PatientTimeline({ info }) {
   const [collapsed, setCollapsed] = useState(false)
@@ -2290,6 +2431,7 @@ function PatientTimeline({ info }) {
     </div>
   )
 }
+
 // ─── TÓM TẮT TOÀN CẢNH (chia 3 giai đoạn + đóng/mở) ───────────────────────────
 const SUMMARY_PHASE_META = {
   1: { color:"#F59E0B", bg:"rgba(254,243,199,0.45)", border:"rgba(253,230,138,0.7)" },
@@ -2349,6 +2491,7 @@ function SummaryCard({ text }) {
     </div>
   )
 }
+
 // ─── GOM SỰ KIỆN THEO 3 GIAI ĐOẠN ─────────────────────────────────────────────
 function echoLine(s) {
   const parts = []
@@ -2371,11 +2514,13 @@ function buildPhaseEvents(report, info) {
   ;[1,2,3].forEach(p => out[p].sort((a,b) => (parseVNDate(a.ngay)||0) - (parseVNDate(b.ngay)||0)))
   return out
 }
+
 const PHASE_SECTION_META = {
   1: { name:"Giai đoạn 1: Tiền phẫu / Trước can thiệp", short:"Giai đoạn 1 - Diễn biến tiền phẫu", color:"#8B5CF6", bg:"rgba(243,240,255,0.5)", border:"#DDD6FE" },
   2: { name:"Giai đoạn 2: Hậu phẫu nội trú",            short:"Giai đoạn 2 - Diễn biến hậu phẫu nội trú", color:"#EF4444", bg:"rgba(254,242,242,0.5)", border:"#FECACA" },
   3: { name:"Giai đoạn 3: Ngoại trú / Tái khám",        short:"Giai đoạn 3 - Theo dõi ngoại trú / Tái khám", color:"#10B981", bg:"rgba(240,253,250,0.5)", border:"#A7F3D0" },
 }
+
 // Dải mốc thời gian tương đối cho mỗi sự kiện trong giai đoạn
 function relMarker(dateStr, phase, info) {
   const d = parseVNDate(dateStr)
@@ -2387,6 +2532,7 @@ function relMarker(dateStr, phase, info) {
   if (phase === 3 && info.discharge) { const n = Math.round((d - info.discharge)/86400000); return n>=0?`D+${n}`:"" }
   return ""
 }
+
 // Tính trạng thái thuốc (Đang dùng / Hoàn thành) từ ngày bắt đầu + số lượng + liều
 function parseMedDate(s, info) {
   if (!s || s === "nay") return null
@@ -2406,6 +2552,7 @@ function drugStatus(med, info) {
   return { txt:"Chưa rõ thời gian", kind:"unknown" }
 }
 const fmtShort = (d) => d ? `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}` : ""
+
 function PhaseSection({ phase, events, info, ketLuan }) {
   const [collapsed, setCollapsed] = useState(false)
   const m = PHASE_SECTION_META[phase]
@@ -2414,8 +2561,10 @@ function PhaseSection({ phase, events, info, ketLuan }) {
   if (phase === 1 && info.surg) rangeTxt = `Trước ${fmt(info.surg)}`
   else if (phase === 2 && info.surg) rangeTxt = `${fmt(info.surg)} - ${fmt(info.discharge)} (${info.discharge&&info.surg?Math.round((info.discharge-info.surg)/86400000):"-"} ngày)`
   else if (phase === 3 && info.discharge) rangeTxt = `Từ ${fmt(info.discharge)} đến nay (${info.daysPostDischarge} ngày)`
+
   // Tách mô tả dài thành bullet
   const toBullets = (txt) => String(txt).split(/(?<=\.)\s+/).map(s=>s.trim().replace(/\.$/,"")).filter(Boolean)
+
   return (
     <div id={`sec-phase${phase}`} className="phase-sec" style={{ borderColor:m.border }}>
       <div className="phase-sec-head">
@@ -2467,6 +2616,7 @@ function PhaseSection({ phase, events, info, ketLuan }) {
     </div>
   )
 }
+
 // ─── BANNER TRẠNG THÁI LÂM SÀNG (4 thẻ tổng quan) ──────────────────────────────
 function ClinicalStatusBanner({ info, report }) {
   const latestEcho = (report.sieu_am_tim?.lan_kham || []).filter(s=>s.latest)[0]
@@ -2497,6 +2647,7 @@ function ClinicalStatusBanner({ info, report }) {
     </div>
   )
 }
+
 // ─── TRẠNG THÁI VẤN ĐỀ (Active / Monitoring / Resolved) ───────────────────────
 const PROB_META = {
   active:     { label:"Đang hoạt động", color:"#059669" },
@@ -2552,6 +2703,7 @@ function ProblemStatus({ data }) {
     </div>
   )
 }
+
 function ClinicalTakeaway({ items }) {
   const [collapsed, setCollapsed] = useState(false)
   if (!items || !items.length) return null
@@ -2575,6 +2727,7 @@ function ClinicalTakeaway({ items }) {
     </div>
   )
 }
+
 // ─── HÀNH ĐỘNG ƯU TIÊN (Next Actions) ─────────────────────────────────────────
 function NextActions({ items }) {
   const [collapsed, setCollapsed] = useState(false)
@@ -2602,6 +2755,7 @@ function NextActions({ items }) {
     </div>
   )
 }
+
 // ─── LÝ LUẬN LÂM SÀNG (multi-variable reasoning theo giai đoạn) ────────────────
 const REASON_SEV = {
   critical: { label:"Quan trọng", color:"#DC2626", bg:"rgba(254,242,242,0.75)", border:"#FECACA" },
@@ -2667,6 +2821,7 @@ function ClinicalReasoning({ items }) {
     </Card>
   )
 }
+
 // ─── LAB PANEL (lọc Cao / Bình thường / Thấp + nhận xét xu hướng) ───────────────
 function LabPanel({ labs, note }) {
   const [filter, setFilter] = useState("all")
@@ -2739,11 +2894,13 @@ function LabPanel({ labs, note }) {
     </Card>
   )
 }
+
 // ─── PRIORITY ALERTS BANNER ────────────────────────────────────────────────────
 function PriorityBanner({ findings, onSource }) {
   const [collapsed, setCollapsed] = useState(false)
   const byTier = { critical:[], warning:[], stable:[] }
   findings.forEach(f => byTier[f.muc].push(f))
+
   return (
     <div id="sec-priority" className="prio-wrap">
       <div className="prio-head">
@@ -2790,6 +2947,7 @@ function PriorityBanner({ findings, onSource }) {
     </div>
   )
 }
+
 // ─── CÔNG THỨC eGFR DẠNG TOÁN HỌC ─────────────────────────────────────────────
 function EgfrMathFormula({ female }) {
   const Frac = ({ n, d }) => (
@@ -2810,6 +2968,7 @@ function EgfrMathFormula({ female }) {
     </div>
   )
 }
+
 // ─── DRUG SAFETY CARD ──────────────────────────────────────────────────────────
 function DrugSafetyCard({ safety, egfr, egfrDetail, onSource }) {
   const { interactions, renalFlags, favorable } = safety
@@ -2849,9 +3008,11 @@ function DrugSafetyCard({ safety, egfr, egfrDetail, onSource }) {
           <div className="drug-egfr-note">Công thức CKD-EPI 2021 race-free. Dùng để đánh giá nhu cầu chỉnh liều thuốc thải qua thận.</div>
         </div>
       </div>
+
       {total === 0 && favorable.length === 0 && (
         <div className="drug-empty">Không phát hiện tương tác hoặc cảnh báo chỉnh liều trong đơn thuốc hiện tại.</div>
       )}
+
       {interactions.length > 0 && (
         <div className="drug-section">
           <div className="drug-section-hd">Tương tác thuốc ({interactions.length})</div>
@@ -2871,6 +3032,7 @@ function DrugSafetyCard({ safety, egfr, egfrDetail, onSource }) {
           })}
         </div>
       )}
+
       {renalFlags.length > 0 && (
         <div className="drug-section">
           <div className="drug-section-hd">Chỉnh liều theo chức năng thận ({renalFlags.length})</div>
@@ -2889,6 +3051,7 @@ function DrugSafetyCard({ safety, egfr, egfrDetail, onSource }) {
           })}
         </div>
       )}
+
       {favorable.length > 0 && (
         <div className="drug-section">
           <div className="drug-section-hd">Phù hợp khuyến cáo ({favorable.length})</div>
@@ -2907,10 +3070,12 @@ function DrugSafetyCard({ safety, egfr, egfrDetail, onSource }) {
           ))}
         </div>
       )}
+
       <div className="drug-disclaimer">Kết quả mang tính hỗ trợ, bác sĩ điều trị quyết định cuối cùng. Mọi đề xuất cần được xem xét trước khi áp dụng.</div>
     </Card>
   )
 }
+
 // ─── HERO STATUS (dải trạng thái tổng quan để bác sĩ hiểu trong 15 giây) ───────────────
 function HeroStatus({ info, findings, trajectory }) {
   const tm = TRAJECTORY_META[trajectory.verdict] || TRAJECTORY_META.on_dinh
@@ -2953,12 +3118,14 @@ function HeroStatus({ info, findings, trajectory }) {
     </div>
   )
 }
+
 function ReportTab({ report: r, analysis }) {
   const [tlFilter, setTlFilter] = useState("all")
   const [modalSource, setModalSource] = useState(null)
   const [alertsCollapsed, setAlertsCollapsed] = useState(false)
   const alertsHigh = (r.canh_bao_nguy_co || []).filter(c => c.muc_do === "cao")
   const filtered = (r.dien_bien_lam_sang || []).filter(ev => tlFilter === "all" || ev.loai === tlFilter)
+
   // Nguồn chân lý: rule engine backend (Bước 2) nếu có; nếu không (demo) thì tính client-side.
   let findings, egfr, safety, egfrDetail
   if (analysis) {
@@ -2985,6 +3152,7 @@ function ReportTab({ report: r, analysis }) {
         phase: phaseInfo.currentPhase, tieu_de: f.ten, noi_dung: `${f.ly_do} (Nguồn: ${f.nguon})`,
       }))
   const trendSummary = analysis?.trend_summary || null
+
   // Donut: phản ánh TRẠNG THÁI VẤN ĐỀ (tách biến cố đã hồi phục khỏi vấn đề hiện tại).
   // Ưu tiên problem_status; nếu hồ sơ thật thiếu thì rơi về mức nguy cơ HIỆN TẠI từ findings.
   const ps = r.problem_status
@@ -3002,9 +3170,11 @@ function ReportTab({ report: r, analysis }) {
   }
   const donutData = donutLegend.map(([color,,value]) => ({ value, color }))
   const donutCurrent = segActive + segMonitor   // số vấn đề CÒN tồn tại (không tính đã hồi phục)
+
   return (
     <div className="report-stack">
       {modalSource && <SourceModal source={modalSource} onClose={()=>setModalSource(null)}/>}
+
       {/* Banner */}
       <div className="banner">
         <div className="banner-top">
@@ -3036,13 +3206,17 @@ function ReportTab({ report: r, analysis }) {
           </div>
         </div>
       </div>
+
       {/* Dải trạng thái 15 giây: giai đoạn + đánh giá tiến triển + đếm cảnh báo (sau thông tin bệnh nhân) */}
       <HeroStatus info={phaseInfo} findings={findings} trajectory={trajectory}/>
+
       {/* Banner trạng thái + Kết luận nhanh + Trạng thái vấn đề + Hành động */}
       <div id="sec-status"><ClinicalStatusBanner info={phaseInfo} report={r}/></div>
       {r.clinical_takeaway && <ClinicalTakeaway items={r.clinical_takeaway}/>}
+
       {r.problem_status && <ProblemStatus data={r.problem_status}/>}
       {r.hanh_dong_uu_tien && r.hanh_dong_uu_tien.length > 0 && <NextActions items={r.hanh_dong_uu_tien}/>}
+
       {/* BA GIAI ĐOẠN (chỉ khi xác định được mốc phẫu thuật) */}
       {phaseInfo.surg ? (
         [1,2,3].map(p => phaseEvents[p] && phaseEvents[p].length > 0
@@ -3073,15 +3247,19 @@ function ReportTab({ report: r, analysis }) {
             : null
         })()
       )}
+
       {/* PHÂN TÍCH: Chẩn đoán hình ảnh */}
       <Card id="sec-echo" title="Chẩn đoán hình ảnh qua 3 giai đoạn" icon={<Icon.Ultrasound d={16}/>}>
         <EchoTimeline sieu_am={r.sieu_am_tim} info={phaseInfo}/>
         <EchoSessionTable sieu_am={r.sieu_am_tim}/>
       </Card>
+
       {/* PHÂN TÍCH: Lý luận lâm sàng */}
       <ClinicalReasoning items={reasoningItems}/>
+
       {/* PHÂN TÍCH: Xét nghiệm */}
       <LabPanel labs={r.xet_nghiem_key||r.xet_nghiem_meta||[]} note={r.xet_nghiem_truoc_mo?.ghi_chu}/>
+
       {/* PHÂN TÍCH: Thuốc */}
       <Card id="sec-meds" title="Đơn thuốc và lịch dùng" icon={<Icon.Pill d={16}/>}>
         <div className="grid2">
@@ -3106,14 +3284,17 @@ function ReportTab({ report: r, analysis }) {
         </div>
         <MedGantt meds={r.thuoc_cuoi_ky}/>
       </Card>
+
       {/* PHÂN TÍCH: eGFR + an toàn đơn thuốc */}
       <DrugSafetyCard safety={safety} egfr={egfr} egfrDetail={egfrDetail} onSource={setModalSource}/>
+
       {/* Tóm tắt toàn cảnh */}
       <SummaryCard text={r.tom_tat_toan_canh}/>
       <LogoBar compact/>
     </div>
   )
 }
+
 // ─── CHAT TAB ─────────────────────────────────────────────────────────────────
 const DEMO_CHAT = {
   "biến chứng": "Sau mổ, bệnh nhân có **phản ứng viêm nặng sau phẫu thuật**:\n- CRP tăng rất cao: 241.42 mg/L ngay ngày 26/09 sau mổ\n- Giảm dần nhưng vẫn còn 42.3 mg/L khi ra viện (bình thường dưới 5)\n- EF tạm giảm từ 61% xuống 50% sau mổ, phục hồi về 58% khi ra viện\n- NT-proBNP 2280 pg/mL: chỉ điểm suy tim cần theo dõi tiếp",
@@ -3122,6 +3303,7 @@ const DEMO_CHAT = {
   "siêu âm":     "Bệnh nhân có 9 lượt siêu âm tim, diễn biến chính:\n\n- **Trước mổ (12/09):** hẹp van ĐMC khít, chênh áp 71/51 mmHg, EF 74%\n- **Sau mổ (30/09):** van On-X hoạt động, chênh áp giảm còn 16 mmHg. EF tụt còn 50%, có dịch màng phổi 2 bên\n- **10/10:** EF giảm nặng 44%, dịch màng ngoài tim nhiều, dấu hiệu ép nhẹ thất phải (cảnh báo)\n- **Phục hồi (28/10 đến 25/11):** EF lên lại 58 rồi 71%, hết dịch\n- **Gần nhất (26/05/2026):** chênh áp 8 mmHg, EF 71%, van hoạt động bình thường\n\nTóm lại: van thay tốt (chênh áp giảm mạnh), EF tụt tạm thời do dịch màng ngoài tim rồi phục hồi hoàn toàn.",
   "crp":         "Diễn biến CRP theo thời gian:\n- 26/09 (sau mổ): **241.42 mg/L** (rất cao)\n- 27/09: 130.17 mg/L\n- 30/09: 106.61 mg/L\n- 03/10 (ra viện): **42.3 mg/L** (vẫn còn cao, bình thường dưới 5)\n\nXu hướng giảm tốt nhưng chưa về bình thường. Cần kiểm tra lại ở lần tái khám 10/10.",
 }
+
 function renderMd(text) {
   if (!text) return null
   const lines = text.split("\n"), out = []
@@ -3144,6 +3326,7 @@ function renderMd(text) {
   })
   flush(); return out
 }
+
 // ─── FLOATING CHAT (kiểu Messenger) ───────────────────────────────────────────
 function FloatingChat({ report, hoSoText, messages, setMessages, onExpand }) {
   const [open, setOpen] = useState(false)
@@ -3151,6 +3334,7 @@ function FloatingChat({ report, hoSoText, messages, setMessages, onExpand }) {
   const [loading, setLoading] = useState(false)
   const bottomRef = useRef()
   useEffect(() => { if (open) bottomRef.current?.scrollIntoView({ behavior:"smooth" }) }, [messages, open])
+
   const send = async (text) => {
     const q = text || input.trim(); if (!q || loading) return
     setInput(""); setMessages(prev => [...prev, { role:"user", content:q }]); setLoading(true)
@@ -3166,7 +3350,9 @@ function FloatingChat({ report, hoSoText, messages, setMessages, onExpand }) {
     }
     setLoading(false)
   }
+
   const unread = !open && messages.filter(m => m.role === "assistant").length
+
   return (
     <>
       {!open && (
@@ -3220,12 +3406,14 @@ function FloatingChat({ report, hoSoText, messages, setMessages, onExpand }) {
     </>
   )
 }
+
 function ChatTab({ report, hoSoText, messages, setMessages }) {
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
   const bottomRef = useRef()
   const inputRef = useRef()
   useEffect(() => { bottomRef.current?.scrollIntoView({behavior:"smooth"}) }, [messages])
+
   const send = async (text) => {
     const q = text || input.trim(); if (!q || loading) return
     setInput(""); setMessages(prev => [...prev, {role:"user", content:q}]); setLoading(true)
@@ -3241,6 +3429,7 @@ function ChatTab({ report, hoSoText, messages, setMessages }) {
     }
     setLoading(false)
   }
+
   return (
     <div className="chat-wrap">
       <div className="chat-msgs">
@@ -3271,6 +3460,7 @@ function ChatTab({ report, hoSoText, messages, setMessages }) {
     </div>
   )
 }
+
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { err: null } }
@@ -3297,7 +3487,463 @@ class ErrorBoundary extends Component {
     return this.props.children
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DEMO: hồ sơ thứ 2 (Bệnh nhân 3 trong nguồn, ẩn danh = "Nguyễn Văn B"),
+// đăng nhập, ghi âm tài liệu, 3 chế độ xem, lịch sử bệnh án. Toàn bộ chạy
+// client-side, KHÔNG gọi backend. Bác sĩ để ẩn danh như hồ sơ Nguyễn Văn A.
+// ═══════════════════════════════════════════════════════════════════════════
+const PATIENT_B = {
+  thong_tin_benh_nhan: { ho_ten:"NGUYỄN VĂN B", ngay_sinh:"01/01/1958", tuoi:68, gioi_tinh:"Nam", dia_chi:"Xã Tân Tiến, Hưng Yên", ngay_vao_vien:"04/06/2026", ngay_ra_vien:"", so_benh_an:"26.007850" },
+  chan_doan_chinh: "Hở van hai lá nhiều type II P2.P3 (đứt dây chằng sa lá sau P3) - Hở van ba lá nhiều - Tăng áp động mạch phổi nặng (ALĐMP tâm thu ~85 mmHg) - Suy tim. Sau mổ sửa van hai lá + sửa van ba lá nội soi (05/06/2026).",
+  ly_do_vao_vien: "Khó thở tăng, suy tim mất bù. Phát hiện hở van hai lá nhiều trên 1 năm, vào viện chờ phẫu thuật.",
+  tien_su_benh: "Hở van hai lá nhiều - suy tim trên 1 năm (bản thân). Nam 68 tuổi. Gia đình bình thường.",
+  phau_thuat: { ngay:"05/06/2026", phuong_phap:"Sửa van hai lá (vòng van Edwards 28mm) + Sửa van ba lá (vòng van Edwards 26mm), nội soi. Phẫu thuật đặc biệt khó, gây mê nội khí quản, chạy tuần hoàn ngoài cơ thể.", ket_qua:"Khâu khép A3P3 đặt vòng van, test nước còn hở nhẹ. Siêu âm thực quản trong mổ: van hai lá và van ba lá hở nhẹ.", bac_si_phau_thuat:"BS. Ẩn danh" },
+  dien_bien_lam_sang: [
+    { ngay:"04/06/2026", mo_ta:"Nhập viện khoa Phẫu Thuật Tim Người Lớn vì suy tim mất bù do hở van hai lá nặng. Chờ phẫu thuật.", loai:"binh_thuong" },
+    { ngay:"05/06/2026", mo_ta:"Phẫu thuật sửa van hai lá + van ba lá nội soi thành công. Chuyển hồi sức, an thần thở máy, huyết động ổn định.", loai:"binh_thuong" },
+    { ngay:"06/06/2026", mo_ta:"Hậu phẫu nặng: lactate tăng vọt đỉnh 9.28 mmol/L, toan chuyển hóa. Phù phổi, suy tim phụ thuộc máy thở và thuốc vận mạch.", loai:"canh_bao" },
+    { ngay:"07/06/2026", mo_ta:"Đáp ứng viêm hệ thống nặng: CRP 202.74, Procalcitonin 13.59, WBC tăng, Troponin T 457, CK 1232. Tổn thương thận cấp: Creatinine 122, eGFR 51.", loai:"canh_bao" },
+    { ngay:"08/06/2026", mo_ta:"Hội chẩn dinh dưỡng: ăn qua sonde không tiêu, thể trạng suy kiệt. Thêm nuôi dưỡng tĩnh mạch (Nutriflex peri, Smoflipid). INR tăng 3.27.", loai:"bat_thuong" },
+    { ngay:"09/06/2026", mo_ta:"INR đỉnh 3.94 (quá liều chống đông, nguy cơ chảy máu). Loét tỳ đè vùng cùng cụt độ 1-2. Còn phụ thuộc hô hấp.", loai:"canh_bao" },
+    { ngay:"11/06/2026", mo_ta:"Cải thiện: CRP giảm còn 75.81, cấy máu và đờm âm tính. Albumin còn thấp 29.8. INR về 1.96.", loai:"bat_thuong" },
+    { ngay:"12/06/2026", mo_ta:"NT-proBNP giảm mạnh còn 837 pg/mL (từ đỉnh 4851). Chức năng thận hồi phục (eGFR 72). INR 1.59.", loai:"binh_thuong" },
+    { ngay:"13/06/2026", mo_ta:"Ổn định hô hấp, huyết động. CRP còn 27.58. Chuyển khoa Ngoại tiếp tục điều trị.", loai:"binh_thuong" },
+    { ngay:"14/06/2026", mo_ta:"Tiểu cầu tăng phản ứng 423, đường máu ổn. Tiếp tục theo dõi dinh dưỡng và chống đông tại khoa Ngoại.", loai:"binh_thuong" },
+  ],
+  vital_signs: [
+    { ngay:"08/06", crp:202.7, wbc:17.4 },
+    { ngay:"11/06", crp:75.8,  wbc:11.9 },
+    { ngay:"13/06", crp:27.6,  wbc:12.7 },
+  ],
+  xet_nghiem_truoc_mo: { ghi_chu:"Siêu âm tim trước mổ (04/06): Dd 52, EF 68%. Hở van hai lá 4/4 do sa toàn bộ lá sau, đứt dây chằng. Hở van ba lá 3.5/4. Tăng áp ĐMP nặng (ALĐMP tâm thu ~85 mmHg). NT-proBNP 4235. Chụp mạch vành: hẹp nhẹ 30% LAD và RCA." },
+  xet_nghiem_meta: [
+    { key:"HGB",       val:"137 g/L",     rawVal:137,  unit:"g/L",    desc:"Hemoglobin (hồng cầu)", normal:"130-172", status:"normal", trend:[122,148,120,137], trendDates:["05/06","05/06","11/06","14/06"], arrow:"ok" },
+    { key:"WBC",       val:"12.7 G/L",    rawVal:12.7, unit:"G/L",    desc:"Bạch cầu",              normal:"4-10",    status:"high",   trend:[15.1,17.4,11.9,12.7], trendDates:["05/06","08/06","11/06","13/06"], arrow:"down" },
+    { key:"PLT",       val:"423 G/L",     rawVal:423,  unit:"G/L",    desc:"Tiểu cầu (tăng phản ứng)", normal:"150-400", status:"high", trend:[94,135,278,423], trendDates:["05/06","08/06","12/06","14/06"], arrow:"up" },
+    { key:"Creatinin", val:"91 µmol/L",   rawVal:91,   unit:"µmol/L", desc:"Chức năng thận",        normal:"62-106",  status:"normal", trend:[127,122,112,91], trendDates:["06/06","07/06","09/06","12/06"], arrow:"down" },
+    { key:"eGFR",      val:"72 mL/ph",    rawVal:72,   unit:"mL/ph/1.73", desc:"Mức lọc cầu thận",  normal:"≥60",     status:"normal", trend:[49,51,56,72], trendDates:["06/06","07/06","09/06","12/06"], arrow:"up" },
+    { key:"Albumin",   val:"29.8 g/L",    rawVal:29.8, unit:"g/L",    desc:"Albumin máu (suy kiệt)", normal:"35-52",  status:"low",    trend:[37.5,29.8], trendDates:["07/06","11/06"], arrow:"down" },
+    { key:"CRP",       val:"27.6 mg/L",   rawVal:27.6, unit:"mg/L",   desc:"Viêm nhiễm (gần nhất)", normal:"<5",      status:"high",   trend:[202.7,75.8,27.6], trendDates:["08/06","11/06","13/06"], arrow:"down" },
+    { key:"PCT",       val:"13.59 ng/mL", rawVal:13.59,unit:"ng/mL",  desc:"Procalcitonin (nhiễm khuẩn)", normal:"<0.5", status:"high", trend:[13.59], trendDates:["06/06"], arrow:"down" },
+    { key:"INR",       val:"1.8",         rawVal:1.8,  unit:"",       desc:"Đông máu (chống đông)", normal:"2.0-3.0", status:"low",    trend:[1.65,3.94,2.2,1.8], trendDates:["05/06","09/06","10/06","14/06"], arrow:"down" },
+    { key:"NT-proBNP", val:"837 pg/mL",   rawVal:837,  unit:"pg/mL",  desc:"Marker suy tim",        normal:"<125",    status:"high",   trend:[4235,4851,837], trendDates:["tiền mổ","06/06","12/06"], arrow:"down" },
+    { key:"Lactate",   val:"9.28 mmol/L", rawVal:9.28, unit:"mmol/L", desc:"Lactate đỉnh (giảm tưới máu)", normal:"0.4-2.2", status:"high", trend:[1.96,3.7,9.28], trendDates:["05/06","05/06","06/06"], arrow:"up" },
+    { key:"EF",        val:"68%",         rawVal:68,   unit:"%",      desc:"Phân suất tống máu (trước mổ)", normal:"55-70", status:"normal", trend:[68], trendDates:["04/06"], arrow:"ok" },
+  ],
+  sieu_am_tim: {
+    lan_kham: [
+      { ngay:"04/06/2026", nguon:"SA tim tiền mê", chan_doan:"HoHL 4/4 - HoBL 3.5/4 - TAP nặng", ef:68, grad_max:null, grad_tb:null, hoc:"Nặng (ngoài van)", phase:"truoc_mo", ghi_chu:"Dd 52, EF 68%. Sa toàn bộ lá sau do đứt dây chằng. ALĐMP tâm thu ~85 mmHg. Giãn buồng tim phải, nhĩ trái giãn, không huyết khối.", canh_bao:false },
+      { ngay:"05/06/2026", nguon:"SA thực quản trong mổ", chan_doan:"Sau sửa VHL + VBL", ef:null, grad_max:4, grad_tb:2, hoc:"Nhẹ (trong vòng van)", phase:"sau_mo", ghi_chu:"Đánh giá kết quả sửa van: HoHL nhẹ <1/4 (VC 2.9mm); HoBL nhẹ-vừa 1.5/4 (VC 3.9mm). Vòng van Edwards 28mm (hai lá) + 26mm (ba lá).", canh_bao:false, latest:true },
+    ],
+  },
+  canh_bao_nguy_co: [
+    { mo_ta:"Toan chuyển hóa - tăng lactate nặng sau mổ, đỉnh 9.28 mmol/L (06/06): dấu hiệu giảm tưới máu mô, cần hồi sức tích cực và tối ưu huyết động.", muc_do:"cao", can_cu:"Khí máu 06/06/2026: lactate 9.28 mmol/L (bình thường 0.4-2.2)." },
+    { mo_ta:"Đáp ứng viêm hệ thống / nhiễm khuẩn nặng: Procalcitonin 13.59, CRP đỉnh 202.74, WBC 17.4, Troponin T 457, CK 1232. Cần cấy bệnh phẩm và kháng sinh theo kinh nghiệm.", muc_do:"cao", can_cu:"XN 06-08/06/2026: PCT 13.59 ng/mL, CRP 202.74 mg/L, Troponin T hs 457 ng/L." },
+    { mo_ta:"Quá liều chống đông: INR tăng đỉnh 3.94 (09/06), vượt mục tiêu 2.0-3.0 trên bệnh nhân vừa mổ tim, nguy cơ chảy máu. Cần chỉnh liều và theo dõi sát.", muc_do:"cao", can_cu:"Đông máu 09/06/2026: PT-INR 3.94 (mục tiêu 2.0-3.0)." },
+    { mo_ta:"Tổn thương thận cấp (AKI) sau mổ: Creatinine đỉnh 127, eGFR thấp nhất 49 mL/ph. Đã cải thiện (eGFR 72 ngày 12/06) nhưng cần thận trọng liều thuốc thải qua thận.", muc_do:"cao", can_cu:"Sinh hóa 06/06/2026: Creatinine 127 µmol/L, eGFR 49." },
+    { mo_ta:"Suy hô hấp - suy tim phụ thuộc máy thở và thuốc vận mạch, phù phổi sau mổ. Cai máy thở từng bước theo huyết động.", muc_do:"cao", can_cu:"Biên bản hội chẩn 08/06/2026: suy tim phụ thuộc máy thở, huyết áp phụ thuộc thuốc tăng co, vận mạch." },
+    { mo_ta:"Suy kiệt - suy dinh dưỡng: ăn qua sonde không tiêu, Albumin 29.8 g/L, BMI 18.6. Cần nuôi dưỡng tĩnh mạch bổ sung.", muc_do:"trung_binh", can_cu:"Hội chẩn dinh dưỡng 08/06/2026; Albumin 29.8 g/L (11/06)." },
+    { mo_ta:"Loét tỳ đè vùng cùng cụt (độ 1-2) do nằm lâu. Cần xoay trở, đệm chống loét, chăm sóc da.", muc_do:"thap", can_cu:"Phiếu đánh giá loét 06/06/2026: loét vùng cùng cụt." },
+  ],
+  ket_luan_giai_doan: {
+    1: "Suy tim mất bù do hở van hai lá nặng (sa lá sau, đứt dây chằng) kèm hở van ba lá và tăng áp ĐMP nặng. EF còn bảo tồn 68%. Chỉ định phẫu thuật sửa van đúng đắn.",
+    2: "Mổ sửa van hai lá + van ba lá nội soi thành công, nhưng hậu phẫu rất nặng: toan - tăng lactate (đỉnh 9.28), đáp ứng viêm/nhiễm khuẩn (PCT 13.59, CRP 202), tổn thương thận cấp (eGFR 49), INR quá liều (3.94), phù phổi phụ thuộc máy thở và vận mạch, suy kiệt.",
+    3: "Cải thiện rõ: NT-proBNP giảm 4851 → 837, CRP 202 → 27.58, chức năng thận hồi phục (eGFR 72), INR về ~1.8. Chuyển khoa Ngoại ngày 13/06 tiếp tục điều trị dinh dưỡng, chống đông và chăm sóc loét.",
+  },
+  clinical_takeaway: [
+    { txt:"Ca sửa van phức tạp thành công nhưng hậu phẫu rất nặng: nhiễm khuẩn, AKI, toan-lactate cao, suy hô hấp phụ thuộc máy thở.", loai:"watch" },
+    { txt:"Đang cải thiện rõ rệt: NT-proBNP 4851 → 837, CRP 202 → 27.6, chức năng thận hồi phục (eGFR 49 → 72).", loai:"good" },
+    { txt:"Cần theo dõi sát: chống đông (INR dao động, đỉnh 3.94), dinh dưỡng (suy kiệt, Albumin thấp), và loét tỳ đè cùng cụt.", loai:"watch" },
+  ],
+  ly_luan_lam_sang: [
+    { muc:"critical", phase:2, tieu_de:"Lactate 9.28 kèm tụt tưới máu sau mổ tim lớn",
+      noi_dung:"Lactate tăng vọt đỉnh 9.28 mmol/L (06/06) phản ánh giảm tưới máu mô sau tuần hoàn ngoài cơ thể kéo dài (thời gian chạy máy 248 phút, cặp ĐMC 144 phút). Phối hợp suy tim phụ thuộc vận mạch. Cần tối ưu cung lượng tim, theo dõi lactate clearance thay vì chỉ một trị số." },
+    { muc:"critical", phase:2, tieu_de:"INR 3.94 trên nền albumin thấp và kháng sinh",
+      noi_dung:"INR vọt 3.94 (09/06) ở bệnh nhân vừa mổ tim là nguy cơ chảy máu cao. Albumin thấp (29.8) làm giảm gắn kết thuốc chống đông; phối hợp kháng sinh có thể tăng tác dụng kháng vitamin K. Cần chỉnh liều theo INR và cân nhắc nguyên nhân phối hợp." },
+    { muc:"warning", phase:3, tieu_de:"Nhiễm khuẩn giảm dần nhưng dinh dưỡng vẫn là nút thắt",
+      noi_dung:"PCT 13.59 và CRP 202 đã giảm về 27.6 cho thấy kiểm soát nhiễm khuẩn tốt. Tuy nhiên ăn sonde không tiêu, Albumin 29.8, suy kiệt là yếu tố làm chậm lành thương và cai máy thở. Nuôi dưỡng tĩnh mạch bổ sung là ưu tiên song song." },
+  ],
+  problem_status: {
+    hien_tai: [
+      { ten:"Van hai lá - ba lá sau sửa", trang_thai:"monitoring", mo_ta:"Còn hở nhẹ trong vòng van, theo dõi mức hở và chức năng tim" },
+      { ten:"Chống đông sau sửa van", trang_thai:"active", mo_ta:"INR dao động, cần giữ trong mục tiêu, tránh quá liều" },
+      { ten:"Suy dinh dưỡng - suy kiệt", trang_thai:"active", mo_ta:"Nuôi dưỡng tĩnh mạch bổ sung, Albumin thấp" },
+      { ten:"Loét tỳ đè cùng cụt", trang_thai:"monitoring", mo_ta:"Độ 1-2, chăm sóc da, xoay trở, đệm chống loét" },
+      { ten:"Theo dõi nhiễm khuẩn", trang_thai:"monitoring", mo_ta:"CRP/PCT đang giảm, tiếp tục theo dõi" },
+    ],
+    da_qua: [
+      { ten:"Lactate 9.28 - toan chuyển hóa", mo_ta:"06/06, đã cải thiện sau hồi sức" },
+      { ten:"INR đỉnh 3.94", mo_ta:"09/06, đã chỉnh về ~1.8" },
+      { ten:"Tổn thương thận cấp (eGFR 49)", mo_ta:"06/06, hồi phục eGFR 72 ngày 12/06" },
+      { ten:"NT-proBNP 4851", mo_ta:"06/06, giảm còn 837 ngày 12/06" },
+      { ten:"Phù phổi phụ thuộc máy thở", mo_ta:"Giai đoạn hồi sức, đã ổn định hô hấp" },
+    ],
+  },
+  hanh_dong_uu_tien: [
+    { uu_tien:1, viec:"Theo dõi INR và chỉnh liều chống đông", ly_do:"INR từng vọt 3.94 vượt mục tiêu; sau sửa van cần giữ INR ổn định, tránh chảy máu lẫn huyết khối." },
+    { uu_tien:2, viec:"Đánh giá lại chức năng thận và điện giải", ly_do:"AKI sau mổ (eGFR thấp nhất 49) đã cải thiện nhưng cần theo dõi khi dùng lợi tiểu và thuốc thải qua thận." },
+    { uu_tien:3, viec:"Tối ưu dinh dưỡng (đường tĩnh mạch + tập ăn đường miệng)", ly_do:"Suy kiệt, Albumin 29.8, ăn sonde không tiêu làm chậm hồi phục và cai máy thở." },
+    { uu_tien:4, viec:"Chăm sóc loét tỳ đè cùng cụt", ly_do:"Loét độ 1-2 do nằm lâu, cần xoay trở và đệm chống loét để tránh tiến triển." },
+    { uu_tien:5, viec:"Theo dõi dấu hiệu nhiễm khuẩn (CRP, PCT, cấy)", ly_do:"Đáp ứng viêm nặng sau mổ đang giảm, cần đảm bảo không tái phát nhiễm khuẩn." },
+  ],
+  thuoc_cuoi_ky: [
+    { ten_thuoc:"Cefamandol 2g", nhom:"Kháng sinh", lieu:"Theo chỉ định", cach_dung:"Tiêm tĩnh mạch", bat_dau:"05/06", color:"#EF4444" },
+    { ten_thuoc:"Chống đông kháng vitamin K", nhom:"Chống đông", lieu:"Chỉnh theo INR", cach_dung:"Uống, giữ INR mục tiêu", bat_dau:"06/06", keo_dai:true, color:"#8B5CF6" },
+    { ten_thuoc:"Furosemid (Takizd)", nhom:"Lợi tiểu", lieu:"Theo cân bằng dịch", cach_dung:"Tiêm/uống", bat_dau:"06/06", keo_dai:true, color:"#06B6D4" },
+    { ten_thuoc:"Dobutamine", nhom:"Vận mạch - tăng co", lieu:"Truyền bơm tiêm điện", cach_dung:"Giai đoạn hồi sức", bat_dau:"05/06", color:"#10B981" },
+    { ten_thuoc:"Nutriflex peri + Smoflipid", nhom:"Nuôi dưỡng tĩnh mạch", lieu:"80 ml/giờ", cach_dung:"Truyền tĩnh mạch", bat_dau:"08/06", keo_dai:true, color:"#F59E0B" },
+    { ten_thuoc:"Esomeprazole (Nexium 40mg)", nhom:"Dạ dày", lieu:"1 lọ/ngày", cach_dung:"Tiêm tĩnh mạch", bat_dau:"05/06", keo_dai:true, color:"#3B82F6" },
+  ],
+  tom_tat_toan_canh: "GIAI ĐOẠN TRƯỚC MỔ: Bệnh nhân nam 68 tuổi, tiền sử hở van hai lá nhiều trên 1 năm, vào viện 04/06/2026 vì khó thở tăng và suy tim mất bù. Siêu âm tim cho thấy hở van hai lá 4/4 do sa toàn bộ lá sau (đứt dây chằng), hở van ba lá 3.5/4, tăng áp động mạch phổi nặng (ALĐMP tâm thu ~85 mmHg), EF còn bảo tồn 68%. GIAI ĐOẠN SAU MỔ - NỘI TRÚ: Ngày 05/06/2026 phẫu thuật sửa van hai lá (vòng van Edwards 28mm) và sửa van ba lá (vòng van 26mm) qua nội soi, kết quả còn hở nhẹ trong vòng van. Hậu phẫu rất nặng: toan chuyển hóa với lactate đỉnh 9.28 mmol/L, đáp ứng viêm và nhiễm khuẩn nặng (Procalcitonin 13.59, CRP đỉnh 202.74), tổn thương thận cấp (eGFR thấp nhất 49), INR quá liều (đỉnh 3.94), phù phổi phụ thuộc máy thở và thuốc vận mạch, kèm suy kiệt - suy dinh dưỡng phải nuôi dưỡng tĩnh mạch và loét tỳ đè cùng cụt. GIAI ĐOẠN HỒI PHỤC: Các chỉ số cải thiện rõ - NT-proBNP giảm từ 4851 còn 837 pg/mL, CRP còn 27.58, chức năng thận hồi phục (eGFR 72), INR về khoảng 1.8. Bệnh nhân được chuyển khoa Ngoại ngày 13/06/2026 để tiếp tục điều trị dinh dưỡng, chống đông và chăm sóc loét.",
+  dau_hieu_sinh_ton: { ngay:"05/06/2026", ha_tt:110, ha_ttr:80, mach:71, nhiet_do:36.0, nhip_tho:19, spo2:98, lactate:1.96 },
+}
+
+// Lịch sử bệnh án (demo, tĩnh). Bác sĩ để ẩn danh ở cả hai hồ sơ.
+function recMeta(data, phai){
+  const t = data.thong_tin_benh_nhan
+  return {
+    ho_ten: t.ho_ten, tuoi: t.tuoi, gioi_tinh: t.gioi_tinh,
+    so_benh_an: t.so_benh_an, ngay_vao_vien: t.ngay_vao_vien,
+    chan_doan: data.chan_doan_chinh, bac_si: "BS. Ẩn danh", data,
+  }
+}
+const HISTORY = [
+  { id:"BN-A", ...recMeta(MOCK_REPORT) },
+  { id:"BN-B", ...recMeta(PATIENT_B) },
+]
+
+// ─── Sinh nội dung HỘI CHẨN AI (mock, suy ra từ report) ───────────────────────
+function pickCanhBao(r, kws){
+  return (r.canh_bao_nguy_co||[]).filter(c => kws.some(k => (c.mo_ta||"").toLowerCase().includes(k)))
+}
+function deriveMDT(r){
+  const cb = r.canh_bao_nguy_co || []
+  const allText = [r.chan_doan_chinh, ...cb.map(c=>c.mo_ta)].join(" ").toLowerCase()
+  const has = (...kw) => kw.some(k => allText.includes(k))
+  const y_kien = []
+  y_kien.push({ khoa:"Tim mạch", noi_dung:`Chẩn đoán: ${expandAbbr(r.chan_doan_chinh)} Đánh giá chức năng tim và kết quả can thiệp/phẫu thuật là trọng tâm; theo dõi các marker tim mạch (NT-proBNP, EF) theo diễn biến.` })
+  y_kien.push({ khoa:"Hồi sức tích cực", noi_dung: (pickCanhBao(r,["lactate","toan","máy thở","huyết động","vận mạch","phù phổi"])[0]?.mo_ta) || "Theo dõi huyết động, hô hấp và cân bằng nội môi trong giai đoạn hậu phẫu." })
+  if(has("thận","creatinin","egfr","aki")) y_kien.push({ khoa:"Thận - Tiết niệu", noi_dung:(pickCanhBao(r,["thận","creatinin","egfr","aki"])[0]?.mo_ta) || "Theo dõi chức năng thận và điều chỉnh liều thuốc thải qua thận." })
+  if(has("nhiễm","crp","pct","procalcitonin","viêm","bạch cầu","sepsis")) y_kien.push({ khoa:"Truyền nhiễm", noi_dung:(pickCanhBao(r,["nhiễm","crp","pct","procalcitonin","viêm"])[0]?.mo_ta) || "Đánh giá nguy cơ nhiễm khuẩn, cấy bệnh phẩm và kháng sinh hợp lý." })
+  if(has("inr","chống đông","đông máu")) y_kien.push({ khoa:"Huyết học - Đông máu", noi_dung:(pickCanhBao(r,["inr","chống đông","đông máu"])[0]?.mo_ta) || "Theo dõi đông máu và chỉnh liều chống đông theo mục tiêu." })
+  if(has("dinh dưỡng","albumin","suy kiệt","sonde")) y_kien.push({ khoa:"Dinh dưỡng lâm sàng", noi_dung:(pickCanhBao(r,["dinh dưỡng","albumin","suy kiệt","sonde"])[0]?.mo_ta) || "Đánh giá tình trạng dinh dưỡng và hỗ trợ nuôi dưỡng phù hợp." })
+  const dong_thuan = (r.clinical_takeaway||[]).filter(t=>t.loai==="good").map(t=>t.txt)
+  if(dong_thuan.length===0) dong_thuan.push("Chẩn đoán và hướng xử trí chính giữa các chuyên khoa là thống nhất.")
+  const tranh_luan = cb.filter(c=>c.muc_do==="cao").slice(0,2).map(c=>`Mức độ ưu tiên xử trí: ${c.mo_ta}`)
+  const can_lam_sang = (r.hanh_dong_uu_tien||[]).map(a=>a.viec)
+  const dieu_tri = (r.thuoc_cuoi_ky||[]).map(t=>`${t.nhom}: ${t.ten_thuoc}`)
+  const ket_luan = (r.ket_luan_giai_doan && (r.ket_luan_giai_doan[3]||r.ket_luan_giai_doan[2])) || r.tom_tat_toan_canh.slice(0,260)
+  return { khoa:y_kien.map(y=>y.khoa), y_kien, ket_luan:{ dong_thuan, tranh_luan, can_lam_sang, dieu_tri, ket_luan } }
+}
+
+// ─── Sinh nội dung GIẢNG DẠY (mock, suy ra từ report) ─────────────────────────
+function deriveTeaching(r){
+  const cb = r.canh_bao_nguy_co || []
+  const dx = expandAbbr(r.chan_doan_chinh)
+  const muc_tieu = [
+    "Trình bày được bệnh cảnh và chẩn đoán chính của ca bệnh.",
+    "Phân tích các vấn đề lâm sàng nổi bật và yếu tố nguy cơ.",
+    "Đề xuất kế hoạch cận lâm sàng và điều trị phù hợp theo giai đoạn.",
+  ]
+  const key_findings = cb.slice(0,5).map(c=>c.mo_ta)
+  const red_flags = cb.filter(c=>c.muc_do==="cao").map(c=>c.mo_ta)
+  const diem_suy_luan = (r.ly_luan_lam_sang||[]).map(l=>l.tieu_de)
+  const can_lam_sang = (r.hanh_dong_uu_tien||[]).map(a=>a.viec)
+  const dieu_tri = (r.thuoc_cuoi_ky||[]).map(t=>`${t.nhom}: ${t.ten_thuoc}`)
+  const takeaways = (r.clinical_takeaway||[]).map(t=>t.txt)
+  const socratic = []
+  socratic.push({ q:"Vấn đề lâm sàng nổi bật và cần ưu tiên nhất ở ca này là gì?", a: red_flags[0] ? `Gợi ý: ${red_flags[0]}` : "Gợi ý: hãy xác định vấn đề đe dọa tính mạng hoặc ảnh hưởng tiên lượng nhiều nhất trước." })
+  if((r.hanh_dong_uu_tien||[])[0]) socratic.push({ q:`Vì sao cần "${r.hanh_dong_uu_tien[0].viec}"?`, a:`Gợi ý: ${r.hanh_dong_uu_tien[0].ly_do}` })
+  if((r.ly_luan_lam_sang||[])[0]) socratic.push({ q:`Hãy giải thích cơ chế: ${r.ly_luan_lam_sang[0].tieu_de}`, a:`Gợi ý: ${r.ly_luan_lam_sang[0].noi_dung}` })
+  socratic.push({ q:"Theo bạn, tiên lượng và hướng theo dõi tiếp theo nên là gì?", a: takeaways[0] ? `Gợi ý: ${takeaways.join(" ")}` : "Gợi ý: dựa trên diễn biến các chỉ số chính và đáp ứng điều trị." })
+  return { dx, muc_tieu, key_findings, red_flags, diem_suy_luan, can_lam_sang, dieu_tri, takeaways, socratic }
+}
+
+// ─── Component: Đăng nhập (demo) ──────────────────────────────────────────────
+function LoginPage({ onLogin }){
+  const [u, setU] = useState("")
+  const [p, setP] = useState("")
+  const [err, setErr] = useState("")
+  const submit = () => {
+    if(u.trim()==="hackaithon2026" && p==="medparcous"){ setErr(""); onLogin() }
+    else setErr("Tên đăng nhập hoặc mật khẩu không đúng.")
+  }
+  return (
+    <div className="login-wrap">
+      <div className="login-card">
+        <div className="login-logo"><BrandMark size={48} radius={12}/></div>
+        <div className="login-brand">Med<em>Parcours</em> <span>AI</span></div>
+        <div className="login-sub">Trợ lý lâm sàng - Đăng nhập để tiếp tục</div>
+        <div className="login-field">
+          <label>Tên đăng nhập</label>
+          <input value={u} onChange={e=>setU(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="hackaithon2026" autoFocus/>
+        </div>
+        <div className="login-field">
+          <label>Mật khẩu</label>
+          <input type="password" value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="••••••••"/>
+        </div>
+        {err && <div className="login-err">{err}</div>}
+        <button className="btn-primary login-btn" onClick={submit}>Đăng nhập</button>
+        <div className="login-hint">Demo: tài khoản <b>hackaithon2026</b> / mật khẩu <b>medparcous</b></div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Component: Ghi âm tài liệu hỗ trợ (Web Speech API vi-VN) ──────────────────
+function AudioRecorder(){
+  const [supported] = useState(() => typeof window!=="undefined" && (window.SpeechRecognition||window.webkitSpeechRecognition))
+  const [rec, setRec] = useState(false)
+  const [text, setText] = useState("")
+  const ref = useRef(null)
+  const start = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    if(!SR) return
+    const r = new SR(); r.lang="vi-VN"; r.continuous=true; r.interimResults=true
+    let base = text ? text+" " : ""
+    r.onresult = (e) => {
+      let live=""
+      for(let i=e.resultIndex;i<e.results.length;i++) live += e.results[i][0].transcript
+      setText(base+live)
+    }
+    r.onend = () => setRec(false)
+    r.onerror = () => setRec(false)
+    ref.current = r; r.start(); setRec(true)
+  }
+  const stop = () => { try{ref.current&&ref.current.stop()}catch{} setRec(false) }
+  return (
+    <div className="rec-panel">
+      <div className="rec-head">
+        <span className="rec-title">Hoặc ghi âm tài liệu hỗ trợ từ bác sĩ</span>
+        <span className="rec-tag">Giọng nói → văn bản</span>
+      </div>
+      {!supported ? (
+        <div className="rec-note">Trình duyệt chưa hỗ trợ ghi âm giọng nói. Hãy dùng Chrome/Edge mới nhất để thử tính năng này.</div>
+      ) : (
+        <>
+          <div className="rec-row">
+            <button className={`rec-btn${rec?" on":""}`} onClick={rec?stop:start}>
+              <span className={`rec-dot${rec?" pulse":""}`}/>{rec?"Dừng ghi":"Bắt đầu ghi âm"}
+            </button>
+            {text && <button className="rec-clear" onClick={()=>setText("")}>Xóa</button>}
+          </div>
+          <textarea className="rec-text" value={text} onChange={e=>setText(e.target.value)} placeholder="Nội dung ghi âm sẽ hiện ở đây. Bác sĩ có thể nói lời dặn, diễn biến, hoặc ghi chú hỗ trợ; hệ thống chuyển thành văn bản đính kèm hồ sơ."/>
+          {text && <div className="rec-note">Đã ghi {text.trim().split(/\s+/).length} từ. Trong demo, nội dung này được lưu kèm hồ sơ; ở bản đầy đủ sẽ gửi cho AI cùng tài liệu.</div>}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ─── Component: Dropdown chọn chế độ ──────────────────────────────────────────
+const VIEW_MODES = [
+  { key:"clinical", label:"Bác sĩ (Lâm sàng)" },
+  { key:"hoi_chan", label:"Hội chẩn AI" },
+  { key:"teaching", label:"Học vụ (Giảng dạy)" },
+]
+function ModeDropdown({ mode, onChange }){
+  return (
+    <div className="mode-dd">
+      <span className="mode-dd-lbl">Chế độ</span>
+      <select value={mode} onChange={e=>onChange(e.target.value)}>
+        {VIEW_MODES.map(m=><option key={m.key} value={m.key}>{m.label}</option>)}
+      </select>
+    </div>
+  )
+}
+
+// ─── Component: Hội chẩn AI ───────────────────────────────────────────────────
+function MDTView({ report }){
+  const [shown, setShown] = useState(0)
+  const mdt = deriveMDT(report)
+  useEffect(() => {
+    setShown(0)
+    const id = setInterval(() => setShown(s => { if(s>=mdt.y_kien.length){clearInterval(id);return s} return s+1 }), 600)
+    return () => clearInterval(id)
+  }, [report])
+  const done = shown >= mdt.y_kien.length
+  return (
+    <div className="mode-card">
+      <div className="mode-card-hd"><span className="mode-badge mdt">Hội chẩn AI</span><h2>Hội chẩn đa chuyên khoa</h2></div>
+      <p className="mode-intro">AI điều phối chọn các chuyên khoa liên quan đến ca bệnh và tổng hợp ý kiến. Nội dung demo được suy ra từ báo cáo của bệnh nhân <b>{report.thong_tin_benh_nhan.ho_ten}</b>.</p>
+      <div className="mdt-khoa">{mdt.khoa.map(k=><span key={k} className="mdt-khoa-chip">{k}</span>)}</div>
+      <div className="mdt-list">
+        {mdt.y_kien.slice(0,shown).map((y,i)=>(
+          <div key={i} className="mdt-op">
+            <div className="mdt-op-hd">{y.khoa}</div>
+            <div className="mdt-op-body">{y.noi_dung}</div>
+          </div>
+        ))}
+        {!done && <div className="mdt-loading"><span className="rec-dot pulse"/>Các chuyên khoa đang cho ý kiến...</div>}
+      </div>
+      {done && (
+        <div className="mdt-ket">
+          <div className="mdt-ket-hd">Biên bản hội chẩn (tổng hợp)</div>
+          <MdtBlock title="Đồng thuận" items={mdt.ket_luan.dong_thuan}/>
+          {mdt.ket_luan.tranh_luan.length>0 && <MdtBlock title="Điểm cần cân nhắc / ưu tiên" items={mdt.ket_luan.tranh_luan}/>}
+          <MdtBlock title="Cận lâm sàng đề xuất" items={mdt.ket_luan.can_lam_sang}/>
+          <MdtBlock title="Hướng điều trị" items={mdt.ket_luan.dieu_tri}/>
+          <div className="mdt-final"><b>Kết luận:</b> {mdt.ket_luan.ket_luan}</div>
+        </div>
+      )}
+    </div>
+  )
+}
+function MdtBlock({ title, items }){
+  if(!items || items.length===0) return null
+  return (
+    <div className="mdt-block">
+      <div className="mdt-block-t">{title}</div>
+      <ul>{items.map((it,i)=><li key={i}>{it}</li>)}</ul>
+    </div>
+  )
+}
+
+// ─── Component: Học vụ (Giảng dạy) ────────────────────────────────────────────
+function TeachingView({ report }){
+  const t = deriveTeaching(report)
+  const [open, setOpen] = useState(-1)
+  return (
+    <div className="mode-card">
+      <div className="mode-card-hd"><span className="mode-badge teach">Học vụ</span><h2>Chế độ giảng dạy</h2></div>
+      <p className="mode-intro">Bài giảng và đối thoại dẫn dắt (Socratic) xây dựng từ ca bệnh <b>{report.thong_tin_benh_nhan.ho_ten}</b>, dành cho sinh viên y khoa. Nội dung demo suy ra từ báo cáo.</p>
+      <TeachSection title="Bệnh cảnh"><p>{t.dx}</p></TeachSection>
+      <TeachSection title="Mục tiêu học tập"><ul>{t.muc_tieu.map((x,i)=><li key={i}>{x}</li>)}</ul></TeachSection>
+      <TeachSection title="Phát hiện chính"><ul>{t.key_findings.map((x,i)=><li key={i}>{x}</li>)}</ul></TeachSection>
+      {t.red_flags.length>0 && <TeachSection title="Dấu hiệu cảnh báo (Red flags)"><ul className="teach-red">{t.red_flags.map((x,i)=><li key={i}>{x}</li>)}</ul></TeachSection>}
+      {t.diem_suy_luan.length>0 && <TeachSection title="Điểm cần suy luận"><ul>{t.diem_suy_luan.map((x,i)=><li key={i}>{x}</li>)}</ul></TeachSection>}
+      <TeachSection title="Cận lâm sàng cần làm"><ul>{t.can_lam_sang.map((x,i)=><li key={i}>{x}</li>)}</ul></TeachSection>
+      <TeachSection title="Hướng điều trị"><ul>{t.dieu_tri.map((x,i)=><li key={i}>{x}</li>)}</ul></TeachSection>
+      <TeachSection title="Điều cần nhớ"><ul>{t.takeaways.map((x,i)=><li key={i}>{x}</li>)}</ul></TeachSection>
+      <div className="teach-soc">
+        <div className="teach-soc-hd">Đối thoại dẫn dắt (Socratic) - nhấn để xem gợi ý</div>
+        {t.socratic.map((qa,i)=>(
+          <div key={i} className="teach-q" onClick={()=>setOpen(open===i?-1:i)}>
+            <div className="teach-q-t"><span className="teach-q-ic">{open===i?"−":"+"}</span>{qa.q}</div>
+            {open===i && <div className="teach-q-a">{qa.a}</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+function TeachSection({ title, children }){
+  return <div className="teach-sec"><div className="teach-sec-t">{title}</div><div className="teach-sec-b">{children}</div></div>
+}
+
+// ─── Component: Lịch sử bệnh án (overlay) ─────────────────────────────────────
+function HistoryPanel({ onClose, onOpen, currentId }){
+  return (
+    <div className="hist-overlay" onClick={onClose}>
+      <div className="hist-modal" onClick={e=>e.stopPropagation()}>
+        <div className="hist-head">
+          <span className="hist-title">Lịch sử bệnh án</span>
+          <button className="fp-close" onClick={onClose} title="Đóng"><Icon.Close d={15} color="#475569"/></button>
+        </div>
+        <div className="hist-sub">Demo: danh sách hồ sơ đã phân tích. Tên bác sĩ được ẩn danh.</div>
+        <div className="hist-list">
+          {HISTORY.map(rec=>(
+            <div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>onOpen(rec)}>
+              <div className="hist-avatar">{rec.ho_ten.charAt(0)}</div>
+              <div className="hist-info">
+                <div className="hist-name">{rec.ho_ten} <span className="hist-meta">{rec.tuoi} tuổi, {rec.gioi_tinh} · BA {rec.so_benh_an}</span></div>
+                <div className="hist-dx">{expandAbbr(rec.chan_doan)}</div>
+                <div className="hist-foot">Vào viện {rec.ngay_vao_vien} · {rec.bac_si}</div>
+              </div>
+              <span className="hist-open">Mở ▶</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// CSS bổ sung cho các tính năng demo
+const EXTRA_CSS = `
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0A1628,#13284a 60%,#0E5a55);padding:20px}
+.login-card{width:100%;max-width:380px;background:#fff;border-radius:20px;padding:32px 28px;box-shadow:0 24px 60px rgba(0,0,0,.3);text-align:center}
+.login-logo{display:flex;justify-content:center;margin-bottom:12px}
+.login-brand{font-size:24px;font-weight:800;color:#0F2740}.login-brand em{color:#1D6FE8;font-style:normal}.login-brand span{color:#5A748F;font-weight:700;font-size:16px}
+.login-sub{font-size:13px;color:#7A96C8;margin:6px 0 22px}
+.login-field{text-align:left;margin-bottom:14px}
+.login-field label{display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:6px}
+.login-field input{width:100%;box-sizing:border-box;padding:11px 13px;border:1px solid #d8e2f0;border-radius:10px;font-size:14px;outline:none;transition:border .15s}
+.login-field input:focus{border-color:#1D6FE8}
+.login-err{background:#FEF2F2;color:#B91C1C;font-size:12.5px;padding:8px 12px;border-radius:8px;margin-bottom:12px;text-align:left}
+.login-btn{width:100%;justify-content:center;margin-top:4px}
+.login-hint{font-size:11.5px;color:#94a3b8;margin-top:14px}
+.rec-panel{margin-top:14px;border:1px dashed #c9d8ec;border-radius:14px;padding:14px;background:rgba(29,111,232,.03)}
+.rec-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.rec-title{font-size:13px;font-weight:600;color:#0F2740}
+.rec-tag{font-size:11px;color:#1D6FE8;background:rgba(29,111,232,.1);padding:3px 8px;border-radius:8px}
+.rec-row{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.rec-btn{display:inline-flex;align-items:center;gap:8px;border:none;background:#1D6FE8;color:#fff;font-size:13px;font-weight:600;padding:9px 16px;border-radius:10px;cursor:pointer}
+.rec-btn.on{background:#DC2626}
+.rec-clear{border:1px solid #d8e2f0;background:#fff;color:#475569;font-size:12px;padding:8px 12px;border-radius:9px;cursor:pointer}
+.rec-dot{width:9px;height:9px;border-radius:50%;background:#fff;display:inline-block}
+.rec-dot.pulse{background:#fff;animation:recPulse 1s infinite}
+@keyframes recPulse{0%,100%{opacity:1}50%{opacity:.3}}
+.rec-text{width:100%;box-sizing:border-box;min-height:72px;border:1px solid #d8e2f0;border-radius:10px;padding:10px 12px;font-size:13px;resize:vertical;outline:none;font-family:inherit}
+.rec-note{font-size:11.5px;color:#7A96C8;margin-top:8px;line-height:1.5}
+.mode-dd{display:inline-flex;align-items:center;gap:6px;margin-right:6px}
+.mode-dd-lbl{font-size:12px;color:#7A96C8;font-weight:600}
+.mode-dd select{font-size:13px;font-weight:600;color:#0F2740;border:1px solid #d8e2f0;border-radius:9px;padding:7px 10px;background:#fff;cursor:pointer;outline:none}
+.mode-card{max-width:920px;margin:0 auto;background:#fff;border:1px solid #e7eef8;border-radius:16px;padding:24px;box-shadow:0 4px 20px rgba(10,22,40,.05)}
+.mode-card-hd{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.mode-card-hd h2{font-size:19px;font-weight:800;color:#0F2740;margin:0}
+.mode-badge{font-size:11px;font-weight:700;padding:4px 10px;border-radius:8px;color:#fff}
+.mode-badge.mdt{background:#1D6FE8}.mode-badge.teach{background:#0E9488}
+.mode-intro{font-size:13px;color:#5A748F;line-height:1.6;margin:4px 0 16px}
+.mdt-khoa{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.mdt-khoa-chip{font-size:12px;font-weight:600;color:#1D6FE8;background:rgba(29,111,232,.08);border:1px solid rgba(29,111,232,.15);padding:5px 11px;border-radius:9px}
+.mdt-list{display:flex;flex-direction:column;gap:10px}
+.mdt-op{border:1px solid #e7eef8;border-radius:12px;padding:13px 15px;background:#fafcff;animation:fadeIn .4s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.mdt-op-hd{font-size:13.5px;font-weight:700;color:#1D6FE8;margin-bottom:5px}
+.mdt-op-body{font-size:13px;color:#334155;line-height:1.6}
+.mdt-loading{display:flex;align-items:center;gap:8px;font-size:13px;color:#7A96C8;padding:8px 2px}
+.mdt-loading .rec-dot{background:#1D6FE8}
+.mdt-ket{margin-top:18px;border-top:1px solid #eef3fa;padding-top:16px}
+.mdt-ket-hd{font-size:15px;font-weight:800;color:#0F2740;margin-bottom:12px}
+.mdt-block{margin-bottom:12px}
+.mdt-block-t{font-size:13px;font-weight:700;color:#0E9488;margin-bottom:4px}
+.mdt-block ul,.teach-sec-b ul{margin:0;padding-left:20px}
+.mdt-block li,.teach-sec-b li{font-size:13px;color:#334155;line-height:1.7}
+.mdt-final{font-size:13px;color:#334155;line-height:1.7;background:rgba(14,148,136,.06);border-radius:10px;padding:12px 14px;margin-top:8px}
+.teach-sec{border-bottom:1px solid #f0f4fa;padding:12px 0}
+.teach-sec-t{font-size:13.5px;font-weight:700;color:#0F2740;margin-bottom:6px}
+.teach-sec-b p{font-size:13px;color:#334155;line-height:1.6;margin:0}
+.teach-red li{color:#B91C1C}
+.teach-soc{margin-top:18px;background:rgba(14,148,136,.04);border-radius:12px;padding:14px}
+.teach-soc-hd{font-size:13.5px;font-weight:700;color:#0E9488;margin-bottom:10px}
+.teach-q{background:#fff;border:1px solid #e7eef8;border-radius:10px;padding:11px 13px;margin-bottom:8px;cursor:pointer}
+.teach-q-t{font-size:13px;font-weight:600;color:#0F2740;display:flex;gap:8px;align-items:flex-start}
+.teach-q-ic{color:#0E9488;font-weight:800;width:12px;display:inline-block}
+.teach-q-a{font-size:12.5px;color:#475569;line-height:1.6;margin-top:8px;padding-top:8px;border-top:1px dashed #e7eef8}
+.hist-overlay{position:fixed;inset:0;background:rgba(10,22,40,.5);backdrop-filter:blur(3px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px}
+.hist-modal{width:100%;max-width:560px;max-height:82vh;overflow:auto;background:#fff;border-radius:18px;padding:22px}
+.hist-head{display:flex;align-items:center;justify-content:space-between}
+.hist-title{font-size:17px;font-weight:800;color:#0F2740}
+.hist-sub{font-size:12px;color:#7A96C8;margin:4px 0 16px}
+.hist-list{display:flex;flex-direction:column;gap:10px}
+.hist-item{display:flex;gap:12px;align-items:center;border:1px solid #e7eef8;border-radius:13px;padding:13px;cursor:pointer;transition:all .15s}
+.hist-item:hover{border-color:#1D6FE8;background:rgba(29,111,232,.03)}
+.hist-item.cur{border-color:#1D6FE8;background:rgba(29,111,232,.06)}
+.hist-avatar{width:40px;height:40px;border-radius:11px;background:linear-gradient(135deg,#1D6FE8,#0E9488);color:#fff;font-weight:700;font-size:17px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.hist-info{flex:1;min-width:0}
+.hist-name{font-size:14px;font-weight:700;color:#0F2740}
+.hist-meta{font-size:11.5px;font-weight:500;color:#7A96C8}
+.hist-dx{font-size:12px;color:#475569;line-height:1.5;margin:3px 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.hist-foot{font-size:11px;color:#94a3b8}
+.hist-open{font-size:12px;font-weight:600;color:#1D6FE8;flex-shrink:0}
+.hist-link{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:500;color:#1D6FE8;background:none;border:none;cursor:pointer;margin-top:10px}
+`
+
 export default function App() {
+  const [authed, setAuthed] = useState(() => { try { return sessionStorage.getItem("mp_auth")==="1" } catch { return false } })
+  const login = () => { try { sessionStorage.setItem("mp_auth","1") } catch {} setAuthed(true) }
   const [state, setState] = useState("upload")
   const [report, setReport] = useState(null)
   const [hoSoText, setHoSoText] = useState("")
@@ -3306,6 +3952,9 @@ export default function App() {
   const [loadingMsg, setLoadingMsg] = useState("")
   const [uploadError, setUploadError] = useState(null)
   const [chatMessages, setChatMessages] = useState([])
+  const [showHistory, setShowHistory] = useState(false)
+  const [currentId, setCurrentId] = useState(null)
+
   useEffect(() => {
     document.title = "MedParcours AI"
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">'
@@ -3322,18 +3971,21 @@ export default function App() {
     link.type = "image/svg+xml"
     link.href = href
   }, [])
+
   const initChat = useCallback((rpt) => {
     setChatMessages([{role:"assistant", content:`Xin chào, tôi là **MedAmi**, trợ lý ảo của bác sĩ. Tôi đã đọc toàn bộ hồ sơ của bệnh nhân **${rpt.thong_tin_benh_nhan?.ho_ten || ""}**. Bác sĩ muốn hỏi gì?`}])
   }, [])
+
   const handleUpload = async (file) => {
     // Không có file: dùng hồ sơ mẫu (nút "Xem demo")
     if (!file) {
       setReport(MOCK_REPORT); setHoSoText(JSON.stringify(MOCK_REPORT)); setAnalysis(null)
-      initChat(MOCK_REPORT); setState("report"); return
+      initChat(MOCK_REPORT); setCurrentId("BN-A"); setState("report"); return
     }
     setLoading(true); setUploadError(null); setLoadingMsg("")
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), 240000)  // 240s cho hồ sơ rất dày
+
     // Áp dụng kết quả trả về từ backend (dùng chung cho cả 2 đường)
     const applyData = (data, status) => {
       if (!data || !data.success) {
@@ -3346,6 +3998,7 @@ export default function App() {
       initChat(data.report)
       setLoading(false); setState("report"); return true
     }
+
     const isPdf = (file.type === "application/pdf") || /\.pdf$/i.test(file.name || "")
     try {
       // ── Đường chính cho PDF: bóc chữ ở trình duyệt, chỉ gửi chữ (nhẹ) lên server ──
@@ -3375,6 +4028,7 @@ export default function App() {
           // pdf.js không tải được hoặc PDF lỗi -> quay về gửi file
         }
       }
+
       // ── Đường dự phòng: gửi nguyên file (PDF nhỏ, ảnh, hoặc bóc chữ thất bại) ──
       const fd = new FormData(); fd.append("file", file)
       const res = await fetch(`${API_URL}/analyze`, { method:"POST", body:fd, signal:ctrl.signal })
@@ -3395,16 +4049,29 @@ export default function App() {
       setLoading(false)
     }
   }
+
+  const loadRecord = (rec) => {
+    setReport(rec.data); setHoSoText(JSON.stringify(rec.data)); setAnalysis(null)
+    initChat(rec.data); setCurrentId(rec.id); setShowHistory(false); setUploadError(null); setState("report")
+  }
+
+  if (!authed) {
+    return (<><style>{CSS}</style><style>{EXTRA_CSS}</style><LoginPage onLogin={login}/></>)
+  }
+
   return (
     <>
       <style>{CSS}</style>
+      <style>{EXTRA_CSS}</style>
       <ErrorBoundary>
-        {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)}/>}
+        {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)} onOpenHistory={()=>setShowHistory(true)}/>}
         {state === "report" && report && (
           <ReportPage report={report} hoSoText={hoSoText} analysis={analysis}
-            onReset={()=>{setState("upload");setReport(null);setAnalysis(null);setChatMessages([])}}
-            chatMessages={chatMessages} setChatMessages={setChatMessages}/>
+            onReset={()=>{setState("upload");setReport(null);setAnalysis(null);setChatMessages([]);setCurrentId(null)}}
+            chatMessages={chatMessages} setChatMessages={setChatMessages}
+            onOpenHistory={()=>setShowHistory(true)}/>
         )}
+        {showHistory && <HistoryPanel onClose={()=>setShowHistory(false)} onOpen={loadRecord} currentId={currentId}/>}
       </ErrorBoundary>
     </>
   )
