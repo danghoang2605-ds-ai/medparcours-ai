@@ -3666,7 +3666,7 @@ function LoginPage({ onLogin }){
   const [p, setP] = useState("")
   const [err, setErr] = useState("")
   const submit = () => {
-    if(u.trim()==="hackaithon2026" && p==="medparcous"){ setErr(""); onLogin() }
+    if(u.trim()==="hackaithon2026" && p==="medparcours"){ setErr(""); onLogin() }
     else setErr("Tên đăng nhập hoặc mật khẩu không đúng.")
   }
   return (
@@ -3685,7 +3685,7 @@ function LoginPage({ onLogin }){
         </div>
         {err && <div className="login-err">{err}</div>}
         <button className="btn-primary login-btn" onClick={submit}>Đăng nhập</button>
-        <div className="login-hint">Demo: tài khoản <b>hackaithon2026</b> / mật khẩu <b>medparcous</b></div>
+        <div className="login-hint">Demo: tài khoản <b>hackaithon2026</b> / mật khẩu <b>medparcours</b></div>
       </div>
     </div>
   )
