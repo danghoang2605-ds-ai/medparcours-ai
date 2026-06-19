@@ -2029,7 +2029,7 @@ function LogoBar({ compact }) {
   )
 }
 
-function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, onOpenHistory }) {
+function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, onOpenHistory, onLogout }) {
   const [dragging, setDragging] = useState(false)
   const [staged, setStaged] = useState([])
   const [preview, setPreview] = useState(null)
@@ -2059,6 +2059,7 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
   return (
     <div className="upload-page">
       <div className="upload-bg-circle1" /><div className="upload-bg-circle2" />
+      <button className="up-logout" onClick={onLogout} title="Đăng xuất tài khoản"><Icon.Close d={12} color="#64748B"/>Đăng xuất</button>
       {preview && (
         <div className="fp-overlay" onClick={()=>setPreview(null)}>
           <div className="fp-modal" onClick={e=>e.stopPropagation()}>
@@ -2162,6 +2163,19 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
                 onDragLeave={()=>setDragging(false)}
                 onDrop={e=>{e.preventDefault();setDragging(false);addFiles(e.dataTransfer.files)}}>
                 {staged.map((s,i)=>{
+                  if(s.isAudio){
+                    const words=(s.text||"").trim().split(/\s+/).filter(Boolean).length
+                    return (
+                      <div key={i} className="stage-card">
+                        <button className="stage-x" onClick={()=>removeAt(i)} title="Xóa"><Icon.Close d={11} color="#64748B"/></button>
+                        <div className="stage-thumb" style={{background:"rgba(14,148,136,.1)"}} title={s.text}>
+                          <span className="stage-tag" style={{color:"#0E9488"}}>GHI ÂM</span>
+                        </div>
+                        <div className="stage-name" title={s.text}>{s.name}</div>
+                        <div className="stage-meta">{words} từ · giọng nói chuyển văn bản</div>
+                      </div>
+                    )
+                  }
                   const k = kindOf(s.name)
                   const canView = s.isImage || s.isPdf
                   return (
@@ -2190,7 +2204,12 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
             </div>
           )}
           {!isLoading&&staged.length===0&&<div style={{textAlign:"center"}}><span className="demo-link" onClick={()=>onUpload(null)}>Xem demo: hồ sơ Nguyễn Văn A <span style={{fontSize:10}}>▶</span></span> <button className="hist-link" onClick={onOpenHistory}><Icon.FileText d={13} color="#1D6FE8"/>Lịch sử bệnh án</button></div>}
-          {!isLoading && <AudioRecorder/>}
+          {!isLoading && (
+            <div className="rec-inline-wrap">
+              <div className="rec-inline-h"><Icon.Pulse d={13} color="#1D6FE8"/>Ghi âm lời dặn của bác sĩ - đính kèm cùng hồ sơ</div>
+              <AudioRecorder onAttach={(t)=>setStaged(prev=>[...prev,{name:"Ghi âm lời dặn", isAudio:true, text:t, size:t.length}])}/>
+            </div>
+          )}
         </div>
       </div>
       <LogoBar/>
@@ -2239,7 +2258,7 @@ function SidebarMinimap({ activeId, onNavigate }) {
 }
 
 // ─── REPORT PAGE ──────────────────────────────────────────────────────────────
-function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChatMessages, onOpenHistory }) {
+function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChatMessages, onOpenHistory, onLogout }) {
   const [tab, setTab] = useState("report")
   const [viewMode, setViewMode] = useState("clinical")
   useEffect(() => {
@@ -2321,9 +2340,12 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
                 <button key={key} className={`tab-btn${tab===key?" active":""}`} onClick={()=>setTab(key)}>{ic} {label}</button>
               ))}
             </div>
-            <button className="btn-action" onClick={onOpenHistory}><Icon.FileText d={13} color="#1D6FE8"/>Lịch sử</button>
-            <button className="btn-action btn-print" onClick={()=>triggerPrint(report, viewMode)}><Icon.Print d={13} color="#1D6FE8"/>Xuất báo cáo</button>
-            <button className="btn-action btn-back" onClick={onReset}><Icon.Back d={12} color="#7A96C8"/>Báo cáo mới</button>
+            <div className="tb-group">
+              <button className="tb-btn" onClick={onOpenHistory} title="Lịch sử bệnh án"><Icon.Clock d={14} color="#475569"/>Lịch sử</button>
+              <button className="tb-btn" onClick={()=>triggerPrint(report, viewMode)} title="Xuất báo cáo"><Icon.Print d={14} color="#475569"/>Xuất</button>
+              <button className="tb-btn" onClick={onReset} title="Phân tích hồ sơ mới"><Icon.Back d={13} color="#475569"/>Hồ sơ mới</button>
+              <button className="tb-btn danger" onClick={onLogout} title="Đăng xuất tài khoản"><Icon.Close d={13} color="#475569"/>Đăng xuất</button>
+            </div>
           </div>
         </div>
       </header>
@@ -3456,7 +3478,7 @@ function ChatTab({ report, hoSoText, messages, setMessages, mode }) {
         <div ref={bottomRef}/>
       </div>
       <div className="chat-suggestions">
-        {["Bệnh nhân có biến chứng gì sau mổ?","Đang dùng thuốc chống đông loại nào?","Kết quả siêu âm tim sau mổ?","Diễn biến CRP theo thời gian?"].map(s=>(
+        {chatSuggestions(mode).map(s=>(
           <button key={s} className="sug-chip" onClick={()=>send(s)} disabled={loading}>{s}</button>
         ))}
       </div>
@@ -3634,125 +3656,181 @@ function modeGreeting(mode, name){
   if(mode==="hoi_chan") return `Xin chào, tôi là **MedAmi** - thư ký y khoa của buổi hội chẩn. Tôi đã tổng hợp hồ sơ ca **${n}** và ý kiến các chuyên khoa. Anh/chị cần tôi làm rõ phần nào của biên bản hội chẩn?`
   return `Xin chào Bác sĩ, tôi là **MedAmi**. Tôi đã đọc xong hồ sơ bệnh nhân **${n}**. Bác sĩ muốn hỏi gì về ca này?`
 }
+function chatSuggestions(mode){
+  if(mode==="hoi_chan") return ["Tóm tắt kết luận hội chẩn?","Vấn đề ưu tiên số 1 là gì?","Điểm nào các khoa chưa đồng thuận?","Cần thêm cận lâm sàng gì?"]
+  if(mode==="teaching") return ["Tóm tắt ca bệnh trong 2 câu?","Chẩn đoán phân biệt gồm những gì?","Vì sao nghĩ đến suy tim?","Hướng điều trị và theo dõi?"]
+  return chatSuggestions(mode)
+}
+
+// ─── Tiện ích chung ───────────────────────────────────────────────────────────
+function clampN(n,a,b){ return Math.max(a,Math.min(b,Math.round(n))) }
+function riskTone(p){ return p>=80?"green":p>=60?"amber":"red" }
+function matchKw(text, kws){ const t=(text||"").toLowerCase(); return kws.some(k=>t.includes(k)) }
+function pickCanhBao(r, kws){ return (r.canh_bao_nguy_co||[]).filter(c=>matchKw(c.mo_ta, kws)) }
+function shortLabel(s){ return ((s||"").split(/[:\-]/)[0]||s||"").trim().slice(0,72) }
+function splitSentences(s){ return (s||"").split(/(?<=[.!?])\s+/).map(x=>x.trim()).filter(x=>x.length>2) }
 
 // ─── Engine Hội chẩn ảo (Virtual MDT) ─────────────────────────────────────────
 const SPEC_DEFS = [
-  { khoa:"Tim mạch", kw:["van","tim","ef","suy tim","nt-probnp","chênh áp","hở van","tăng áp","mạch vành","rung nhĩ"], reason:"Bệnh lý tim mạch (van tim, chức năng tim, suy tim) là vấn đề trung tâm của ca." },
-  { khoa:"Phẫu thuật Tim", kw:["mổ","phẫu thuật","sửa van","thay van","vòng van","nội soi","tuần hoàn ngoài cơ thể"], reason:"Bệnh nhân có can thiệp ngoại khoa tim, cần đánh giá kết quả mổ và chăm sóc hậu phẫu." },
-  { khoa:"Hồi sức tích cực", kw:["lactate","toan","máy thở","huyết động","vận mạch","phù phổi","sốc","hồi sức","tưới máu","an thần"], reason:"Giai đoạn hậu phẫu nặng cần hồi sức: huyết động, hô hấp và cân bằng nội môi." },
-  { khoa:"Truyền nhiễm", kw:["nhiễm","crp","pct","procalcitonin","viêm","bạch cầu","sepsis","kháng sinh","cấy","sốt"], reason:"Có dấu hiệu đáp ứng viêm/nhiễm khuẩn, cần đánh giá tác nhân và dùng kháng sinh hợp lý." },
-  { khoa:"Huyết học - Đông máu", kw:["inr","chống đông","đông máu","tiểu cầu","chảy máu","huyết khối"], reason:"Bệnh nhân dùng chống đông sau can thiệp van, cần cân bằng nguy cơ chảy máu và huyết khối." },
-  { khoa:"Thận - Tiết niệu", kw:["thận","creatinin","egfr","aki","lọc máu","niệu"], reason:"Có tổn thương thận cấp ảnh hưởng cân bằng dịch và liều thuốc thải qua thận." },
-  { khoa:"Dinh dưỡng lâm sàng", kw:["dinh dưỡng","albumin","suy kiệt","sonde","bmi","nuôi dưỡng"], reason:"Tình trạng suy kiệt/suy dinh dưỡng ảnh hưởng hồi phục, lành thương và cai máy thở." },
+  { khoa:"Tim mạch", relevance:"Rất cao", role:"Đánh giá chức năng tim, van tim và nguy cơ suy tim.", kw:["van","tim","ef","suy tim","nt-probnp","chênh áp","hở van","tăng áp","mạch vành","rung nhĩ"] },
+  { khoa:"Phẫu thuật Tim", relevance:"Rất cao", role:"Đánh giá kết quả mổ, vết mổ, dẫn lưu và biến chứng hậu phẫu.", kw:["mổ","phẫu thuật","sửa van","thay van","vòng van","nội soi","tuần hoàn ngoài cơ thể"] },
+  { khoa:"Hồi sức tích cực", relevance:"Rất cao", role:"Ổn định huyết động, hô hấp và cân bằng nội môi giai đoạn hậu phẫu.", kw:["lactate","toan","máy thở","huyết động","vận mạch","phù phổi","sốc","hồi sức","tưới máu","an thần"] },
+  { khoa:"Truyền nhiễm", relevance:"Cao", role:"Đánh giá nhiễm khuẩn, lựa chọn và xuống thang kháng sinh.", kw:["nhiễm","crp","pct","procalcitonin","viêm","bạch cầu","sepsis","kháng sinh","cấy","sốt"] },
+  { khoa:"Huyết học - Đông máu", relevance:"Cao", role:"Cân bằng nguy cơ chảy máu và huyết khối khi dùng chống đông.", kw:["inr","chống đông","đông máu","tiểu cầu","chảy máu","huyết khối"] },
+  { khoa:"Thận - Tiết niệu", relevance:"Cao", role:"Theo dõi chức năng thận, cân bằng dịch và liều thuốc thải qua thận.", kw:["thận","creatinin","egfr","aki","lọc máu","niệu"] },
+  { khoa:"Dinh dưỡng lâm sàng", relevance:"Trung bình", role:"Đánh giá và hỗ trợ dinh dưỡng để hồi phục và lành thương.", kw:["dinh dưỡng","albumin","suy kiệt","sonde","bmi","nuôi dưỡng"] },
 ]
 const SPEC_GAP = {
-  "Tim mạch":"Chưa có siêu âm tim kiểm tra lại sau can thiệp để khẳng định chức năng và mức hở van.",
-  "Phẫu thuật Tim":"Cần theo dõi vết mổ và dẫn lưu để loại trừ biến chứng ngoại khoa.",
-  "Hồi sức tích cực":"Xu hướng huyết động khi giảm vận mạch chưa hoàn toàn chắc chắn.",
-  "Truyền nhiễm":"Chưa có/đang chờ kết quả cấy định danh và kháng sinh đồ.",
-  "Huyết học - Đông máu":"INR còn dao động, cần thêm các lần đo để khẳng định ổn định.",
-  "Thận - Tiết niệu":"Diễn biến chức năng thận khi điều chỉnh lợi tiểu chưa chắc chắn.",
-  "Dinh dưỡng lâm sàng":"Khả năng dung nạp ăn đường miệng và nhu cầu năng lượng chưa được đánh giá đầy đủ.",
+  "Tim mạch":"Siêu âm tim kiểm tra lại sau can thiệp (đánh giá chức năng và mức hở van).",
+  "Phẫu thuật Tim":"Theo dõi vết mổ và dẫn lưu để loại trừ biến chứng ngoại khoa.",
+  "Hồi sức tích cực":"Xu hướng huyết động khi giảm dần vận mạch.",
+  "Truyền nhiễm":"Kết quả cấy định danh và kháng sinh đồ.",
+  "Huyết học - Đông máu":"Thêm các lần đo INR để khẳng định ổn định.",
+  "Thận - Tiết niệu":"Diễn biến chức năng thận khi điều chỉnh lợi tiểu.",
+  "Dinh dưỡng lâm sàng":"Đánh giá nhu cầu năng lượng và khả năng dung nạp ăn đường miệng.",
 }
-function matchKw(text, kws){ const t=(text||"").toLowerCase(); return kws.some(k=>t.includes(k)) }
-function pickCanhBao(r, kws){ return (r.canh_bao_nguy_co||[]).filter(c=>matchKw(c.mo_ta, kws)) }
-function shortLabel(s){ return ((s||"").split(/[:\-]/)[0]||s||"").trim().slice(0,64) }
-function buildAskMDT(r, names, has){
-  const f = (arr)=>arr.filter(a=>names.includes(a.khoa))
-  const out = []
+function deriveRisk(r){
+  const meta=(k)=>(r.xet_nghiem_meta||[]).find(x=>(x.key||"").toLowerCase()===k.toLowerCase())
+  const out=[]
+  const ef=meta("EF"); if(ef&&ef.rawVal!=null) out.push({ten:"Chức năng tim",pct:clampN(Math.min(95,ef.rawVal+22),20,95)})
+  const bnp=meta("NT-proBNP"); if(bnp&&bnp.rawVal!=null){ const v=bnp.rawVal; out.push({ten:"Kiểm soát suy tim",pct:v<1000?75:v<2500?62:50}) }
+  const crp=meta("CRP"); if(crp&&crp.rawVal!=null){ const v=crp.rawVal; out.push({ten:"Kiểm soát nhiễm khuẩn",pct:v<10?85:v<50?64:v<120?55:45}) }
+  const egfr=meta("eGFR"); if(egfr&&egfr.rawVal!=null){ const v=egfr.rawVal; out.push({ten:"Chức năng thận",pct:v>=60?85:v>=45?60:45}) }
+  const inr=meta("INR"); if(inr){ const tr=inr.trend||[]; const hadHigh=tr.some(x=>x>3)||(inr.rawVal>3); const inRange=inr.rawVal>=2&&inr.rawVal<=3; out.push({ten:"Kiểm soát chống đông",pct:hadHigh?48:inRange?82:62}) }
+  return out.map(o=>({...o,tone:riskTone(o.pct)}))
+}
+function buildThread(r, names){
+  const t=[]
+  const good=(r.clinical_takeaway||[]).find(x=>x.loai==="good")
+  if(names.includes("Tim mạch")) t.push({khoa:"Tim mạch", text: good?good.txt:"Chức năng tim ổn định, các chỉ số tim mạch đang cải thiện."})
+  if(names.includes("Truyền nhiễm")) t.push({khoa:"Truyền nhiễm", text:"Đồng ý. Tuy nhiên CRP/PCT từng rất cao, chưa thể loại trừ hoàn toàn nhiễm khuẩn tồn dư."})
+  if(names.includes("Huyết học - Đông máu")) t.push({khoa:"Huyết học - Đông máu", text:"Đồng ý. Tuy nhiên INR còn dao động, cần thận trọng nguy cơ chảy máu nếu can thiệp."})
+  if(names.includes("Hồi sức tích cực")) t.push({khoa:"Hồi sức tích cực", text:"Bổ sung: cần cai vận mạch và hỗ trợ hô hấp từng bước theo huyết động."})
+  if(names.includes("Thận - Tiết niệu")) t.push({khoa:"Thận - Tiết niệu", text:"Đồng ý. Lưu ý điều chỉnh liều thuốc và lợi tiểu theo chức năng thận."})
+  if(names.includes("Dinh dưỡng lâm sàng")) t.push({khoa:"Dinh dưỡng lâm sàng", text:"Nguy cơ dễ bị bỏ sót: suy kiệt làm chậm hồi phục và cai máy thở, cần nuôi dưỡng tích cực."})
+  return t
+}
+function buildAskMDT(r, names){
+  const f=(arr)=>arr.filter(a=>names.includes(a.khoa))
+  const text=[r.chan_doan_chinh,...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta),...(r.thuoc_cuoi_ky||[]).map(t=>t.nhom)].join(" ")
+  const has=(...k)=>matchKw(text,k)
+  const out=[]
+  if(has("kháng sinh","nhiễm","crp","pct")) out.push({ q:"Có nên xuống thang kháng sinh không?",
+    answers:f([{khoa:"Truyền nhiễm",stance:"Nghiêng về Có",ly_do:"CRP/PCT giảm mạnh, lâm sàng cải thiện."},{khoa:"Hồi sức tích cực",stance:"Trung lập",ly_do:"Cần ổn định nguồn nhiễm trước khi thu hẹp phổ."},{khoa:"Tim mạch",stance:"Trung lập",ly_do:"Ưu tiên đối chiếu kết quả cấy vi sinh."}]),
+    moderator:{ muc:"Trung bình", khuyen_nghi:"Tiếp tục theo dõi marker viêm và cân nhắc xuống thang khi có bằng chứng vi sinh phù hợp." } })
   if(has("vận mạch","dobutamine","tăng co")) out.push({ q:"Có nên giảm/ngừng thuốc vận mạch (Dobutamine)?",
-    answers:f([{khoa:"Hồi sức tích cực",tra_loi:"Chỉ giảm liều từng bước khi huyết động ổn định và lactate về bình thường; không ngừng đột ngột."},{khoa:"Tim mạch",tra_loi:"Đánh giá cung lượng tim/EF và đáp ứng trước khi cai, theo dõi tái phát suy tim."}]),
-    consensus:"Giảm dần Dobutamine theo huyết động và lactate, đánh giá lại chức năng tim trước mỗi bước." })
-  out.push({ q:"Đã đủ điều kiện chuyển bệnh nhân ra khỏi Hồi sức (ICU) chưa?",
-    answers:f([{khoa:"Hồi sức tích cực",tra_loi:"Khi cai được vận mạch, hô hấp tự thở ổn định và không cần can thiệp cấp."},{khoa:"Truyền nhiễm",tra_loi:"Khi marker nhiễm khuẩn (CRP, PCT) giảm rõ và không sốt."},{khoa:"Tim mạch",tra_loi:"Khi huyết động ổn định, không còn phụ thuộc thuốc trợ tim."}]),
-    consensus:"Cân nhắc chuyển khoa khi đã cai vận mạch, hô hấp - huyết động ổn định và nhiễm khuẩn được kiểm soát." })
-  if(has("kháng sinh","nhiễm","sepsis","crp","pct")) out.push({ q:"Có nên tiếp tục kháng sinh phổ rộng?",
-    answers:f([{khoa:"Truyền nhiễm",tra_loi:"Xuống thang theo kết quả cấy và đáp ứng; nếu cấy âm tính và lâm sàng cải thiện thì thu hẹp phổ."},{khoa:"Hồi sức tích cực",tra_loi:"Duy trì đến khi kiểm soát ổn định nguồn nhiễm, tránh ngừng quá sớm."}]),
-    consensus:"Tiếp tục và đánh giá lại theo cấy cùng xu hướng CRP/PCT để xuống thang đúng thời điểm." })
+    answers:f([{khoa:"Hồi sức tích cực",stance:"Nghiêng về Có",ly_do:"Huyết động cải thiện, lactate đã giảm."},{khoa:"Tim mạch",stance:"Trung lập",ly_do:"Cần đánh giá cung lượng tim/EF trước khi cai."}]),
+    moderator:{ muc:"Cao", khuyen_nghi:"Giảm dần theo huyết động và lactate, không ngừng đột ngột; đánh giá lại chức năng tim mỗi bước." } })
+  out.push({ q:"Đã đủ điều kiện chuyển bệnh nhân ra khỏi Hồi sức (ICU)?",
+    answers:f([{khoa:"Hồi sức tích cực",stance:"Nghiêng về Có",ly_do:"Đã cai vận mạch, hô hấp tự thở ổn định."},{khoa:"Truyền nhiễm",stance:"Trung lập",ly_do:"Chờ marker nhiễm khuẩn giảm thêm và không sốt."},{khoa:"Tim mạch",stance:"Nghiêng về Có",ly_do:"Huyết động ổn, không còn phụ thuộc trợ tim."}]),
+    moderator:{ muc:"Trung bình", khuyen_nghi:"Cân nhắc chuyển khoa khi huyết động - hô hấp ổn định và nhiễm khuẩn được kiểm soát." } })
   return out
 }
 function deriveMDT(r){
-  const text = [r.chan_doan_chinh, r.tom_tat_toan_canh, ...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta), ...(r.thuoc_cuoi_ky||[]).map(t=>t.nhom), r.phau_thuat&&r.phau_thuat.phuong_phap].join(" ")
-  const has = (...k)=>matchKw(text,k)
-  const specialties = SPEC_DEFS.filter(s=>matchKw(text,s.kw)).map(s=>{
-    const cbs = pickCanhBao(r, s.kw)
-    const danh_gia = cbs.length ? cbs.map(c=>c.mo_ta)
+  const text=[r.chan_doan_chinh,r.tom_tat_toan_canh,...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta),...(r.thuoc_cuoi_ky||[]).map(t=>t.nhom),r.phau_thuat&&r.phau_thuat.phuong_phap].join(" ")
+  const specialties=SPEC_DEFS.filter(s=>matchKw(text,s.kw)).map(s=>{
+    const cbs=pickCanhBao(r,s.kw)
+    const fullEval = cbs.length ? cbs.map(c=>c.mo_ta)
       : (s.khoa==="Tim mạch" ? [expandAbbr(r.chan_doan_chinh)]
       : (s.khoa==="Phẫu thuật Tim" ? [`Kết quả mổ: ${(r.phau_thuat&&r.phau_thuat.ket_qua)||"theo tường trình phẫu thuật"}`]
-      : ["Phối hợp theo dõi chung, chưa ghi nhận vấn đề chuyên biệt nổi bật."]))
-    const de_xuat = (r.hanh_dong_uu_tien||[]).filter(a=>matchKw(a.viec+" "+a.ly_do, s.kw)).map(a=>a.viec)
-    const hasNum = cbs.some(c=>/\d/.test(c.can_cu||""))
-    const level = (cbs.length && hasNum) ? "Cao" : (cbs.length ? "Trung bình" : "Thấp")
-    return { khoa:s.khoa, reason:s.reason, danh_gia, de_xuat, muc_cao:cbs.some(c=>c.muc_do==="cao"),
-      confidence:{ level, ho_tro:cbs.map(c=>c.can_cu).filter(Boolean), con_thieu:SPEC_GAP[s.khoa]||"Cần thêm dữ liệu theo dõi để tăng độ chắc chắn." } }
+      : ["Phối hợp theo dõi chung; chưa ghi nhận vấn đề chuyên biệt nổi bật."]))
+    const ket_luan_chinh = fullEval.slice(0,2).map(shortLabel)
+    const de_xuat=(r.hanh_dong_uu_tien||[]).filter(a=>matchKw(a.viec+" "+a.ly_do,s.kw)).map(a=>a.viec).slice(0,3)
+    if(de_xuat.length===0 && s.khoa==="Tim mạch") de_xuat.push("Theo dõi NT-proBNP, siêu âm tim kiểm tra")
+    const hasNum=cbs.some(c=>/\d/.test(c.can_cu||""))
+    const conf = (cbs.length&&hasNum)?90:(cbs.length?72:58)
+    return { khoa:s.khoa, relevance:s.relevance, role:s.role, ket_luan_chinh, de_xuat,
+      con_thieu:SPEC_GAP[s.khoa]||"Cần thêm dữ liệu theo dõi.", confidence:conf, muc_cao:cbs.some(c=>c.muc_do==="cao"),
+      details:{ danh_gia:fullEval, ho_tro:cbs.map(c=>c.can_cu).filter(Boolean) } }
   })
-  const order = ["sốc","sepsis","nhiễm","lactate","toan","hô hấp","máy thở","phù phổi","huyết động","thận","creatinin","egfr","inr","chống đông","dinh dưỡng","albumin","loét"]
-  const sev = c=>{ const t=c.mo_ta.toLowerCase(); const i=order.findIndex(k=>t.includes(k)); return i<0?999:i }
-  const priorities = (r.canh_bao_nguy_co||[]).filter(c=>c.muc_do==="cao").slice().sort((a,b)=>sev(a)-sev(b)).slice(0,3).map((c,i)=>({ rank:i+1, ten:shortLabel(c.mo_ta), ly_do:c.mo_ta }))
-  const agreement = [`Thống nhất chẩn đoán chính: ${expandAbbr(r.chan_doan_chinh)}`]
+  const names=specialties.map(s=>s.khoa)
+  const order=["sốc","sepsis","nhiễm","lactate","toan","hô hấp","máy thở","phù phổi","huyết động","thận","creatinin","egfr","inr","chống đông","dinh dưỡng","albumin","loét"]
+  const sev=c=>{ const t=c.mo_ta.toLowerCase(); const i=order.findIndex(k=>t.includes(k)); return i<0?999:i }
+  const priorities=(r.canh_bao_nguy_co||[]).filter(c=>c.muc_do==="cao").slice().sort((a,b)=>sev(a)-sev(b)).slice(0,3).map((c,i)=>({rank:i+1,ten:shortLabel(c.mo_ta),ly_do:c.mo_ta}))
+  const has=(...k)=>matchKw(text,k)
+  const agreement=[`Thống nhất chẩn đoán chính: ${expandAbbr(r.chan_doan_chinh)}`]
   ;(r.clinical_takeaway||[]).filter(t=>t.loai==="good").forEach(t=>agreement.push(t.txt))
-  const concern = (r.problem_status&&r.problem_status.hien_tai||[]).filter(p=>p.trang_thai==="active").map(p=>`${p.ten}: ${p.mo_ta}`)
+  const concern=(r.problem_status&&r.problem_status.hien_tai||[]).filter(p=>p.trang_thai==="active").map(p=>`${p.ten}: ${p.mo_ta}`)
   ;(r.canh_bao_nguy_co||[]).filter(c=>c.muc_do==="cao").slice(0,2).forEach(c=>concern.push(c.mo_ta))
-  const uncertainty = []
+  const uncertainty=[]
   if(has("van","sửa van","thay van")) uncertainty.push("Chưa có siêu âm tim kiểm tra lại sau mổ để khẳng định mức hở van và chức năng tim.")
-  if(has("nhiễm","cấy","crp","pct")) uncertainty.push("Cần khẳng định tác nhân nhiễm khuẩn (cấy định danh, kháng sinh đồ) trước khi điều chỉnh kháng sinh.")
+  if(has("nhiễm","cấy","crp","pct")) uncertainty.push("Chưa khẳng định tác nhân nhiễm khuẩn (cấy định danh, kháng sinh đồ).")
   if(has("dinh dưỡng","albumin","sonde")) uncertainty.push("Khả năng dung nạp dinh dưỡng đường miệng và thời điểm rút nuôi dưỡng tĩnh mạch chưa rõ.")
-  if(uncertainty.length===0) uncertainty.push("Một số dữ liệu theo dõi còn thiếu, cần bổ sung để khẳng định hướng xử trí.")
-  const disagreement = []
-  if(has("vận mạch","dobutamine","tăng co")) disagreement.push("Thời điểm cai thuốc vận mạch: cai sớm để tránh tác dụng phụ, hay duy trì để bảo đảm tưới máu?")
-  if(has("kháng sinh","nhiễm","sepsis","crp","pct")) disagreement.push("Kháng sinh phổ rộng: tiếp tục đủ liệu trình hay xuống thang sớm theo đáp ứng và kết quả cấy?")
-  if(has("inr","chống đông")) disagreement.push("Mục tiêu INR: giữ mức thấp (gần 2.0) để giảm chảy máu, hay chuẩn 2.0-3.0 để phòng huyết khối van?")
-  const consensus = (r.ket_luan_giai_doan && (r.ket_luan_giai_doan[3]||r.ket_luan_giai_doan[2])) || r.tom_tat_toan_canh.slice(0,260)
-  return { specialties, priorities, discussion:{agreement,concern,uncertainty,disagreement}, ask_mdt:buildAskMDT(r, specialties.map(s=>s.khoa), has), consensus }
+  if(uncertainty.length===0) uncertainty.push("Một số dữ liệu theo dõi còn thiếu, cần bổ sung.")
+  const disagreement=[]
+  if(has("vận mạch","dobutamine","tăng co")) disagreement.push("Thời điểm cai vận mạch: cai sớm để tránh tác dụng phụ hay duy trì để bảo đảm tưới máu?")
+  if(has("kháng sinh","nhiễm","sepsis","crp","pct")) disagreement.push("Kháng sinh phổ rộng: tiếp tục đủ liệu trình hay xuống thang sớm theo đáp ứng?")
+  if(has("inr","chống đông")) disagreement.push("Mục tiêu INR: giữ thấp (gần 2.0) để giảm chảy máu hay chuẩn 2.0-3.0 để phòng huyết khối?")
+  const consensus=(r.ket_luan_giai_doan&&(r.ket_luan_giai_doan[3]||r.ket_luan_giai_doan[2]))||r.tom_tat_toan_canh.slice(0,260)
+  return { risk:deriveRisk(r), specialties, priorities, thread:buildThread(r,names), discussion:{agreement,concern,uncertainty,disagreement}, ask_mdt:buildAskMDT(r,names), consensus }
 }
 
-// ─── Engine Giảng dạy (theo khung bệnh án ngoại khoa HMU) ─────────────────────
+// ─── Engine Giảng dạy (khung bệnh án ngoại khoa HMU + tutor) ──────────────────
+function buildDecisions(r){
+  const text=[r.chan_doan_chinh,...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta)].join(" ")
+  const has=(...k)=>matchKw(text,k)
+  const out=[]
+  if(has("lactate","toan")) out.push({ tinh_huong:"Hậu phẫu, lactate tăng cao kèm toan chuyển hóa, bệnh nhân còn phụ thuộc thuốc vận mạch.",
+    options:[{k:"A",t:"Giảm vận mạch ngay"},{k:"B",t:"Hồi sức tối ưu huyết động, theo dõi lactate clearance"},{k:"C",t:"Cho ăn đường miệng sớm"},{k:"D",t:"Ngừng theo dõi sát"}],
+    dung:"B", giai_thich:"Lactate cao phản ánh giảm tưới máu mô; ưu tiên tối ưu cung lượng tim và theo dõi xu hướng lactate. Giảm vận mạch quá sớm có thể làm nặng tụt tưới máu." })
+  if(has("inr","chống đông")) out.push({ tinh_huong:"Bệnh nhân vừa mổ tim, INR vọt lên ngưỡng nguy cơ chảy máu.",
+    options:[{k:"A",t:"Tăng liều chống đông"},{k:"B",t:"Giữ nguyên liều"},{k:"C",t:"Tạm ngừng/giảm liều và đánh giá nguy cơ chảy máu"},{k:"D",t:"Truyền chế phẩm máu ngay"}],
+    dung:"C", giai_thich:"INR vượt mục tiêu trên bệnh nhân vừa phẫu thuật làm tăng nguy cơ chảy máu; cần giảm/tạm ngừng và đánh giá. Đảo ngược bằng chế phẩm chỉ khi có chảy máu hoặc cần can thiệp." })
+  if(out.length===0 && (r.canh_bao_nguy_co||[]).length){ const c=r.canh_bao_nguy_co[0]
+    out.push({ tinh_huong:c.mo_ta, options:[{k:"A",t:"Theo dõi tiếp"},{k:"B",t:"Xử trí theo ưu tiên đã nêu"},{k:"C",t:"Cho xuất viện"},{k:"D",t:"Bỏ qua"}], dung:"B", giai_thich:"Đây là vấn đề ưu tiên cao, cần can thiệp theo hướng đã nêu." }) }
+  return out
+}
 function deriveTeaching(r){
-  const p = r.thong_tin_benh_nhan
-  const dx = expandAbbr(r.chan_doan_chinh)
-  const dxl = (r.chan_doan_chinh||"").toLowerCase()
-  const hanh_chinh = `${p.ho_ten}, ${p.tuoi} tuổi, ${p.gioi_tinh}. Địa chỉ: ${p.dia_chi||"-"}. Vào viện: ${p.ngay_vao_vien}. Số bệnh án: ${p.so_benh_an}.`
-  const benh_su = (r.dien_bien_lam_sang||[]).map(d=>`${d.ngay}: ${d.mo_ta}`)
-  const dst = r.dau_hieu_sinh_ton
-  const kham = [
-    dst ? `Dấu hiệu sinh tồn (${dst.ngay}): HA ${dst.ha_tt}/${dst.ha_ttr} mmHg, mạch ${dst.mach} l/ph, nhiệt độ ${dst.nhiet_do}, nhịp thở ${dst.nhip_tho}, SpO2 ${dst.spo2}%${dst.lactate!=null?`, lactate ${dst.lactate}`:""}.` : "Theo dõi toàn trạng và các cơ quan theo diễn biến.",
-    "Khám tuần hoàn: trọng tâm tiếng tim, tiếng thổi và dấu hiệu suy tim (theo trình tự Nhìn - Sờ - Gõ - Nghe).",
+  const p=r.thong_tin_benh_nhan
+  const dx=expandAbbr(r.chan_doan_chinh)
+  const dxl=(r.chan_doan_chinh||"").toLowerCase()
+  const dst=r.dau_hieu_sinh_ton
+  const kham=[
+    dst?`Dấu hiệu sinh tồn (${dst.ngay}): HA ${dst.ha_tt}/${dst.ha_ttr} mmHg, mạch ${dst.mach} l/ph, nhiệt độ ${dst.nhiet_do}, nhịp thở ${dst.nhip_tho}, SpO2 ${dst.spo2}%${dst.lactate!=null?`, lactate ${dst.lactate}`:""}.`:"Theo dõi toàn trạng và các cơ quan theo diễn biến.",
+    "Khám tuần hoàn: trọng tâm tiếng tim, tiếng thổi và dấu hiệu suy tim (Nhìn - Sờ - Gõ - Nghe).",
     "Khám hô hấp, tiêu hóa, thận - tiết niệu: phát hiện biến chứng và đánh giá cơ quan liên quan.",
   ]
-  const ddx = []
+  const ddx=[]
   if(matchKw(dxl,["hở van","hohl","hở van hai lá","hở van ba lá"])) ddx.push("Hở van do thoái hóa (sa van, đứt dây chằng) với hở van cơ năng do giãn vòng van / bệnh cơ tim.")
   if(matchKw(dxl,["hẹp","hhoc","đmc"])) ddx.push("Hẹp van ĐMC do thoái hóa vôi với van ĐMC hai mảnh bẩm sinh hoặc do thấp tim.")
   if(matchKw(dxl,["suy tim"])) ddx.push("Suy tim do bệnh van tim với suy tim do bệnh cơ tim giãn / thiếu máu cục bộ.")
   if(matchKw(dxl,["tăng áp"])) ddx.push("Tăng áp ĐMP nhóm 2 (do tim trái) với các nhóm tăng áp ĐMP khác.")
   if(ddx.length===0) ddx.push("Phân biệt nguyên nhân dựa trên bệnh cảnh và cận lâm sàng đặc hiệu.")
-  const bien_luan = (r.ly_luan_lam_sang||[]).map(l=>`${l.tieu_de}: ${l.noi_dung}`)
-  const can_lam_sang = (r.hanh_dong_uu_tien||[]).map(a=>({viec:a.viec, ly_do:a.ly_do}))
-  const dieu_tri_ngoai = r.phau_thuat ? `Ngoại khoa (${r.phau_thuat.ngay}): ${r.phau_thuat.phuong_phap}` : ""
-  const dieu_tri_noi = (r.thuoc_cuoi_ky||[]).map(m=>`${m.nhom}: ${m.ten_thuoc} (${m.cach_dung})`)
-  const tien_luong = (r.ket_luan_giai_doan && (r.ket_luan_giai_doan[3]||r.ket_luan_giai_doan[2])) || ""
-  const du_phong = ["Phòng nhiễm trùng vết mổ và biến chứng nằm viện (viêm phổi, loét tỳ đè, nhiễm trùng tiểu).", ...(r.hanh_dong_uu_tien||[]).map(a=>a.viec)]
-  const ket_luan = `Bệnh chính: ${dx} Biến chứng/vấn đề kèm theo: ${(r.canh_bao_nguy_co||[]).filter(c=>c.muc_do==="cao").map(c=>shortLabel(c.mo_ta)).join("; ")||"tiếp tục theo dõi"}.`
-  const muc_tieu = [
-    "Khai thác bệnh sử và khám lâm sàng theo khung bệnh án ngoại khoa (HMU).",
-    "Tóm tắt thành hội chứng, đưa ra chẩn đoán sơ bộ và chẩn đoán phân biệt.",
-    "Biện luận lâm sàng và đề nghị cận lâm sàng hợp lý.",
-    "Trình bày nguyên tắc điều trị, tiên lượng và dự phòng biến chứng hậu phẫu.",
-  ]
-  const socratic = [
-    { q:"Từ bệnh sử và thăm khám, anh/chị tóm tắt ca này thành những hội chứng nào?", a:r.tom_tat_toan_canh.slice(0,320) },
-    { q:"Chẩn đoán sơ bộ là gì và dựa vào những dấu hiệu nào?", a:`${dx} Dựa trên bệnh cảnh suy tim, khám tim mạch và siêu âm tim.` },
-    { q:"Cần phân biệt với những bệnh nào? Vì sao?", a:ddx.join(" ") },
-    { q:"Đề nghị cận lâm sàng nào để khẳng định/loại trừ và kỳ vọng kết quả gì?", a:can_lam_sang.map(c=>c.viec).join("; ") },
-    { q:"Nguyên tắc điều trị và theo dõi hậu phẫu của ca này?", a:`${dieu_tri_ngoai}. Nội khoa: ${dieu_tri_noi.join("; ")}.` },
-    { q:"Tiên lượng và dự phòng biến chứng nên lưu ý gì?", a:(tien_luong||du_phong.join("; ")) },
-  ]
-  return { dx, hanh_chinh, ly_do:r.ly_do_vao_vien, benh_su, tien_su:r.tien_su_benh, kham, tom_tat:r.tom_tat_toan_canh, chan_doan_so_bo:dx, ddx, bien_luan, can_lam_sang, chan_doan_xac_dinh:`${dx} (khẳng định bằng siêu âm tim, xét nghiệm và tường trình phẫu thuật).`, dieu_tri_ngoai, dieu_tri_noi, tien_luong, du_phong, ket_luan, muc_tieu, socratic }
+  const red_flags=(r.canh_bao_nguy_co||[]).filter(c=>c.muc_do==="cao").map(c=>({ dau_hieu:shortLabel(c.can_cu||c.mo_ta), y_nghia:c.mo_ta }))
+  const reasoning_score={ items:[
+    {ten:"Khai thác bệnh sử", score:9, nx:"Nắm tốt diễn tiến trước - trong - sau mổ."},
+    {ten:"Tóm tắt bệnh án", score:8, nx:"Cần làm nổi bật hơn các hội chứng chính."},
+    {ten:"Chẩn đoán phân biệt", score:7, nx:"Bổ sung phân biệt nguyên nhân của tổn thương van."},
+    {ten:"Chỉ định cận lâm sàng", score:8, nx:"Hợp lý; nên nêu rõ kết quả kỳ vọng."},
+    {ten:"Lập kế hoạch điều trị", score:9, nx:"Toàn diện cả nội và ngoại khoa."},
+  ], overall:82 }
+  return {
+    dx, hanh_chinh:`${p.ho_ten}, ${p.tuoi} tuổi, ${p.gioi_tinh}. Địa chỉ: ${p.dia_chi||"-"}. Vào viện: ${p.ngay_vao_vien}. Số bệnh án: ${p.so_benh_an}.`,
+    ly_do:r.ly_do_vao_vien, benh_su:(r.dien_bien_lam_sang||[]).map(d=>`${d.ngay}: ${d.mo_ta}`), tien_su:r.tien_su_benh, kham,
+    tom_tat:splitSentences(r.tom_tat_toan_canh), chan_doan_so_bo:dx, ddx,
+    bien_luan:(r.ly_luan_lam_sang||[]).map(l=>`${l.tieu_de}: ${l.noi_dung}`),
+    can_lam_sang:(r.hanh_dong_uu_tien||[]).map(a=>({viec:a.viec,ly_do:a.ly_do})),
+    dieu_tri_ngoai:r.phau_thuat?`Ngoại khoa (${r.phau_thuat.ngay}): ${r.phau_thuat.phuong_phap}`:"",
+    dieu_tri_noi:(r.thuoc_cuoi_ky||[]).map(m=>`${m.nhom}: ${m.ten_thuoc}`),
+    tien_luong:(r.ket_luan_giai_doan&&(r.ket_luan_giai_doan[3]||r.ket_luan_giai_doan[2]))||"",
+    red_flags, decisions:buildDecisions(r), reasoning_score,
+    muc_tieu:["Khai thác bệnh sử và khám lâm sàng theo khung bệnh án ngoại khoa (HMU).","Tóm tắt thành hội chứng, chẩn đoán sơ bộ và phân biệt.","Biện luận và đề nghị cận lâm sàng hợp lý.","Trình bày điều trị, tiên lượng và dự phòng biến chứng."],
+    socratic:[
+      { q:"Từ bệnh sử và thăm khám, hãy tóm tắt ca này bằng 1-2 câu (nêu các hội chứng chính).", a:splitSentences(r.tom_tat_toan_canh).slice(0,2).join(" ") },
+      { q:"Từ các dữ kiện hiện có, anh/chị nghĩ tới chẩn đoán sơ bộ nào và dựa vào đâu?", a:`${dx} Dựa trên bệnh cảnh suy tim, khám tim mạch và siêu âm tim.` },
+      { q:"Vì sao nghĩ đến chẩn đoán đó? Dấu hiệu nào ủng hộ, dữ kiện nào chống lại?", a:(r.ly_luan_lam_sang&&r.ly_luan_lam_sang[0]?r.ly_luan_lam_sang[0].noi_dung:ddx.join(" ")) },
+      { q:"Cần phân biệt với những bệnh nào?", a:ddx.join(" ") },
+      { q:"Đề nghị cận lâm sàng nào và kỳ vọng kết quả gì?", a:(r.hanh_dong_uu_tien||[]).map(a=>a.viec).join("; ") },
+      { q:"Trình bày nguyên tắc điều trị và theo dõi hậu phẫu.", a:`${r.phau_thuat?("Ngoại khoa: "+r.phau_thuat.phuong_phap+". "):""}Nội khoa: ${(r.thuoc_cuoi_ky||[]).map(m=>m.nhom).join(", ")}.` },
+    ],
+  }
 }
 
 // ─── Đăng nhập (demo) ─────────────────────────────────────────────────────────
 function LoginPage({ onLogin }){
   const [u, setU] = useState("")
   const [p, setP] = useState("")
+  const [showPw, setShowPw] = useState(false)
   const [err, setErr] = useState("")
   const submit = () => {
     if(u.trim()==="hackaithon2026" && p==="medparcours"){ setErr(""); onLogin() }
@@ -3772,13 +3850,20 @@ function LoginPage({ onLogin }){
           </div>
           <div className="login-field">
             <label>Mật khẩu</label>
-            <input type="password" value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Nhập mật khẩu"/>
+            <div className="pw-wrap">
+              <input type={showPw?"text":"password"} value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Nhập mật khẩu" style={{paddingRight:"40px"}}/>
+              <button type="button" className="pw-eye" onClick={()=>setShowPw(s=>!s)} title={showPw?"Ẩn mật khẩu":"Hiện mật khẩu"} aria-label="Hiện/ẩn mật khẩu">
+                {showPw
+                  ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                  : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>}
+              </button>
+            </div>
           </div>
           {err && <div className="login-err"><Icon.Alert d={14} color="#B91C1C"/>{err}</div>}
           <button className="btn-primary login-btn" onClick={submit}>Đăng nhập</button>
           <div className="login-hint">
-            <div className="login-hint-row"><span>Tài khoản demo</span><b>hackaithon2026</b></div>
-            <div className="login-hint-row"><span>Mật khẩu demo</span><b>medparcours</b></div>
+            <div className="login-hint-row"><span>Tài khoản dùng thử</span><b>hackaithon2026</b></div>
+            <div className="login-hint-row"><span>Mật khẩu</span><b>medparcours</b></div>
           </div>
         </div>
         <div className="login-logos"><LogoBar/></div>
@@ -3788,18 +3873,18 @@ function LoginPage({ onLogin }){
 }
 
 // ─── Ghi âm tài liệu hỗ trợ (Web Speech API vi-VN, có xử lý quyền + lỗi) ───────
-function AudioRecorder(){
+function AudioRecorder({ onAttach }){
   const [supported] = useState(() => typeof window!=="undefined" && !!(window.SpeechRecognition||window.webkitSpeechRecognition))
   const [rec, setRec] = useState(false)
   const [text, setText] = useState("")
   const [err, setErr] = useState("")
   const ref = useRef(null)
   const ERR = {
-    "not-allowed":"Trang web chưa được cấp quyền micro. Hãy nhấn vào biểu tượng khóa trên thanh địa chỉ và cho phép Micro, rồi thử lại.",
+    "not-allowed":"Trang web chưa được cấp quyền micro. Hãy cho phép Micro trên thanh địa chỉ rồi thử lại.",
     "service-not-allowed":"Trình duyệt chặn dịch vụ nhận dạng giọng nói. Hãy dùng Chrome hoặc Edge mới nhất.",
     "no-speech":"Không nghe thấy giọng nói. Hãy nói gần micro hơn rồi thử lại.",
     "audio-capture":"Không tìm thấy micro. Kiểm tra thiết bị micro của máy.",
-    "network":"Lỗi mạng: nhận dạng giọng nói cần kết nối Internet ổn định.",
+    "network":"Lỗi mạng: nhận dạng giọng nói cần kết nối Internet.",
     "aborted":"Đã dừng ghi âm.",
   }
   const start = async () => {
@@ -3817,29 +3902,20 @@ function AudioRecorder(){
     try { r.start(); setRec(true) } catch { setErr("Không khởi động được ghi âm. Hãy thử lại sau giây lát.") }
   }
   const stop = () => { try{ ref.current && ref.current.stop() }catch{} setRec(false) }
+  const attach = () => { const v=(text||"").trim(); if(!v) return; onAttach && onAttach(v); setText(""); setErr("") }
   return (
-    <div className="rec-panel">
-      <div className="rec-head">
-        <span className="rec-title"><Icon.Pulse d={14} color="#1D6FE8"/>Hoặc ghi âm tài liệu hỗ trợ từ bác sĩ</span>
-        <span className="rec-tag">Giọng nói → văn bản</span>
+    <div className="rec-inline">
+      <div className="rec-inline-row">
+        <button className={`rec-btn${rec?" on":""}`} onClick={rec?stop:start} disabled={!supported}>
+          <span className={`rec-dot${rec?" pulse":""}`}/>{rec?"Dừng ghi":"Ghi âm lời dặn"}
+        </button>
+        {rec && <span className="rec-live">Đang nghe...</span>}
+        {text && !rec && <button className="rec-attach" onClick={attach}><Icon.Upload d={12} color="#fff"/>Đính kèm vào hồ sơ</button>}
+        {text && !rec && <button className="rec-clear" onClick={()=>setText("")}>Xóa</button>}
       </div>
-      {!supported ? (
-        <div className="rec-note warn">Trình duyệt chưa hỗ trợ ghi âm giọng nói. Hãy dùng Chrome hoặc Edge mới nhất (trên máy tính) để thử tính năng này.</div>
-      ) : (
-        <>
-          <div className="rec-row">
-            <button className={`rec-btn${rec?" on":""}`} onClick={rec?stop:start}>
-              <span className={`rec-dot${rec?" pulse":""}`}/>{rec?"Dừng ghi":"Bắt đầu ghi âm"}
-            </button>
-            {rec && <span className="rec-live">Đang nghe...</span>}
-            {text && !rec && <button className="rec-clear" onClick={()=>setText("")}>Xóa</button>}
-          </div>
-          {err && <div className="rec-note err"><Icon.Alert d={13} color="#B91C1C"/>{err}</div>}
-          <textarea className="rec-text" value={text} onChange={e=>setText(e.target.value)} placeholder="Nội dung ghi âm sẽ hiện ở đây. Bác sĩ có thể nói lời dặn, diễn biến hoặc ghi chú hỗ trợ; hệ thống chuyển thành văn bản đính kèm hồ sơ."/>
-          {text && <div className="rec-note">Đã ghi {text.trim().split(/\s+/).length} từ. Trong demo, nội dung này lưu kèm hồ sơ; bản đầy đủ sẽ gửi cho AI cùng tài liệu.</div>}
-          <div className="rec-note dim">Mẹo: tính năng cần chạy trên HTTPS (trang đã xuất bản), được cấp quyền micro và có kết nối Internet. Chạy tốt trên Chrome/Edge; bản xem trước trong khung nhúng có thể bị chặn micro.</div>
-        </>
-      )}
+      {!supported && <div className="rec-note warn">Trình duyệt chưa hỗ trợ ghi âm giọng nói. Hãy dùng Chrome hoặc Edge mới nhất.</div>}
+      {err && <div className="rec-note err"><Icon.Alert d={13} color="#B91C1C"/>{err}</div>}
+      {(rec||text) && <textarea className="rec-text" value={text} onChange={e=>setText(e.target.value)} placeholder="Nội dung ghi âm hiện ở đây theo thời gian thực; có thể chỉnh sửa trước khi đính kèm."/>}
     </div>
   )
 }
@@ -3862,21 +3938,57 @@ function ModeDropdown({ mode, onChange }){
 }
 
 // ─── Hội chẩn AI ──────────────────────────────────────────────────────────────
-function specInitials(name){ const w=(name||"").replace(/[-]/g," ").split(/\s+/).filter(Boolean); return (((w[0]||"")[0]||"")+((w[1]||"")[0]||"")).toUpperCase() }
+const SPEC_ICON = {
+  "Tim mạch":{ic:Icon.Heart, c:"#E11D48"},
+  "Phẫu thuật Tim":{ic:Icon.Pulse, c:"#1D6FE8"},
+  "Hồi sức tích cực":{ic:Icon.Stethoscope, c:"#0E9488"},
+  "Truyền nhiễm":{ic:Icon.Shield, c:"#9333EA"},
+  "Huyết học - Đông máu":{ic:Icon.Flask, c:"#DC2626"},
+  "Thận - Tiết niệu":{ic:Icon.Layers, c:"#0891B2"},
+  "Dinh dưỡng lâm sàng":{ic:Icon.Pill, c:"#D97706"},
+}
+function SpecIcon({ khoa, d=15 }){ const m=SPEC_ICON[khoa]||{ic:Icon.Stethoscope,c:"#1D6FE8"}; const I=m.ic; return <span className="spec-ic" style={{background:m.c+"1A"}}><I d={d} color={m.c}/></span> }
 function Step({ n, t }){ return <div className="mdt-step"><span className="mdt-step-n">{n}</span><span className="mdt-step-t">{t}</span></div> }
-function ConfChip({ level }){ const c = level==="Cao"?"hi":level==="Trung bình"?"mid":"lo"; return <span className={`conf ${c}`}>Tin cậy: {level}</span> }
+function confClass(p){ return p>=85?"hi":p>=65?"mid":"lo" }
 function DiscBlock({ kind, title, items }){
-  if(!items || items.length===0) return null
+  if(!items||items.length===0) return null
   return <div className={`disc ${kind}`}><div className="disc-t">{title}</div><ul className="ul-clean">{items.map((it,i)=><li key={i}>{it}</li>)}</ul></div>
 }
+function SpecCard({ y }){
+  const [more, setMore] = useState(false)
+  return (
+    <div className="spec-card">
+      <div className="spec-hd">
+        <SpecIcon khoa={y.khoa}/>
+        <span className="spec-name">{y.khoa}</span>
+        {y.muc_cao && <span className="spec-flag">Ưu tiên cao</span>}
+        <span className={`conf ${confClass(y.confidence)}`}>Tin cậy {y.confidence}%</span>
+      </div>
+      <div className="spec-row"><span className="spec-lbl">Kết luận chính</span><ul className="ul-clean">{y.ket_luan_chinh.map((d,j)=><li key={j}>{d}</li>)}</ul></div>
+      {y.de_xuat.length>0 && <div className="spec-row"><span className="spec-lbl teal">Đề xuất</span><ul className="ul-clean teal">{y.de_xuat.map((d,j)=><li key={j}>{d}</li>)}</ul></div>}
+      <div className="spec-row"><span className="spec-lbl amber">Dữ liệu còn thiếu</span><span className="spec-gap">{y.con_thieu}</span></div>
+      {(y.details.danh_gia.length>0 || y.details.ho_tro.length>0) && (
+        <>
+          <button className="spec-more" onClick={()=>setMore(m=>!m)}>{more?"Thu gọn":"Xem thêm"}</button>
+          {more && <div className="spec-detail">
+            <div className="spec-lbl">Phân tích chi tiết</div>
+            <ul className="ul-clean">{y.details.danh_gia.map((d,j)=><li key={j}>{d}</li>)}</ul>
+            {y.details.ho_tro.length>0 && <div className="spec-sup"><b>Dữ liệu hỗ trợ:</b> {y.details.ho_tro.join(" ")}</div>}
+          </div>}
+        </>
+      )}
+    </div>
+  )
+}
+function stanceClass(s){ return /có/i.test(s)?"yes":/không/i.test(s)?"no":"neu" }
 function MDTView({ report }){
   const mdt = deriveMDT(report)
   const [shown, setShown] = useState(0)
   const [askI, setAskI] = useState(-1)
   useEffect(() => {
     setShown(0); setAskI(-1)
-    const id = setInterval(() => setShown(s => { if(s>=mdt.specialties.length){clearInterval(id);return s} return s+1 }), 550)
-    return () => clearInterval(id)
+    const id=setInterval(()=>setShown(s=>{ if(s>=mdt.specialties.length){clearInterval(id);return s} return s+1 }),520)
+    return ()=>clearInterval(id)
   }, [report])
   const done = shown >= mdt.specialties.length
   return (
@@ -3886,48 +3998,54 @@ function MDTView({ report }){
         <div>
           <div className="mode-hero-tag">Hội chẩn AI · Virtual MDT</div>
           <h2>Hội chẩn đa chuyên khoa</h2>
-          <p>Mô phỏng quy trình hội chẩn thật: phân tích ca, xếp ưu tiên, mời đúng chuyên khoa, thảo luận (đồng thuận / lưu ý / chưa chắc chắn / khác biệt) và ra kết luận. Ca: <b>{report.thong_tin_benh_nhan.ho_ten}</b>.</p>
+          <p>Hội đồng chuyên gia ảo cùng phân tích và thảo luận ca <b>{report.thong_tin_benh_nhan.ho_ten}</b>: tổng quan nguy cơ, ưu tiên, mời đúng chuyên khoa, thảo luận và ra đồng thuận.</p>
         </div>
       </div>
 
-      <Step n="1" t="Phân tích ca & xếp ưu tiên lâm sàng"/>
-      <div className="prio-wrap">
-        {mdt.priorities.map(pr=>(
-          <div key={pr.rank} className={`prio p${pr.rank}`}>
-            <span className="prio-rank">Ưu tiên {pr.rank}</span>
-            <span className="prio-ten">{pr.ten}</span>
-            <span className="prio-ly">{pr.ly_do}</span>
+      <Step n="1" t="Tổng quan nguy cơ (MDT Risk Dashboard)"/>
+      <div className="risk-dash">
+        {mdt.risk.map((d,i)=>(
+          <div key={i} className="risk-row">
+            <span className={`risk-dot ${d.tone}`}/>
+            <span className="risk-ten">{d.ten}</span>
+            <span className="risk-bar"><span className={`risk-fill ${d.tone}`} style={{width:d.pct+"%"}}/></span>
+            <span className={`risk-pct ${d.tone}`}>{d.pct}%</span>
           </div>
         ))}
       </div>
 
-      <Step n="2" t="Mời chuyên khoa phù hợp (vì sao tham gia)"/>
-      <div className="mdt-list">
-        {mdt.specialties.slice(0,shown).map((y,i)=>(
-          <div key={i} className="mdt-op">
-            <div className="mdt-op-hd">
-              <span className="mdt-op-ava">{specInitials(y.khoa)}</span>
-              <span className="mdt-op-name">{y.khoa}</span>
-              {y.muc_cao && <span className="mdt-op-flag">Ưu tiên cao</span>}
-              <ConfChip level={y.confidence.level}/>
-            </div>
-            <div className="mdt-why"><b>Vì sao mời:</b> {y.reason}</div>
-            <div className="mdt-op-body">
-              <div className="mdt-sub">Đánh giá</div>
-              <ul className="ul-clean">{y.danh_gia.map((d,j)=><li key={j}>{d}</li>)}</ul>
-              {y.de_xuat.length>0 && <><div className="mdt-sub teal">Đề xuất</div><ul className="ul-clean teal">{y.de_xuat.map((d,j)=><li key={j}>{d}</li>)}</ul></>}
-              <div className="conf-detail">
-                {y.confidence.ho_tro.length>0 && <div><span className="cd-lbl">Dữ liệu hỗ trợ:</span> {y.confidence.ho_tro.join(" ")}</div>}
-                <div><span className="cd-lbl">Còn thiếu:</span> {y.confidence.con_thieu}</div>
-              </div>
-            </div>
+      <Step n="2" t="Phân tích ca & xếp ưu tiên lâm sàng"/>
+      <div className="prio-wrap">
+        {mdt.priorities.map(pr=>(
+          <div key={pr.rank} className={`prio p${pr.rank}`}><span className="prio-rank">Ưu tiên {pr.rank}</span><span className="prio-ten">{pr.ten}</span><span className="prio-ly">{pr.ly_do}</span></div>
+        ))}
+      </div>
+
+      <Step n="3" t="Chuyên khoa được mời tham gia"/>
+      <div className="invite-grid">
+        {mdt.specialties.map((y,i)=>(
+          <div key={i} className="invite">
+            <SpecIcon khoa={y.khoa} d={16}/>
+            <div className="invite-info"><div className="invite-name">{y.khoa} <span className={`rel ${y.relevance==="Rất cao"?"hi":y.relevance==="Cao"?"mid":"lo"}`}>{y.relevance}</span></div><div className="invite-role">{y.role}</div></div>
           </div>
         ))}
+      </div>
+
+      <Step n="4" t="Nhận định theo từng chuyên khoa"/>
+      <div className="spec-list">
+        {mdt.specialties.slice(0,shown).map((y,i)=><SpecCard key={i} y={y}/>)}
         {!done && <div className="mdt-loading"><span className="rec-dot pulse"/>Hội đồng đang thảo luận...</div>}
       </div>
 
       {done && <>
-        <Step n="3" t="Thảo luận liên chuyên khoa"/>
+        <Step n="5" t="Thảo luận liên chuyên khoa"/>
+        <div className="thread">
+          {mdt.thread.map((m,i)=>(
+            <div key={i} className="thread-row"><SpecIcon khoa={m.khoa} d={14}/><div className="thread-bub"><span className="thread-khoa">{m.khoa}</span>{m.text}</div></div>
+          ))}
+        </div>
+
+        <Step n="6" t="Đồng thuận - Lưu ý - Chưa chắc chắn - Khác biệt"/>
         <div className="disc-grid">
           <DiscBlock kind="agree" title="Đồng thuận" items={mdt.discussion.agreement}/>
           <DiscBlock kind="concern" title="Cần lưu ý" items={mdt.discussion.concern}/>
@@ -3935,87 +4053,130 @@ function MDTView({ report }){
           <DiscBlock kind="disagree" title="Khác biệt quan điểm" items={mdt.discussion.disagreement}/>
         </div>
 
-        <Step n="4" t="Kết luận hội chẩn"/>
+        <Step n="7" t="Kết luận hội chẩn"/>
         <div className="mdt-final"><span className="mdt-final-lbl">Đồng thuận cuối cùng</span>{mdt.consensus}</div>
 
-        {mdt.ask_mdt.length>0 && <>
-          <Step n="5" t="Hỏi Hội đồng (Ask the MDT)"/>
-          <div className="ask-qs">
-            {mdt.ask_mdt.map((a,i)=>(<button key={i} className={`ask-q${askI===i?" on":""}`} onClick={()=>setAskI(askI===i?-1:i)}>{a.q}</button>))}
+        <Step n="8" t="Hỏi Hội đồng (Ask the MDT)"/>
+        <div className="ask-qs">
+          {mdt.ask_mdt.map((a,i)=>(<button key={i} className={`ask-q${askI===i?" on":""}`} onClick={()=>setAskI(askI===i?-1:i)}>{a.q}</button>))}
+        </div>
+        {askI>=0 && (
+          <div className="ask-ans">
+            {mdt.ask_mdt[askI].answers.map((a,j)=>(
+              <div key={j} className="ask-row"><span className="ask-khoa"><SpecIcon khoa={a.khoa} d={13}/>{a.khoa}</span><span className={`stance ${stanceClass(a.stance)}`}>{a.stance}</span><span className="ask-txt">{a.ly_do}</span></div>
+            ))}
+            <div className="ask-cons"><span className="ask-cons-hd">Điều phối viên · Mức đồng thuận: {mdt.ask_mdt[askI].moderator.muc}</span>{mdt.ask_mdt[askI].moderator.khuyen_nghi}</div>
           </div>
-          {askI>=0 && (
-            <div className="ask-ans">
-              {mdt.ask_mdt[askI].answers.map((a,j)=>(
-                <div key={j} className="ask-row"><span className="ask-khoa"><span className="mdt-op-ava sm">{specInitials(a.khoa)}</span>{a.khoa}</span><span className="ask-txt">{a.tra_loi}</span></div>
-              ))}
-              <div className="ask-cons"><b>Đồng thuận:</b> {mdt.ask_mdt[askI].consensus}</div>
-            </div>
-          )}
-        </>}
+        )}
       </>}
     </div>
   )
 }
-function TeachCard({ n, title, children }){
-  return <div className="teach-sec"><div className="teach-sec-t"><span className="teach-sec-n">{n}</span>{title}</div><div className="teach-sec-b">{children}</div></div>
+
+function TeachCard({ n, title, children, accent }){
+  return <div className={`teach-sec${accent?" "+accent:""}`}><div className="teach-sec-t"><span className="teach-sec-n">{n}</span>{title}</div><div className="teach-sec-b">{children}</div></div>
 }
 function TeachingView({ report }){
   const t = deriveTeaching(report)
   const [sub, setSub] = useState("guided")
+  const [revealAns, setRevealAns] = useState(false)
   const [open, setOpen] = useState(() => ({}))
+  const [pick, setPick] = useState(() => ({}))
+  useEffect(()=>{ setRevealAns(false); setOpen({}); setPick({}) }, [sub, report])
   const toggle = (i) => setOpen(o => ({ ...o, [i]: !o[i] }))
-  let n = 0
-  const S = (title, body) => { n++; return <TeachCard key={title} n={n} title={title}>{body}</TeachCard> }
+  const challenge = sub==="challenge"
+  const showAns = !challenge || revealAns
+  let n = 0; const num = () => ++n
   return (
     <div className="mode-card teach-card">
       <div className="mode-hero teach-hero">
         <div className="mode-hero-ic teal"><Icon.FileText d={20} color="#fff"/></div>
         <div>
-          <div className="mode-hero-tag teal">Học vụ · Bệnh án theo khung HMU</div>
+          <div className="mode-hero-tag teal">Học vụ · Giảng viên lâm sàng ảo</div>
           <h2>Chế độ giảng dạy</h2>
-          <p>Bài giảng theo cấu trúc bệnh án ngoại khoa (Đại học Y Hà Nội) kèm đối thoại Socratic, xây dựng từ ca <b>{report.thong_tin_benh_nhan.ho_ten}</b>.</p>
+          <p>Vấn đáp lâm sàng theo khung bệnh án ngoại khoa (HMU) trên ca <b>{report.thong_tin_benh_nhan.ho_ten}</b>: tự suy luận, nhận phản biện và đánh giá.</p>
         </div>
       </div>
+
       <div className="teach-submode">
         <span className="teach-submode-lbl">Phương pháp học</span>
         <div className="teach-seg">
-          <button className={sub==="guided"?"on":""} onClick={()=>setSub("guided")}>Dẫn dắt (Guided)</button>
-          <button className={sub==="challenge"?"on":""} onClick={()=>setSub("challenge")}>Tự thử thách (Challenge)</button>
+          <button className={!challenge?"on":""} onClick={()=>setSub("guided")}>Dẫn dắt (Guided)</button>
+          <button className={challenge?"on":""} onClick={()=>setSub("challenge")}>Tự thử thách (Challenge)</button>
         </div>
+        <span className="teach-mode-note">{challenge?"Ẩn đáp án - bạn tự suy luận trước, mở đáp án sau khi hoàn thành.":"Hiển thị đầy đủ nội dung để học và ôn tập."}</span>
       </div>
-      {S("Mục tiêu học tập", <ol className="ol-num">{t.muc_tieu.map((x,i)=><li key={i}>{x}</li>)}</ol>)}
-      {S("Hành chính", <p className="teach-p">{t.hanh_chinh}</p>)}
-      {S("Lý do vào viện", <p className="teach-p">{t.ly_do}</p>)}
-      {S("Bệnh sử", <ul className="ul-clean">{t.benh_su.map((x,i)=><li key={i}>{x}</li>)}</ul>)}
-      {S("Tiền sử", <p className="teach-p">{t.tien_su}</p>)}
-      {S("Khám lâm sàng", <ul className="ul-clean">{t.kham.map((x,i)=><li key={i}>{x}</li>)}</ul>)}
-      {S("Tóm tắt bệnh án", <p className="teach-p">{t.tom_tat}</p>)}
-      {S("Chẩn đoán sơ bộ", <p className="teach-p">{t.chan_doan_so_bo}</p>)}
-      {S("Chẩn đoán phân biệt", <ul className="ul-clean">{t.ddx.map((x,i)=><li key={i}>{x}</li>)}</ul>)}
-      {S("Biện luận lâm sàng", <ul className="ul-clean">{t.bien_luan.map((x,i)=><li key={i}>{x}</li>)}</ul>)}
-      {S("Đề nghị cận lâm sàng", <ul className="ul-pair">{t.can_lam_sang.map((x,i)=><li key={i}><b>{x.viec}</b><span>{x.ly_do}</span></li>)}</ul>)}
-      {S("Chẩn đoán xác định", <p className="teach-p">{t.chan_doan_xac_dinh}</p>)}
-      {S("Hướng điều trị", <div>{t.dieu_tri_ngoai && <p className="teach-p" style={{marginBottom:"8px"}}>{t.dieu_tri_ngoai}</p>}<div className="teach-chips">{t.dieu_tri_noi.map((m,i)=><span key={i} className="teach-chip">{m}</span>)}</div></div>)}
-      {S("Tiên lượng", <p className="teach-p">{t.tien_luong}</p>)}
-      {S("Dự phòng", <ul className="ul-clean">{t.du_phong.map((x,i)=><li key={i}>{x}</li>)}</ul>)}
-      {S("Kết luận", <p className="teach-p">{t.ket_luan}</p>)}
+
+      <TeachCard n={num()} title="Mục tiêu học tập"><ol className="ol-num">{t.muc_tieu.map((x,i)=><li key={i}>{x}</li>)}</ol></TeachCard>
+
+      <div className="teach-block-h">Dữ kiện bệnh án</div>
+      <TeachCard n={num()} title="Hành chính"><p className="teach-p">{t.hanh_chinh}</p></TeachCard>
+      <TeachCard n={num()} title="Lý do vào viện"><p className="teach-p">{t.ly_do}</p></TeachCard>
+      <TeachCard n={num()} title="Bệnh sử"><ul className="ul-clean">{t.benh_su.map((x,i)=><li key={i}>{x}</li>)}</ul></TeachCard>
+      <TeachCard n={num()} title="Tiền sử"><p className="teach-p">{t.tien_su}</p></TeachCard>
+      <TeachCard n={num()} title="Khám lâm sàng"><ul className="ul-clean">{t.kham.map((x,i)=><li key={i}>{x}</li>)}</ul></TeachCard>
+
+      <div className="teach-block-h">Red Flags - điểm cần ghi nhớ</div>
+      <div className="rf-wrap">
+        {t.red_flags.map((rf,i)=>(
+          <div key={i} className="rf"><span className="rf-ic"><Icon.Alert d={14} color="#DC2626"/></span><div><div className="rf-dh">{rf.dau_hieu}</div><div className="rf-yn">{rf.y_nghia}</div></div></div>
+        ))}
+      </div>
+
+      <div className="teach-block-h">Vấn đáp Socratic</div>
       <div className="teach-soc">
-        <div className="teach-soc-hd">
-          <span className="teach-soc-ic">?</span>
-          <div>
-            <div className="teach-soc-t">Giảng viên ảo (Socratic) - theo các bước bệnh án</div>
-            <div className="teach-soc-s">{sub==="guided" ? "Chế độ Dẫn dắt: gợi ý hiển thị sẵn để học theo từng bước." : "Chế độ Thử thách: hãy tự trả lời trước, rồi nhấn để mở gợi ý."}</div>
+        <div className="teach-soc-hd"><span className="teach-soc-ic">?</span><div><div className="teach-soc-t">Giảng viên ảo đặt câu hỏi theo từng bước</div><div className="teach-soc-s">Nhập câu trả lời của bạn, sau đó mở nhận xét và đáp án mẫu.</div></div></div>
+        {t.socratic.map((qa,i)=>(
+          <div key={i} className="teach-q open">
+            <div className="teach-q-t"><span className="teach-q-num">Bước {i+1}</span><span>{qa.q}</span></div>
+            <textarea className="teach-ans" placeholder="Nhập câu trả lời của bạn..."/>
+            <button className="teach-reveal" onClick={()=>toggle(i)}>{open[i]?"Ẩn nhận xét":"Xem nhận xét & đáp án mẫu"}</button>
+            {open[i] && <div className="teach-q-a"><div className="teach-q-fb"><b>Nhận xét:</b> đối chiếu xem bạn đã nêu đủ ý chính, trình bày theo trình tự bệnh án và logic chưa.</div><div><span className="teach-q-a-lbl">Đáp án mẫu</span>{qa.a}</div></div>}
           </div>
-        </div>
-        {t.socratic.map((qa,i)=>{
-          const isOpen = sub==="guided" ? (open[i] ?? true) : (open[i] ?? false)
-          return (
-            <div key={i} className="teach-q">
-              <div className="teach-q-t" onClick={()=>toggle(i)}><span className="teach-q-ic">{isOpen?"−":"+"}</span><span>Bước {i+1}. {qa.q}</span></div>
-              {isOpen && <div className="teach-q-a"><span className="teach-q-a-lbl">Gợi ý</span>{qa.a}</div>}
+        ))}
+      </div>
+
+      {t.decisions.length>0 && <>
+        <div className="teach-block-h">Tình huống ra quyết định (Clinical Decision Challenge)</div>
+        {t.decisions.map((dc,i)=>(
+          <div key={i} className="dc">
+            <div className="dc-q">{dc.tinh_huong}</div>
+            <div className="dc-opts">
+              {dc.options.map(o=>{
+                const chosen = pick[i]
+                const cls = chosen ? (o.k===dc.dung?"ok":(o.k===chosen?"wrong":"")) : ""
+                return <button key={o.k} className={`dc-opt ${cls}`} onClick={()=>setPick(pk=>({...pk,[i]:o.k}))}><b>{o.k}.</b> {o.t}</button>
+              })}
             </div>
-          )
-        })}
+            {pick[i] && <div className={`dc-fb ${pick[i]===dc.dung?"ok":"wrong"}`}>{pick[i]===dc.dung?"Chính xác. ":"Chưa tối ưu. "}{dc.giai_thich}</div>}
+          </div>
+        ))}
+      </>}
+
+      <div className="teach-block-h">Đáp án tham khảo</div>
+      {challenge && !revealAns
+        ? <button className="teach-unlock" onClick={()=>setRevealAns(true)}><Icon.Search d={14} color="#0E9488"/>Mở đáp án tham khảo (sau khi đã tự suy luận)</button>
+        : <>
+          <TeachCard n={num()} title="Tóm tắt bệnh án"><ul className="ul-clean">{t.tom_tat.map((x,i)=><li key={i}>{x}</li>)}</ul></TeachCard>
+          <TeachCard n={num()} title="Chẩn đoán sơ bộ"><p className="teach-p">{t.chan_doan_so_bo}</p></TeachCard>
+          <TeachCard n={num()} title="Chẩn đoán phân biệt"><ul className="ul-clean">{t.ddx.map((x,i)=><li key={i}>{x}</li>)}</ul></TeachCard>
+          <TeachCard n={num()} title="Biện luận lâm sàng"><ul className="ul-clean">{t.bien_luan.map((x,i)=><li key={i}>{x}</li>)}</ul></TeachCard>
+          <TeachCard n={num()} title="Đề nghị cận lâm sàng"><ul className="ul-pair">{t.can_lam_sang.map((x,i)=><li key={i}><b>{x.viec}</b><span>{x.ly_do}</span></li>)}</ul></TeachCard>
+          <TeachCard n={num()} title="Hướng điều trị">{t.dieu_tri_ngoai&&<p className="teach-p" style={{marginBottom:"8px"}}>{t.dieu_tri_ngoai}</p>}<div className="teach-chips">{t.dieu_tri_noi.map((m,i)=><span key={i} className="teach-chip">{m}</span>)}</div></TeachCard>
+          <TeachCard n={num()} title="Tiên lượng & dự phòng"><p className="teach-p">{t.tien_luong}</p></TeachCard>
+        </>}
+
+      <div className="teach-block-h">Đánh giá năng lực suy luận lâm sàng</div>
+      <div className="score-card">
+        {t.reasoning_score.items.map((s,i)=>(
+          <div key={i} className="score-row">
+            <span className="score-ten">{s.ten}</span>
+            <span className="score-bar"><span className="score-fill" style={{width:(s.score*10)+"%"}}/></span>
+            <span className="score-num">{s.score}/10</span>
+            <span className="score-nx">{s.nx}</span>
+          </div>
+        ))}
+        <div className="score-overall">Tổng điểm: <b>{t.reasoning_score.overall}/100</b></div>
       </div>
     </div>
   )
@@ -4207,11 +4368,97 @@ const EXTRA_CSS = `
 .ask-txt{font-size:12.5px;color:#334155;line-height:1.6}
 .ask-cons{margin-top:10px;font-size:12.5px;color:#334155;line-height:1.65;background:rgba(14,148,136,.07);border-radius:10px;padding:11px 13px}
 @media(max-width:620px){.disc-grid{grid-template-columns:1fr}.ask-khoa{min-width:120px}}
+.spec-ic{width:30px;height:30px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.risk-dash{display:flex;flex-direction:column;gap:8px;padding:0 26px}
+.risk-row{display:flex;align-items:center;gap:10px}
+.risk-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.risk-dot.green{background:#22C55E}.risk-dot.amber{background:#F59E0B}.risk-dot.red{background:#EF4444}
+.risk-ten{font-size:12.5px;color:#334155;min-width:165px;flex-shrink:0}
+.risk-bar{flex:1;height:9px;background:#eef2f7;border-radius:6px;overflow:hidden}
+.risk-fill{display:block;height:100%;border-radius:6px}
+.risk-fill.green{background:#22C55E}.risk-fill.amber{background:#F59E0B}.risk-fill.red{background:#EF4444}
+.risk-pct{font-size:12px;font-weight:700;min-width:40px;text-align:right}
+.risk-pct.green{color:#15803d}.risk-pct.amber{color:#b45309}.risk-pct.red{color:#b91c1c}
+.invite-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 26px}
+.invite{display:flex;gap:10px;align-items:flex-start;border:1px solid #e7eef8;border-radius:12px;padding:11px 13px;background:#fafcff}
+.invite-info{min-width:0}
+.invite-name{font-size:13px;font-weight:700;color:#0F2740;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.rel{font-size:10px;font-weight:700;padding:2px 8px;border-radius:6px}
+.rel.hi{color:#b91c1c;background:#fee2e2}.rel.mid{color:#b45309;background:#fef3c7}.rel.lo{color:#475569;background:#eef2f7}
+.invite-role{font-size:11.5px;color:#5A748F;line-height:1.5;margin-top:3px}
+.spec-list{display:flex;flex-direction:column;gap:11px;padding:0 26px}
+.spec-card{border:1px solid #e7eef8;border-radius:14px;padding:14px 16px;background:#fff;animation:fadeIn .35s ease}
+.spec-hd{display:flex;align-items:center;gap:9px;margin-bottom:10px}
+.spec-name{font-size:14px;font-weight:700;color:#0F2740}
+.spec-flag{font-size:10px;font-weight:700;color:#DC2626;background:#FEF2F2;padding:3px 8px;border-radius:7px}
+.conf{margin-left:auto;font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:7px;white-space:nowrap}
+.conf.hi{color:#15803d;background:#dcfce7}.conf.mid{color:#b45309;background:#fef3c7}.conf.lo{color:#475569;background:#eef2f7}
+.spec-row{display:flex;gap:10px;margin-bottom:7px}
+.spec-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#1D6FE8;min-width:128px;flex-shrink:0;padding-top:1px}
+.spec-lbl.teal{color:#0E9488}.spec-lbl.amber{color:#b45309}
+.spec-gap{font-size:12.5px;color:#475569;line-height:1.55}
+.spec-row .ul-clean{flex:1}
+.spec-more{margin-top:2px;border:none;background:none;color:#1D6FE8;font-size:12px;font-weight:600;cursor:pointer;padding:4px 0}
+.spec-detail{margin-top:8px;border-top:1px dashed #eef3fa;padding-top:9px}
+.spec-sup{font-size:11.5px;color:#7A96C8;margin-top:6px;line-height:1.5}.spec-sup b{color:#5A748F}
+.thread{display:flex;flex-direction:column;gap:10px;padding:0 26px}
+.thread-row{display:flex;gap:10px;align-items:flex-start}
+.thread-bub{background:#f4f8fd;border:1px solid #e7eef8;border-radius:12px;border-top-left-radius:3px;padding:10px 13px;font-size:12.5px;color:#334155;line-height:1.6}
+.thread-khoa{display:block;font-size:12px;font-weight:700;color:#1D6FE8;margin-bottom:3px}
+.stance{font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:7px;white-space:nowrap;flex-shrink:0}
+.stance.yes{color:#15803d;background:#dcfce7}.stance.no{color:#b91c1c;background:#fee2e2}.stance.neu{color:#475569;background:#eef2f7}
+.ask-cons-hd{display:block;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#0E9488;margin-bottom:4px}
+.teach-block-h{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:#0E9488;margin:18px 26px 4px;padding-top:12px;border-top:1px solid #eef3fa}
+.teach-mode-note{font-size:11.5px;color:#7A96C8;flex-basis:100%}
+.rf-wrap{display:flex;flex-direction:column;gap:9px;padding:0 26px}
+.rf{display:flex;gap:11px;align-items:flex-start;border:1px solid #fde0e0;background:#fff6f6;border-radius:12px;padding:11px 13px}
+.rf-ic{width:26px;height:26px;border-radius:8px;background:#fee2e2;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.rf-dh{font-size:13px;font-weight:700;color:#b91c1c}
+.rf-yn{font-size:12.5px;color:#475569;line-height:1.55;margin-top:2px}
+.teach-ans{width:100%;box-sizing:border-box;min-height:54px;border:1px solid #d8e2f0;border-radius:9px;padding:9px 11px;font-size:12.5px;font-family:inherit;resize:vertical;outline:none;margin:8px 0}
+.teach-ans:focus{border-color:#0E9488}
+.teach-reveal{border:1px solid #cde7e3;background:#f0faf8;color:#0E9488;font-size:12px;font-weight:600;padding:7px 13px;border-radius:9px;cursor:pointer}
+.teach-q-num{display:inline-block;font-size:10.5px;font-weight:700;color:#0E9488;background:rgba(14,148,136,.1);padding:2px 8px;border-radius:6px;margin-right:8px}
+.teach-q-fb{font-size:12px;color:#475569;line-height:1.6;margin-bottom:8px;padding-bottom:8px;border-bottom:1px dashed #e7eef8}
+.teach-unlock{margin:0 26px;display:inline-flex;align-items:center;gap:8px;border:1px dashed #9ad9d0;background:#f0faf8;color:#0E7c73;font-size:13px;font-weight:600;padding:12px 16px;border-radius:12px;cursor:pointer}
+.dc{margin:0 26px 12px;border:1px solid #e7eef8;border-radius:14px;padding:14px 16px;background:#fafcff}
+.dc-q{font-size:13px;font-weight:600;color:#0F2740;line-height:1.6;margin-bottom:11px}
+.dc-opts{display:flex;flex-direction:column;gap:8px}
+.dc-opt{text-align:left;border:1px solid #d8e2f0;background:#fff;border-radius:10px;padding:10px 13px;font-size:12.5px;color:#334155;cursor:pointer;transition:all .12s}
+.dc-opt:hover{border-color:#1D6FE8}
+.dc-opt.ok{border-color:#22C55E;background:#f0fdf4;color:#15803d;font-weight:600}
+.dc-opt.wrong{border-color:#EF4444;background:#fef2f2;color:#b91c1c}
+.dc-fb{margin-top:11px;font-size:12.5px;line-height:1.65;border-radius:10px;padding:11px 13px}
+.dc-fb.ok{background:#f0fdf4;color:#166534}.dc-fb.wrong{background:#fffbeb;color:#92400e}
+.score-card{margin:0 26px;border:1px solid #e7eef8;border-radius:14px;padding:14px 16px;background:#fafcff}
+.score-row{display:flex;align-items:center;gap:10px;margin-bottom:9px;flex-wrap:wrap}
+.score-ten{font-size:12.5px;font-weight:600;color:#0F2740;min-width:150px;flex-shrink:0}
+.score-bar{flex:1;min-width:90px;height:8px;background:#eef2f7;border-radius:6px;overflow:hidden}
+.score-fill{display:block;height:100%;background:linear-gradient(90deg,#0E9488,#1D6FE8);border-radius:6px}
+.score-num{font-size:12px;font-weight:700;color:#0E9488;min-width:38px}
+.score-nx{flex-basis:100%;font-size:11.5px;color:#7A96C8;padding-left:160px;line-height:1.45}
+.score-overall{margin-top:6px;padding-top:10px;border-top:1px solid #eef3fa;font-size:13.5px;color:#0F2740}.score-overall b{color:#0E9488;font-size:16px}
+.tb-group{display:inline-flex;align-items:center;gap:2px;background:#f1f5fb;border-radius:11px;padding:3px}
+.tb-btn{display:inline-flex;align-items:center;gap:6px;border:none;background:none;color:#475569;font-size:12.5px;font-weight:600;padding:7px 11px;border-radius:8px;cursor:pointer}
+.tb-btn:hover{background:#fff;color:#1D6FE8}
+.tb-btn.danger:hover{color:#DC2626}
+.pw-wrap{position:relative}
+.pw-eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;color:#7A96C8;display:flex}
+.rec-inline-wrap{margin-top:14px;border:1px solid #dbe6f5;border-radius:14px;padding:13px 15px;background:linear-gradient(180deg,rgba(29,111,232,.045),rgba(14,148,136,.03))}
+.rec-inline-h{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;color:#0F2740;margin-bottom:10px}
+.rec-inline{display:flex;flex-direction:column}
+.rec-inline-row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.rec-attach{display:inline-flex;align-items:center;gap:6px;border:none;background:#0E9488;color:#fff;font-size:12.5px;font-weight:600;padding:9px 14px;border-radius:10px;cursor:pointer}
+.rec-attach:hover{background:#0c7a70}
+.up-logout{position:absolute;top:18px;right:20px;z-index:5;display:inline-flex;align-items:center;gap:6px;border:1px solid #e2e8f0;background:rgba(255,255,255,.9);color:#475569;font-size:12.5px;font-weight:600;padding:7px 13px;border-radius:10px;cursor:pointer;backdrop-filter:blur(4px)}
+.up-logout:hover{border-color:#DC2626;color:#DC2626}
+@media(max-width:620px){.disc-grid,.invite-grid{grid-template-columns:1fr}.ask-khoa{min-width:120px}.score-nx{padding-left:0}.risk-ten{min-width:120px}}
 `
 
 export default function App() {
   const [authed, setAuthed] = useState(() => { try { return sessionStorage.getItem("mp_auth")==="1" } catch { return false } })
   const login = () => { try { sessionStorage.setItem("mp_auth","1") } catch {} setAuthed(true) }
+  const logout = () => { try { sessionStorage.removeItem("mp_auth") } catch {} setAuthed(false); setState("upload"); setReport(null); setAnalysis(null); setChatMessages([]); setCurrentId(null); setShowHistory(false) }
   const [state, setState] = useState("upload")
   const [report, setReport] = useState(null)
   const [hoSoText, setHoSoText] = useState("")
@@ -4332,12 +4579,12 @@ export default function App() {
       <style>{CSS}</style>
       <style>{EXTRA_CSS}</style>
       <ErrorBoundary>
-        {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)} onOpenHistory={()=>setShowHistory(true)}/>}
+        {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)} onOpenHistory={()=>setShowHistory(true)} onLogout={logout}/>}
         {state === "report" && report && (
           <ReportPage report={report} hoSoText={hoSoText} analysis={analysis}
             onReset={()=>{setState("upload");setReport(null);setAnalysis(null);setChatMessages([]);setCurrentId(null)}}
             chatMessages={chatMessages} setChatMessages={setChatMessages}
-            onOpenHistory={()=>setShowHistory(true)}/>
+            onOpenHistory={()=>setShowHistory(true)} onLogout={logout}/>
         )}
         {showHistory && <HistoryPanel onClose={()=>setShowHistory(false)} onOpen={loadRecord} currentId={currentId}/>}
       </ErrorBoundary>
