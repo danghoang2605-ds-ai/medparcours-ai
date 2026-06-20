@@ -1469,6 +1469,16 @@ function buildChips(report) {
 
 
 // ─── PRINT ────────────────────────────────────────────────────────────────────
+function mpCards(collapsed){ if(typeof window!=="undefined") window.dispatchEvent(new CustomEvent("mp-cards",{detail:{collapsed}})) }
+function useGlobalCollapse(initial){
+  const [c, setC] = useState(initial)
+  useEffect(() => {
+    const h = (e) => setC(!!(e.detail && e.detail.collapsed))
+    window.addEventListener("mp-cards", h)
+    return () => window.removeEventListener("mp-cards", h)
+  }, [])
+  return [c, setC]
+}
 function reportToText(r){
   if(!r) return ""
   const p = r.thong_tin_benh_nhan || {}
@@ -1486,7 +1496,7 @@ function reportToText(r){
   L.push(""); L.push("(Tạo bởi MedParcours AI. Cần bác sĩ xem xét trước khi dùng cho mục đích lâm sàng.)")
   return L.join("\n")
 }
-function triggerPrint(r, mode, docNote) {
+function triggerPrint(r, mode, docNote, bookmarks) {
   const p = r.thong_tin_benh_nhan
   const PRINT_META = {
     clinical:{ title:"Báo cáo lâm sàng", label:"MedParcours AI: Báo cáo lâm sàng tự động" },
@@ -1545,7 +1555,8 @@ ${(()=>{const{findings,egfr,ctx}=runPriorityScreens(r);const s=checkDrugSafety(r
 <div class="hdr"><div><div style="font-size:9pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:4pt">${meta.label}</div><h1>${p.ho_ten}</h1><div class="sub">Số bệnh án: ${p.so_benh_an} | ${p.tuoi} tuổi, ${p.gioi_tinh} | ${p.dia_chi}</div><div class="sub">Ngày sinh: ${p.ngay_sinh} | Vào viện: ${p.ngay_vao_vien} | Ra viện: ${p.ngay_ra_vien}</div></div><div class="hdr-r">In ngày: ${new Date().toLocaleDateString("vi-VN")}<br>MedParcours AI v1.2<br><span style="color:#c00;font-weight:700">Cần bác sĩ xác nhận</span></div></div>
 ${bodyHtml}
 <div style="display:flex;justify-content:space-between;margin-top:24pt"><div><div class="stamp">Xác nhận bác sĩ phụ trách</div></div><div><div class="stamp">Ký tên bác sĩ</div></div></div>
-${docNote && docNote.trim() ? `<h2>Ghi chú của bác sĩ</h2><div class="alert"><div class="as" style="white-space:pre-wrap">${docNote.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</div></div>` : ""}
+${bookmarks && bookmarks.length ? `<h2>Mục đánh dấu cần theo dõi</h2><ul>${bookmarks.map(b=>`<li>${(b.label||"").replace(/&/g,"&amp;").replace(/</g,"&lt;")}${b.sub?` - ${b.sub.replace(/&/g,"&amp;").replace(/</g,"&lt;")}`:""}</li>`).join("")}</ul>` : ""}
+        ${docNote && docNote.trim() ? `<h2>Ghi chú của bác sĩ</h2><div class="alert"><div class="as" style="white-space:pre-wrap">${docNote.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</div></div>` : ""}
 <div class="footer"><span>Báo cáo tạo tự động bởi MedParcours AI v1.2. Cần bác sĩ xem xét trước khi dùng cho mục đích lâm sàng.</span><span>HackAIthon 2026</span></div>
 </div><script>window.onload=function(){window.print()}<\/script></body></html>`)
   win.document.close()
@@ -1558,8 +1569,10 @@ function StatusBadge({ level }) {
   return <span className={`badge ${cls}`}><span className="badge-dot" />{label}</span>
 }
 
+let CURRENT_PKEY = "x"
 function Card({ id, title, icon, children, headRight, defaultCollapsed = false }) {
-  const [collapsed, setCollapsed] = useState(defaultCollapsed)
+  const [collapsed, setCollapsed] = useGlobalCollapse(defaultCollapsed)
+  const bodyRef = useRef(null)
   return (
     <div id={id} className={`card${collapsed ? " collapsed" : ""}`}>
       <div className="card-head">
@@ -1567,12 +1580,14 @@ function Card({ id, title, icon, children, headRight, defaultCollapsed = false }
         <span className="card-head-title">{title}</span>
         <div className="card-head-right">
           {headRight}
+          {title ? <FlagBtn pkey={CURRENT_PKEY} label={typeof title === "string" ? title : "Mục báo cáo"} sub="Mục trong báo cáo" detail={()=>elText(bodyRef.current)}/> : null}
+          {title ? <CopyBtn text={()=>elText(bodyRef.current)} label=""/> : null}
           <button className="collapse-btn" onClick={() => setCollapsed(c => !c)} title={collapsed ? "Mở rộng" : "Thu gọn"}>
             {collapsed ? <Icon.ChevDown d={12} /> : <Icon.ChevUp d={12} />}
           </button>
         </div>
       </div>
-      <div className="card-body">{children}</div>
+      <div className="card-body" ref={bodyRef}>{children}</div>
     </div>
   )
 }
@@ -2247,6 +2262,11 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
                     </span>
                   ))}
                 </div>
+                <div className="skel-wrap" aria-hidden="true">
+                  <div className="skel-card"><div className="skel-line w40"/><div className="skel-line w90"/><div className="skel-line w75"/></div>
+                  <div className="skel-row"><div className="skel-box"/><div className="skel-box"/><div className="skel-box"/></div>
+                  <div className="skel-card"><div className="skel-line w55"/><div className="skel-line w95"/><div className="skel-line w70"/></div>
+                </div>
               </div>
             </div>
           ) : staged.length === 0 ? (
@@ -2340,6 +2360,7 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
 const NAV_GROUPS = [
   { group:"Tổng quan", items:[
     {id:"sec-status",   label:"Bệnh nhân",          icon:<Icon.Stethoscope d={11}/>},
+    {id:"sec-timeline", label:"Dòng thời gian",     icon:<Icon.Clock d={11}/>},
     {id:"sec-takeaway", label:"Kết luận nhanh",     icon:<Icon.ShieldCheck d={11}/>},
     {id:"sec-problems", label:"Trạng thái vấn đề",  icon:<Icon.Octagon d={11}/>},
     {id:"sec-actions",  label:"Hành động ưu tiên",  icon:<Icon.Layers d={11}/>},
@@ -2387,9 +2408,26 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
   const saveNote = (v) => { setDocNote(v); try { sessionStorage.setItem(noteKey, v) } catch {} }
   const [zoom, setZoom] = useState(1)
   const pkey = (report && report.thong_tin_benh_nhan && report.thong_tin_benh_nhan.so_benh_an) || "x"
+  CURRENT_PKEY = pkey
   const [bmOpen, setBmOpen] = useState(false)
   const [bmList, setBmList] = useState([])
   useEffect(() => { const h=()=>setBmList(bmGet(pkey)); h(); window.addEventListener("mp-bm",h); return ()=>window.removeEventListener("mp-bm",h) }, [pkey])
+  const goToBookmark = (it) => {
+    const sub = (it && it.sub) || ""
+    const mode = /h.?i ch.?n/i.test(sub) ? "hoi_chan" : /gi.?ng d.?y/i.test(sub) ? "teaching" : "clinical"
+    setViewMode(mode); setBmOpen(false)
+    const tryScroll = (tries) => {
+      let el = it.anchor ? document.getElementById(it.anchor) : null
+      if(!el && it.label){
+        const cands = Array.from(document.querySelectorAll(".card-head-title,.takeaway-hd span,.mdt-step-t,.teach-sec-t,.phase-sec-tag,.tls-head span,.banner-hd span,h2,h3"))
+        const m = cands.find(n => (n.textContent||"").trim() === it.label.trim()) || cands.find(n => (n.textContent||"").includes(it.label))
+        if(m) el = m.closest(".card,.takeaway-card,.phase-sec,.tls-card,.mode-card,.mdt-step,.teach-sec") || m
+      }
+      if(el){ el.scrollIntoView({behavior:"smooth", block:"start"}); el.classList.add("bm-flash"); setTimeout(()=>el.classList.remove("bm-flash"),1600) }
+      else if(tries>0) setTimeout(()=>tryScroll(tries-1), 260)
+    }
+    setTimeout(()=>tryScroll(7), 140)
+  }
   const [query, setQuery] = useState("")
   const doSearch = useCallback(() => {
     const term = query.trim().toLowerCase()
@@ -2459,6 +2497,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
       }
       if (e.key === "Escape") { setMenuOpen(false); return }
       if (typing || e.ctrlKey || e.metaKey || e.altKey) return
+      if (e.key === "?") { e.preventDefault(); mpHelp(); return }
       if (e.key === "/") { e.preventDefault(); document.getElementById("rpt-search-input")?.focus(); return }
       if (e.key === "1") { setViewMode("clinical"); mpToast("Chế độ: Bác sĩ (Lâm sàng)") }
       else if (e.key === "2") { setViewMode("hoi_chan"); mpToast("Chế độ: Hội chẩn AI") }
@@ -2497,7 +2536,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
             </div>
             <FocusToggle/>
             <ThemeToggle/>
-            <button className="nav-export" onClick={()=>triggerPrint(report, viewMode, docNote)} title="Xuất báo cáo"><Icon.Print d={14} color="#fff"/>Xuất báo cáo</button>
+            <button className="nav-export" onClick={()=>triggerPrint(report, viewMode, docNote, bmList)} title="Xuất báo cáo"><Icon.Print d={14} color="#fff"/>Xuất báo cáo</button>
             <div className="nav-menu-wrap">
               <button className="nav-burger" onClick={()=>setMenuOpen(o=>!o)} title="Menu" aria-label="Menu">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -2505,16 +2544,22 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
               {menuOpen && <>
                 <div className="nav-menu-ov" onClick={()=>setMenuOpen(false)}/>
                 <div className="nav-menu">
-                  <button onClick={()=>{setMenuOpen(false);onOpenHistory()}}><Icon.Clock d={14} color="#475569"/>Lịch sử bệnh án</button>
-                  <button onClick={()=>{setMenuOpen(false);triggerPrint(report,"full",docNote)}}><Icon.FileText d={14} color="#475569"/>Xuất bản đầy đủ (3 chế độ)</button>
+                  <div className="nav-menu-sec">Xuất & chia sẻ</div>
+                  <button onClick={()=>{setMenuOpen(false);triggerPrint(report,"full",docNote,bmList)}}><Icon.FileText d={14} color="#475569"/>Xuất bản đầy đủ (3 chế độ)</button>
                   <button onClick={()=>{setMenuOpen(false); (async()=>{ try{ await navigator.clipboard.writeText(reportToText(report)); mpToast("Đã sao chép toàn bộ báo cáo") }catch{ mpToast("Không sao chép được","err") } })()}}><Icon.FileText d={14} color="#475569"/>Sao chép toàn bộ báo cáo</button>
+                  <div className="nav-menu-sec">Công cụ</div>
                   <button onClick={()=>{setMenuOpen(false);setBmOpen(true)}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>Mục đã đánh dấu ({bmList.length})</button>
+                  <button onClick={()=>{setMenuOpen(false);mpCards(true)}}><Icon.ChevUp d={14} color="#475569"/>Thu gọn tất cả thẻ</button>
+                  <button onClick={()=>{setMenuOpen(false);mpCards(false)}}><Icon.ChevDown d={14} color="#475569"/>Mở rộng tất cả thẻ</button>
+                  <button onClick={()=>{setMenuOpen(false);mpHelp()}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 20h8M7 8h.01M11 8h.01M15 8h.01M7 12h.01M17 12h.01M11 12h2"/></svg>Phím tắt</button>
                   <div className="nav-menu-font" onClick={e=>e.stopPropagation()}>
                     <span>Cỡ chữ</span>
                     <button onClick={()=>setZoom(z=>Math.max(0.85,+(z-0.1).toFixed(2)))} title="Nhỏ hơn">A-</button>
                     <button onClick={()=>setZoom(1)} title="Mặc định">A</button>
                     <button onClick={()=>setZoom(z=>Math.min(1.4,+(z+0.1).toFixed(2)))} title="Lớn hơn">A+</button>
                   </div>
+                  <div className="nav-menu-sec">Hồ sơ</div>
+                  <button onClick={()=>{setMenuOpen(false);onOpenHistory()}}><Icon.Clock d={14} color="#475569"/>Lịch sử bệnh án</button>
                   <button onClick={async()=>{setMenuOpen(false); if(await mpConfirm({title:"Phân tích hồ sơ mới?",message:"Báo cáo đang xem sẽ được đóng lại. Bạn có thể mở lại trong Lịch sử bệnh án.",okText:"Tiếp tục"})) onReset()}}><Icon.Back d={13} color="#475569"/>Hồ sơ mới</button>
                   <button className="danger" onClick={async()=>{setMenuOpen(false); if(await mpConfirm({title:"Đăng xuất khỏi MedParcours AI?",message:"Bạn sẽ quay lại màn hình đăng nhập.",okText:"Đăng xuất",danger:true})) onLogout()}}><Icon.Close d={13} color="#DC2626"/>Đăng xuất</button>
                 </div>
@@ -2559,8 +2604,9 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
         <FloatingChat report={report} hoSoText={hoSoText} messages={chatMessages} setMessages={setChatMessages} mode={viewMode}
           onExpand={()=>setTab("chat")}/>
       )}
+      <PatientSnapshot report={report}/>
       <DoctorNote value={docNote} onChange={saveNote}/>
-      {bmOpen && <BookmarkPanel pkey={pkey} items={bmList} onClose={()=>setBmOpen(false)}/>}
+      {bmOpen && <BookmarkPanel pkey={pkey} items={bmList} onClose={()=>setBmOpen(false)} onGo={goToBookmark}/>}
       <ReadProgress/>
       <ScrollToTop/>
     </div>
@@ -2570,7 +2616,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
 // ─── REPORT TAB ───────────────────────────────────────────────────────────────
 // ─── TRAJECTORY (đánh giá tiến triển tổng thể) ─────────────────────────────────
 function TrajectoryCard({ assessment }) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useGlobalCollapse(false)
   const { verdict, evidence } = assessment
   const tm = TRAJECTORY_META[verdict]
   const TrendIcon = () => tm.icon === "up"
@@ -2586,7 +2632,7 @@ function TrajectoryCard({ assessment }) {
           <div className="traj-lbl">Đánh giá tiến triển</div>
           <div className="traj-verdict" style={{ color:tm.color }}>{tm.label}</div>
         </div>
-        <span style={{marginLeft:"auto"}}><CopyBtn text={safe} label="Sao chép"/></span><button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"8px" }}>
+        <span style={{marginLeft:"auto"}}><CopyBtn text={safe} label=""/></span><button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"8px" }}>
           {collapsed ? <Icon.ChevDown d={14} color={tm.color}/> : <Icon.ChevUp d={14} color={tm.color}/>}
         </button>
       </div>
@@ -2606,7 +2652,7 @@ function TrajectoryCard({ assessment }) {
 
 // ─── DẢI MỐC THỜI GIAN BỆNH NHÂN (3 giai đoạn) ────────────────────────────────
 function PatientTimeline({ info }) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useGlobalCollapse(false)
   const fmt = (d) => d ? `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}` : "—"
   const stops = [
     { lbl:"Vào viện", date:info.admit },
@@ -2656,7 +2702,7 @@ const SUMMARY_PHASE_META = {
   3: { color:"#1D6FE8", bg:"rgba(235,244,255,0.5)",  border:"rgba(191,219,254,0.7)" },
 }
 function SummaryCard({ text }) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useGlobalCollapse(false)
   const safe = typeof text === "string" ? text : (text == null ? "" : String(text))
   const toBullets = (body) => String(body || "").split(/(?<=\.)\s+/).map(s=>s.replace(/\.$/,"").trim()).filter(Boolean)
   if (!safe.trim()) return null
@@ -2771,7 +2817,8 @@ function drugStatus(med, info) {
 const fmtShort = (d) => d ? `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}` : ""
 
 function PhaseSection({ phase, events, info, ketLuan }) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useGlobalCollapse(false)
+  const bodyRef = useRef(null)
   const m = PHASE_SECTION_META[phase]
   const fmt = (d) => d ? `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}` : ""
   let rangeTxt = ""
@@ -2783,11 +2830,15 @@ function PhaseSection({ phase, events, info, ketLuan }) {
   const toBullets = (txt) => String(txt).split(/(?<=\.)\s+/).map(s=>s.trim().replace(/\.$/,"")).filter(Boolean)
 
   return (
-    <div id={`sec-phase${phase}`} className="phase-sec" style={{ borderColor:m.border }}>
+    <div id={`sec-phase${phase}`} className="phase-sec" style={{ borderColor:m.border }} ref={bodyRef}>
       <div className="phase-sec-head">
         <span className="phase-sec-tag" style={{ background:m.color }}><i/>{m.name}</span>
         {rangeTxt && <span className="phase-sec-range">{rangeTxt}</span>}
-        <button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"auto" }}>
+        <span className="sec-tools" onClick={e=>e.stopPropagation()}>
+          <FlagBtn pkey={CURRENT_PKEY} label={m.name} sub="Giai đoạn lâm sàng" detail={()=>elText(bodyRef.current)}/>
+          <CopyBtn text={()=>elText(bodyRef.current)}/>
+        </span>
+        <button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"6px" }}>
           {collapsed ? <Icon.ChevDown d={14} color={m.color}/> : <Icon.ChevUp d={14} color={m.color}/>}
         </button>
       </div>
@@ -2872,13 +2923,13 @@ const PROB_META = {
   urgent:     { label:"Cần xử lý ngay", color:"#DC2626" },
 }
 function ProblemStatus({ data, pkey }) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useGlobalCollapse(false)
   if (!data) return null
   return (
     <div id="sec-problems" className="ov-card">
       <div className="ov-head">
         <Icon.Octagon d={16} color="#1D6FE8"/><span>Trạng thái vấn đề lâm sàng</span>
-        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><CopyBtn text={()=>((data.hien_tai)||[]).map(p=>`${p.ten}: ${p.mo_ta||""}`).join("\n")} label="Sao chép"/></span>
+        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><FlagBtn pkey={CURRENT_PKEY} label="Trạng thái vấn đề lâm sàng" sub="Mục báo cáo" detail={()=>((data.hien_tai)||[]).map(p=>`${p.ten}: ${p.mo_ta||""}`).join("\n")}/><CopyBtn text={()=>((data.hien_tai)||[]).map(p=>`${p.ten}: ${p.mo_ta||""}`).join("\n")} label=""/></span>
         <button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"6px" }}>
           {collapsed ? <Icon.ChevDown d={14} color="#1D6FE8"/> : <Icon.ChevUp d={14} color="#1D6FE8"/>}
         </button>
@@ -2894,7 +2945,7 @@ function ProblemStatus({ data, pkey }) {
                   <div key={i} className="prob-item">
                     <span className="prob-dot" style={{ background:m.color }}/>
                     <div className="prob-body">
-                      <div className="prob-top"><span className="prob-name">{p.ten}</span><span className="prob-tag" style={{ color:m.color, borderColor:m.color+"55" }}>{m.label}</span><FlagBtn pkey={pkey} label={p.ten} sub={p.mo_ta||"Vấn đề lâm sàng đang theo dõi"}/></div>
+                      <div className="prob-top"><span className="prob-name">{p.ten}</span><span className="prob-tag" style={{ color:m.color, borderColor:m.color+"55" }}>{m.label}</span></div>
                       {p.mo_ta && <div className="prob-desc">{p.mo_ta}</div>}
                     </div>
                   </div>
@@ -2922,33 +2973,40 @@ function ProblemStatus({ data, pkey }) {
   )
 }
 
+function elText(el){ try { return el ? (el.innerText || el.textContent || "") : "" } catch { return "" } }
 function bmKey(pkey){ return "mp_bm_" + (pkey||"x") }
 function bmGet(pkey){ try{ return JSON.parse(sessionStorage.getItem(bmKey(pkey))||"[]") }catch{ return [] } }
 function bmSet(pkey, arr){ try{ sessionStorage.setItem(bmKey(pkey), JSON.stringify(arr)) }catch{} ; if(typeof window!=="undefined") window.dispatchEvent(new CustomEvent("mp-bm",{detail:{pkey}})) }
-function bmToggle(pkey, item){ const arr=bmGet(pkey); const i=arr.findIndex(x=>x.label===item.label); let added; if(i>=0){ arr.splice(i,1); added=false } else { arr.push({label:item.label, sub:item.sub||"", ts:Date.now()}); added=true } bmSet(pkey,arr); return added }
+function bmToggle(pkey, item){ const arr=bmGet(pkey); const i=arr.findIndex(x=>x.label===item.label); let added; if(i>=0){ arr.splice(i,1); added=false } else { arr.push({label:item.label, sub:item.sub||"", detail:item.detail||"", anchor:item.anchor||"", ts:Date.now()}); added=true } bmSet(pkey,arr); return added }
 function bmHas(pkey,label){ return bmGet(pkey).some(x=>x.label===label) }
-function FlagBtn({ pkey, label, sub }){
+function FlagBtn({ pkey, label, sub, detail }){
   const [on,setOn]=useState(()=>bmHas(pkey,label))
   useEffect(()=>{ const h=()=>setOn(bmHas(pkey,label)); window.addEventListener("mp-bm",h); return ()=>window.removeEventListener("mp-bm",h) },[pkey,label])
-  const toggle=(e)=>{ e.stopPropagation(); const a=bmToggle(pkey,{label,sub}); mpToast(a?"Đã đánh dấu để theo dõi":"Đã bỏ đánh dấu") }
+  const toggle=(e)=>{ e.stopPropagation(); const d = typeof detail==="function" ? detail() : (detail||""); let anchor=""; try { const a2=e.currentTarget.closest("[id]"); anchor=a2?a2.id:"" } catch {} const a=bmToggle(pkey,{label,sub,detail:d,anchor}); mpToast(a?"Đã đánh dấu để theo dõi":"Đã bỏ đánh dấu") }
   return (
     <button className={`flag-btn${on?" on":""}`} onClick={toggle} title={on?"Bỏ đánh dấu":"Đánh dấu để theo dõi"} aria-label="Đánh dấu theo dõi">
       <svg width="13" height="13" viewBox="0 0 24 24" fill={on?"currentColor":"none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
     </button>
   )
 }
-function BookmarkPanel({ pkey, items, onClose }){
+function BookmarkPanel({ pkey, items, onClose, onGo }){
+  const [openI, setOpenI] = useState(-1)
   return (
     <div className="bm-ov" onClick={onClose}>
       <div className="bm-panel" onClick={e=>e.stopPropagation()}>
-        <div className="bm-head"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/></svg><span>Mục đã đánh dấu theo dõi</span><button className="dn-x" onClick={onClose} aria-label="Đóng"><Icon.Close d={14} color="#64748B"/></button></div>
+        <div className="bm-head"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/></svg><span>Trang đã đánh dấu theo dõi</span>{items && items.length>0 && <CopyBtn text={()=>items.map(it=>"## "+it.label+"\n"+(it.detail||it.sub||"")).join("\n\n")} label=""/>}<button className="dn-x" onClick={onClose} aria-label="Đóng"><Icon.Close d={14} color="#64748B"/></button></div>
         <div className="bm-body">
-          {(!items || items.length===0) && <div className="bm-empty">Chưa có mục nào được đánh dấu. Bấm biểu tượng cờ ở mỗi kết luận hoặc vấn đề lâm sàng để thêm vào đây theo dõi.</div>}
+          {(!items || items.length===0) && <div className="bm-empty">Chưa có mục nào được đánh dấu. Bấm biểu tượng cờ ở mỗi phần trong báo cáo (mọi chế độ) để thêm vào đây theo dõi.</div>}
           {items.map((it,i)=>(
-            <div key={i} className="bm-item">
-              <span className="bm-flag"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/></svg></span>
-              <div className="bm-main"><div className="bm-label">{it.label}</div>{it.sub && <div className="bm-sub">{it.sub}</div>}</div>
-              <button className="bm-x" onClick={()=>bmToggle(pkey,{label:it.label})} title="Bỏ đánh dấu"><Icon.Close d={13} color="#94A3B8"/></button>
+            <div key={i} className={`bm-item${openI===i?" open":""}`}>
+              <div className="bm-item-top" onClick={()=>setOpenI(openI===i?-1:i)}>
+                <span className="bm-flag"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/></svg></span>
+                <div className="bm-main"><div className="bm-label">{it.label}</div><div className="bm-sub">{it.sub||"Mục báo cáo"}</div></div>
+                <button className="bm-go" onClick={(e)=>{e.stopPropagation(); onGo && onGo(it)}} title="Đi tới phần này trong báo cáo"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                <span className="bm-chev">{openI===i ? <Icon.ChevUp d={14} color="#94A3B8"/> : <Icon.ChevDown d={14} color="#94A3B8"/>}</span>
+                <button className="bm-x" onClick={(e)=>{e.stopPropagation(); bmToggle(pkey,{label:it.label})}} title="Bỏ đánh dấu"><Icon.Close d={13} color="#94A3B8"/></button>
+              </div>
+              {openI===i && <div className="bm-detail">{it.detail ? it.detail : "Chưa lưu nội dung chi tiết cho mục này (đánh dấu từ bản cũ). Hãy bỏ đánh dấu rồi đánh dấu lại để lưu kèm nội dung."}</div>}
             </div>
           ))}
         </div>
@@ -2957,12 +3015,12 @@ function BookmarkPanel({ pkey, items, onClose }){
   )
 }
 function ClinicalTakeaway({ items, pkey }) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useGlobalCollapse(false)
   if (!items || !items.length) return null
   return (
     <div id="sec-takeaway" className="takeaway-card">
       <div className="takeaway-hd"><Icon.Stethoscope d={15} color="#1D6FE8"/><span>Kết luận lâm sàng nhanh</span>
-        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><CopyBtn text={()=>items.map(i=>i.txt).join("\n")} label="Sao chép"/></span>
+        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><FlagBtn pkey={CURRENT_PKEY} label="Kết luận lâm sàng nhanh" sub="Mục báo cáo" detail={()=>items.map(i=>i.txt).join("\n")}/><CopyBtn text={()=>items.map(i=>i.txt).join("\n")} label=""/></span>
         <button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"6px" }}>
           {collapsed ? <Icon.ChevDown d={14} color="#1D6FE8"/> : <Icon.ChevUp d={14} color="#1D6FE8"/>}
         </button>
@@ -2973,7 +3031,6 @@ function ClinicalTakeaway({ items, pkey }) {
             <li key={i} className={t.loai}>
               <span className="takeaway-mark" style={{ color:t.loai==="good"?"#059669":"#D97706" }}>{t.loai==="good"?"✓":"!"}</span>
               {t.txt}
-              <FlagBtn pkey={pkey} label={t.txt} sub="Kết luận lâm sàng nhanh"/>
             </li>
           ))}
         </ul>
@@ -2984,12 +3041,12 @@ function ClinicalTakeaway({ items, pkey }) {
 
 // ─── HÀNH ĐỘNG ƯU TIÊN (Next Actions) ─────────────────────────────────────────
 function NextActions({ items }) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useGlobalCollapse(false)
   if (!items || !items.length) return null
   return (
     <div id="sec-actions" className="next-actions">
       <div className="next-hd"><Icon.ShieldCheck d={16} color="#B45309"/><span>Hành động ưu tiên ở lần tái khám tới</span>
-        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><CopyBtn text={()=>items.map((a,i)=>`${i+1}. ${a.viec||""}${a.ly_do?" - "+a.ly_do:""}`).join("\n")} label="Sao chép"/></span>
+        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><FlagBtn pkey={CURRENT_PKEY} label="Hành động ưu tiên ở lần tái khám tới" sub="Mục báo cáo" detail={()=>items.map((a,i)=>`${i+1}. ${a.viec||""}${a.ly_do?" - "+a.ly_do:""}`).join("\n")}/><CopyBtn text={()=>items.map((a,i)=>`${i+1}. ${a.viec||""}${a.ly_do?" - "+a.ly_do:""}`).join("\n")} label=""/></span>
         <button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"6px" }}>
           {collapsed ? <Icon.ChevDown d={14} color="#B45309"/> : <Icon.ChevUp d={14} color="#B45309"/>}
         </button>
@@ -3154,7 +3211,7 @@ function LabPanel({ labs, note }) {
                 <span className={`lab-status ${m.status}`}>{statusTxt}</span>
               </div>
               <div className="lab-val-row">
-                <span className="lab-val">{m.val.split(" ")[0]}</span>
+                <span className="lab-val"><CountUp value={parseFloat(m.val)} decimals={(String(m.rawVal).split(".")[1]||"").length} suffix={(m.val.split(" ")[0].match(/[^0-9.,\-]+$/)||[""])[0]}/></span>
                 <span className={`lab-arrow ${m.arrow}`}>{arrowChar}</span>
                 {m.unit&&<span className="lab-unit">{m.unit}</span>}
               </div>
@@ -3185,8 +3242,8 @@ function LabPanel({ labs, note }) {
 }
 
 // ─── PRIORITY ALERTS BANNER ────────────────────────────────────────────────────
-function PriorityBanner({ findings, onSource }) {
-  const [collapsed, setCollapsed] = useState(false)
+function PriorityBanner({ findings, onSource, pkey }) {
+  const [collapsed, setCollapsed] = useGlobalCollapse(false)
   const [tierFilter, setTierFilter] = useState(null)
   const byTier = { critical:[], warning:[], stable:[] }
   findings.forEach(f => byTier[f.muc].push(f))
@@ -3277,7 +3334,7 @@ function DrugSafetyCard({ safety, egfr, egfrDetail, onSource }) {
             </div>
           ) : (
             <div className="drug-egfr-val">
-              <span className="drug-egfr-num">{egfr}</span>
+              <span className="drug-egfr-num"><CountUp value={egfr}/></span>
               <span className="drug-egfr-unit">mL/phút/1.73m²</span>
               <span className={`drug-egfr-tag ${egfr>=60?"ok":egfr>=30?"warn":"crit"}`}>
                 {egfr>=90?"Bình thường":egfr>=60?"Giảm nhẹ":egfr>=30?"Giảm vừa":"Giảm nặng"}
@@ -3410,6 +3467,32 @@ function HeroStatus({ info, findings, trajectory }) {
   )
 }
 
+function PatientSnapshot({ report }){
+  const [show, setShow] = useState(false)
+  useEffect(() => {
+    const on = () => setShow(window.scrollY > 200)
+    window.addEventListener("scroll", on, { passive:true }); on()
+    return () => window.removeEventListener("scroll", on)
+  }, [])
+  const p = (report && report.thong_tin_benh_nhan) || {}
+  let ef = null
+  const lk = report && report.sieu_am_tim && report.sieu_am_tim.lan_kham
+  if(lk && lk.length){ for(let i=lk.length-1;i>=0;i--){ if(lk[i] && lk[i].ef!=null){ ef=lk[i].ef; break } } }
+  const highAlerts = ((report && report.canh_bao_nguy_co) || []).filter(c=>c.muc_do==="cao").length
+  return (
+    <div className={`psnap${show?" show":""}`} onClick={()=>window.scrollTo({top:0,behavior:"smooth"})} title="Lên đầu trang" style={{cursor:"pointer"}}>
+      <div className="psnap-inner">
+        <span className="psnap-name">{p.ho_ten || "Bệnh nhân"}</span>
+        {(p.tuoi || p.gioi_tinh) && <span className="psnap-meta">{p.tuoi?`${p.tuoi} tuổi`:""}{p.tuoi&&p.gioi_tinh?" · ":""}{p.gioi_tinh||""}</span>}
+        {report && report.chan_doan_chinh && <span className="psnap-dx" title={report.chan_doan_chinh}>{report.chan_doan_chinh}</span>}
+        <span className="psnap-chips">
+          {ef!=null && <span className="psnap-chip ef">EF {ef}%</span>}
+          {highAlerts>0 && <span className="psnap-chip alert">{highAlerts} cảnh báo cao</span>}
+        </span>
+      </div>
+    </div>
+  )
+}
 function ReadProgress(){
   const [pct, setPct] = useState(0)
   useEffect(() => {
@@ -3427,8 +3510,8 @@ function TimelineStrip({ events }){
   if(!events || events.length < 2) return null
   const tone = (l) => l==="canh_bao" ? {c:"#DC2626",bg:"#FEE2E2",t:"Cảnh báo"} : l==="bat_thuong" ? {c:"#D97706",bg:"#FEF3C7",t:"Theo dõi"} : {c:"#0E9488",bg:"#D1FAE5",t:"Ổn định"}
   return (
-    <div className="tls-card">
-      <div className="tls-head"><Icon.Clock d={15} color="#1D6FE8"/><span>Dòng thời gian diễn biến</span><span className="tls-hint">cuộn ngang để xem</span></div>
+    <div className="tls-card" id="sec-timeline">
+      <div className="tls-head"><Icon.Clock d={15} color="#1D6FE8"/><span>Dòng thời gian diễn biến</span><span className="tls-hint">cuộn ngang để xem</span><span className="sec-tools" onClick={e=>e.stopPropagation()}><FlagBtn pkey={CURRENT_PKEY} label="Dòng thời gian diễn biến" sub="Tổng quan diễn biến" detail={()=>(events||[]).map(e=>(e.ngay||"")+": "+(e.mo_ta||"")).join("\n")}/><CopyBtn text={()=>(events||[]).map(e=>(e.ngay||"")+": "+(e.mo_ta||"")).join("\n")}/></span></div>
       <div className="tls-scroll">
         <div className="tls-track">
           {events.map((e,i)=>{ const tn=tone(e.loai); return (
@@ -3449,9 +3532,30 @@ function TimelineStrip({ events }){
 function ReportTab({ report: r, analysis }) {
   const [tlFilter, setTlFilter] = useState("all")
   const [modalSource, setModalSource] = useState(null)
-  const [alertsCollapsed, setAlertsCollapsed] = useState(false)
+  const [alertsCollapsed, setAlertsCollapsed] = useGlobalCollapse(false)
   const alertsHigh = (r.canh_bao_nguy_co || []).filter(c => c.muc_do === "cao")
   const filtered = (r.dien_bien_lam_sang || []).filter(ev => tlFilter === "all" || ev.loai === tlFilter)
+  CURRENT_PKEY = (r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an) || "x"
+  useEffect(() => {
+    let reduce = false
+    try { reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches } catch {}
+    if(reduce || typeof IntersectionObserver === "undefined") return
+    const sel = ".report-main .card,.report-main .takeaway-card,.report-main .ov-card,.report-main .prio-wrap,.report-main .tls-card,.report-main .summary-card"
+    const nodes = Array.from(document.querySelectorAll(sel))
+    if(!nodes.length) return
+    const vh = window.innerHeight || 800
+    nodes.forEach(n => {
+      const top = n.getBoundingClientRect().top
+      if(top < vh * 0.92) n.classList.add("reveal", "in")
+      else n.classList.add("reveal")
+    })
+    const io = new IntersectionObserver((ents) => {
+      ents.forEach(e => { if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target) } })
+    }, { rootMargin: "0px 0px -7% 0px" })
+    nodes.forEach(n => { if(!n.classList.contains("in")) io.observe(n) })
+    const t = setTimeout(() => nodes.forEach(n => n.classList.add("in")), 1900)
+    return () => { io.disconnect(); clearTimeout(t) }
+  }, [])
 
   // Nguồn chân lý: rule engine backend (Bước 2) nếu có; nếu không (demo) thì tính client-side.
   let findings, egfr, safety, egfrDetail
@@ -3613,6 +3717,8 @@ function ReportTab({ report: r, analysis }) {
         </div>
         <MedGantt meds={r.thuoc_cuoi_ky}/>
       </Card>
+
+      <PriorityBanner findings={findings || []} onSource={setModalSource} pkey={r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an}/>
 
       {/* PHÂN TÍCH: eGFR + an toàn đơn thuốc */}
       <DrugSafetyCard safety={safety} egfr={egfr} egfrDetail={egfrDetail} onSource={setModalSource}/>
@@ -4129,7 +4235,7 @@ function deriveTeaching(r){
     dieu_tri_noi:(r.thuoc_cuoi_ky||[]).map(m=>`${m.nhom}: ${m.ten_thuoc}`),
     tien_luong:(r.ket_luan_giai_doan&&(r.ket_luan_giai_doan[3]||r.ket_luan_giai_doan[2]))||"",
     red_flags, decisions:buildDecisions(r), reasoning_score,
-    muc_tieu:["Khai thác bệnh sử và khám lâm sàng theo khung bệnh án ngoại khoa (HMU).","Tóm tắt thành hội chứng, chẩn đoán sơ bộ và phân biệt.","Biện luận và đề nghị cận lâm sàng hợp lý.","Trình bày điều trị, tiên lượng và dự phòng biến chứng."],
+    muc_tieu:["Khai thác bệnh sử và khám lâm sàng theo khung bệnh án ngoại khoa Đại học Y Hà Nội (HMU).","Tóm tắt thành hội chứng, chẩn đoán sơ bộ và phân biệt.","Biện luận và đề nghị cận lâm sàng hợp lý.","Trình bày điều trị, tiên lượng và dự phòng biến chứng."],
     socratic:[
       { q:"Từ bệnh sử và thăm khám, hãy tóm tắt ca này bằng 1-2 câu (nêu các hội chứng chính).", a:splitSentences(r.tom_tat_toan_canh).slice(0,2).join(" ") },
       { q:"Từ các dữ kiện hiện có, anh/chị nghĩ tới chẩn đoán sơ bộ nào và dựa vào đâu?", a:`${dx} Dựa trên bệnh cảnh suy tim, khám tim mạch và siêu âm tim.` },
@@ -4298,7 +4404,8 @@ const VIEW_MODES = [
   { key:"hoi_chan", label:"Hội chẩn AI" },
   { key:"teaching", label:"Học vụ (Giảng dạy)" },
 ]
-const MODE_DESC = { clinical:"Tóm tắt & cảnh báo cho bác sĩ", hoi_chan:"Hội đồng chuyên khoa ảo", teaching:"Vấn đáp theo bệnh án HMU" }
+const MODE_DESC = { clinical:"Tóm tắt & cảnh báo cho bác sĩ", hoi_chan:"Hội đồng chuyên khoa ảo", teaching:"Vấn đáp theo bệnh án Đại học Y Hà Nội (HMU)" }
+const MODE_COLOR = { clinical:"#1D6FE8", hoi_chan:"#0E9488", teaching:"#D97706" }
 function ModeDropdown({ mode, onChange }){
   const [open, setOpen] = useState(false)
   const cur = VIEW_MODES.find(m=>m.key===mode) || VIEW_MODES[0]
@@ -4307,7 +4414,7 @@ function ModeDropdown({ mode, onChange }){
       <span className="mode-dd-lbl">Chế độ</span>
       <div className="mode-cd">
         <button type="button" className={`mode-cd-btn${open?" open":""}`} onClick={()=>setOpen(o=>!o)}>
-          <span className="mode-cd-dot"/>{cur.label}
+          <span className="mode-cd-dot" style={{background:MODE_COLOR[cur.key]||"#1D6FE8"}}/>{cur.label}
           <svg className="mode-cd-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
         {open && <>
@@ -4315,9 +4422,9 @@ function ModeDropdown({ mode, onChange }){
           <div className="mode-cd-list">
             {VIEW_MODES.map(m=>(
               <button key={m.key} className={`mode-cd-item${m.key===mode?" sel":""}`} onClick={()=>{onChange(m.key);setOpen(false);mpToast("Đã chuyển sang chế độ: "+m.label)}}>
-                <span className="mode-cd-dot"/>
+                <span className="mode-cd-dot" style={{background:MODE_COLOR[m.key]||"#1D6FE8"}}/>
                 <span className="mode-cd-txt"><b>{m.label}</b><span>{MODE_DESC[m.key]}</span></span>
-                {m.key===mode && <Icon.Dot d={8} color="#1D6FE8"/>}
+                {m.key===mode && <Icon.Dot d={8} color={MODE_COLOR[m.key]||"#1D6FE8"}/>}
               </button>
             ))}
           </div>
@@ -4338,7 +4445,20 @@ const SPEC_ICON = {
   "Dinh dưỡng lâm sàng":{ic:Icon.Pill, c:"#D97706"},
 }
 function SpecIcon({ khoa, d=15 }){ const m=SPEC_ICON[khoa]||{ic:Icon.Stethoscope,c:"#1D6FE8"}; const I=m.ic; return <span className="spec-ic" style={{background:m.c+"1A"}}><I d={d} color={m.c}/></span> }
-function Step({ n, t }){ return <div className="mdt-step"><span className="mdt-step-n">{n}</span><span className="mdt-step-t">{t}</span></div> }
+function Step({ n, t }){
+  const [collapsed, setCollapsed] = useGlobalCollapse(false)
+  const ref = useRef(null)
+  return (
+    <div ref={ref} className={`mdt-step${collapsed?" collapsed":""}`} onClick={()=>setCollapsed(c=>!c)} role="button" title={collapsed?"Mở rộng":"Thu gọn"}>
+      <span className="mdt-step-n">{n}</span><span className="mdt-step-t">{t}</span>
+      <span className="sec-tools" onClick={e=>e.stopPropagation()}>
+        <FlagBtn pkey={CURRENT_PKEY} label={t} sub="Mục hội chẩn" detail={()=>elText(ref.current && ref.current.nextElementSibling)}/>
+        <CopyBtn text={()=>elText(ref.current && ref.current.nextElementSibling)} label=""/>
+      </span>
+      <span className="mdt-step-chev">{collapsed ? <Icon.ChevDown d={13} color="#94A3B8"/> : <Icon.ChevUp d={13} color="#94A3B8"/>}</span>
+    </div>
+  )
+}
 function confClass(p){ return p>=85?"hi":p>=65?"mid":"lo" }
 function DiscBlock({ kind, title, items }){
   if(!items||items.length===0) return null
@@ -4451,7 +4571,7 @@ function MDTView({ report }){
         </div>
 
         <Step n="7" t="Kết luận hội chẩn"/>
-        <div className="mdt-final"><div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"4px"}}><span className="mdt-final-lbl" style={{margin:0}}>Đồng thuận cuối cùng</span><span style={{marginLeft:"auto"}}><CopyBtn text={mdt.consensus} label="Sao chép"/></span></div>{mdt.consensus}</div>
+        <div className="mdt-final"><div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"4px"}}><span className="mdt-final-lbl" style={{margin:0}}>Đồng thuận cuối cùng</span><span style={{marginLeft:"auto"}}><CopyBtn text={mdt.consensus} label=""/></span></div>{mdt.consensus}</div>
 
         <Step n="8" t="Hỏi Hội đồng (Ask the MDT)"/>
         <div className="ask-qs">
@@ -4471,7 +4591,21 @@ function MDTView({ report }){
 }
 
 function TeachCard({ n, title, children, accent }){
-  return <div className={`teach-sec${accent?" "+accent:""}`}><div className="teach-sec-t"><span className="teach-sec-n">{n}</span>{title}</div><div className="teach-sec-b">{children}</div></div>
+  const [collapsed, setCollapsed] = useGlobalCollapse(false)
+  const bodyRef = useRef(null)
+  return (
+    <div className={`teach-sec${accent?" "+accent:""}${collapsed?" collapsed":""}`}>
+      <div className="teach-sec-t" onClick={()=>setCollapsed(c=>!c)} style={{cursor:"pointer"}} title={collapsed?"Mở rộng":"Thu gọn"}>
+        <span className="teach-sec-n">{n}</span>{title}
+        <span className="sec-tools" onClick={e=>e.stopPropagation()}>
+          <FlagBtn pkey={CURRENT_PKEY} label={typeof title === "string" ? title : "Mục giảng dạy"} sub="Mục giảng dạy" detail={()=>elText(bodyRef.current)}/>
+          <CopyBtn text={()=>elText(bodyRef.current)} label=""/>
+        </span>
+        <span className="teach-sec-chev">{collapsed ? <Icon.ChevDown d={13} color="#94A3B8"/> : <Icon.ChevUp d={13} color="#94A3B8"/>}</span>
+      </div>
+      {!collapsed && <div className="teach-sec-b" ref={bodyRef}>{children}</div>}
+    </div>
+  )
 }
 function TeachingView({ report }){
   const [t, setT] = useState(() => deriveTeaching(report))
@@ -4497,7 +4631,7 @@ function TeachingView({ report }){
         <div>
           <div className="mode-hero-tag teal">Học vụ · Giảng viên lâm sàng ảo</div>
           <h2>Chế độ giảng dạy</h2>
-          <p>Vấn đáp lâm sàng theo khung bệnh án ngoại khoa (HMU) trên ca <b>{report.thong_tin_benh_nhan.ho_ten}</b>: tự suy luận, nhận phản biện và đánh giá.</p>
+          <p>Vấn đáp lâm sàng theo khung bệnh án ngoại khoa Đại học Y Hà Nội (HMU) trên ca <b>{report.thong_tin_benh_nhan.ho_ten}</b>: tự suy luận, nhận phản biện và đánh giá.</p>
         </div>
       </div>
 
@@ -4843,11 +4977,48 @@ body.theme-dark .nav-menu-font button{background:#1B2536;border-color:#2F4368;co
 .bm-main{flex:1;min-width:0}
 .bm-label{font-size:13px;font-weight:600;color:var(--navy);line-height:1.45}
 .bm-sub{font-size:11.5px;color:var(--muted2);margin-top:3px;line-height:1.5}
+.bm-detail{font-size:12px;color:var(--muted2);margin-top:6px;line-height:1.55;white-space:pre-wrap;max-height:150px;overflow:auto}
+body.theme-dark .bm-detail{color:#A8BBD6}
+.bm-item{display:block;padding:0;overflow:hidden}
+.bm-item-top{display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer}
+.bm-item-top:hover{background:rgba(29,111,232,.035)}
+.bm-go{border:1px solid var(--border);background:#fff;border-radius:8px;width:30px;height:28px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:#1D6FE8;flex-shrink:0}
+.bm-go:hover{background:#eaf2fe}
+.bm-chev{display:inline-flex;flex-shrink:0;align-items:center}
+.bm-item .bm-detail{margin:0;padding:12px 14px 14px;border-top:1px solid var(--border);max-height:300px;overflow:auto}
+.bm-flash{animation:bmflash 1.5s ease}
+@keyframes bmflash{0%,100%{box-shadow:0 0 0 0 rgba(29,111,232,0)}30%{box-shadow:0 0 0 3px rgba(29,111,232,.4)}}
+body.theme-dark .bm-go{background:#1B2536;border-color:#2F4368;color:#7FB0FF}
+body.theme-dark .bm-go:hover{background:#22304a}
+body.theme-dark .bm-item-top:hover{background:rgba(127,176,255,.06)}
+body.theme-dark .bm-item .bm-detail{border-color:#28364E}
+[id^="sec-"],.phase-sec,.tls-card{scroll-margin-top:74px}
+.sidebar-item.active svg{opacity:1}
 .bm-x{border:none;background:none;cursor:pointer;padding:2px;flex-shrink:0}
 body.theme-dark .bm-panel{background:#161F33}
 body.theme-dark .bm-head{color:#EAF1FB;border-color:#28364E}
 body.theme-dark .bm-item:hover{background:#1B2536}
 body.theme-dark .bm-label{color:#EAF1FB}
+.sh-ov{position:fixed;inset:0;z-index:140;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
+.sh-panel{background:#fff;border-radius:16px;width:432px;max-width:100%;box-shadow:0 24px 60px rgba(15,39,64,.3);overflow:hidden}
+.sh-head{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--border);font-size:14px;font-weight:700;color:var(--navy)}
+.sh-head span{flex:1}
+.sh-body{padding:6px 16px 16px}
+.sh-row{display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px dashed var(--border)}
+.sh-row:last-child{border-bottom:none}
+.sh-keys{display:flex;gap:5px;flex-shrink:0;min-width:126px;flex-wrap:wrap}
+.sh-kbd{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 7px;background:#f1f5fb;border:1px solid var(--border);border-bottom-width:2px;border-radius:6px;font-size:11.5px;font-weight:700;color:var(--navy2);font-family:inherit}
+.sh-desc{font-size:13px;color:var(--muted2);line-height:1.45}
+body.theme-dark .sh-panel{background:#161F33}
+body.theme-dark .sh-head{color:#EAF1FB;border-color:#28364E}
+body.theme-dark .sh-kbd{background:#1B2536;border-color:#2F4368;color:#C7D4E6}
+.sidebar::-webkit-scrollbar,.bm-body::-webkit-scrollbar,.tls-scroll::-webkit-scrollbar,.dn-ta::-webkit-scrollbar{width:8px;height:8px}
+.sidebar::-webkit-scrollbar-thumb,.bm-body::-webkit-scrollbar-thumb,.tls-scroll::-webkit-scrollbar-thumb,.dn-ta::-webkit-scrollbar-thumb{background:rgba(110,137,168,.35);border-radius:8px}
+.sidebar::-webkit-scrollbar-thumb:hover,.tls-scroll::-webkit-scrollbar-thumb:hover{background:rgba(110,137,168,.55)}
+body.theme-dark .sidebar::-webkit-scrollbar-thumb,body.theme-dark .bm-body::-webkit-scrollbar-thumb,body.theme-dark .tls-scroll::-webkit-scrollbar-thumb{background:rgba(127,176,255,.28)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.prio-box-name{display:flex;align-items:flex-start;gap:6px}
+.prio-box-name .flag-btn{margin-left:auto;margin-top:1px}
 @media(max-width:860px){
   .report-outer{padding:14px 12px 48px;gap:0}
   .sidebar{display:none}
@@ -5088,6 +5259,74 @@ body.theme-dark .bm-label{color:#EAF1FB}
 .nav-menu button:hover{background:#f1f6fd}
 .nav-menu button.danger{color:#DC2626}
 .nav-menu button.danger:hover{background:#fef2f2}
+.nav-menu-sec{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:#9fb2cc;padding:9px 12px 4px}
+.nav-menu-sec:first-child{padding-top:5px}
+.nav-menu{max-height:calc(100vh - 86px);overflow-y:auto}
+body.theme-dark .nav-menu-sec{color:#7689A8}
+body.theme-dark .score-card,body.theme-dark .mdt-op,body.theme-dark .ask-ans,body.theme-dark .dc,body.theme-dark .prio{background:#161F33;border-color:#28364E}
+.copy-btn.done{color:#059669;border-color:#a7f3d0;background:#ecfdf5}
+body.theme-dark .copy-btn.done{color:#6EE7B7;background:#0c2a22;border-color:#1d5e4a}
+.skel-wrap{max-width:440px;margin:8px auto 0;display:flex;flex-direction:column;gap:12px;padding:0 8px}
+.skel-card{border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:9px;background:var(--glass)}
+.skel-row{display:flex;gap:10px}
+.skel-box{flex:1;height:46px;border-radius:10px;background:linear-gradient(100deg,#eef3f9 30%,#dfe8f3 50%,#eef3f9 70%);background-size:200% 100%;animation:skelsh 1.3s ease-in-out infinite}
+.skel-line{height:10px;border-radius:6px;background:linear-gradient(100deg,#eef3f9 30%,#dfe8f3 50%,#eef3f9 70%);background-size:200% 100%;animation:skelsh 1.3s ease-in-out infinite}
+.skel-line.w40{width:40%}.skel-line.w55{width:55%}.skel-line.w70{width:70%}.skel-line.w75{width:75%}.skel-line.w90{width:90%}.skel-line.w95{width:95%}
+@keyframes skelsh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.psnap{position:fixed;top:52px;left:0;right:0;z-index:45;background:rgba(255,255,255,0.96);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--border);transform:translateY(-130%);transition:transform .26s ease;box-shadow:0 4px 16px rgba(16,41,66,.06)}
+.psnap.show{transform:translateY(0)}
+.psnap-inner{max-width:1120px;margin:0 auto;padding:8px 24px;display:flex;align-items:center;gap:12px;overflow:hidden}
+.psnap-name{font-size:13px;font-weight:700;color:var(--navy);white-space:nowrap}
+.psnap-meta{font-size:11.5px;color:var(--muted);white-space:nowrap}
+.psnap-dx{font-size:12px;color:var(--navy3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:40px}
+.psnap-chips{display:flex;gap:6px;flex-shrink:0;margin-left:auto}
+.psnap-chip{font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap}
+.psnap-chip.ef{background:#e0f2fe;color:#0369a1}
+.psnap-chip.alert{background:#fee2e2;color:#dc2626}
+.reveal{opacity:0;transform:translateY(14px);transition:opacity .5s ease,transform .5s ease,box-shadow .2s}
+.reveal.in{opacity:1;transform:none}
+.mode-cd-list{padding:6px;border-radius:14px;box-shadow:0 18px 44px rgba(15,39,64,.18);min-width:268px}
+.mode-cd-item{border-radius:10px;padding:10px 11px;gap:10px;align-items:flex-start}
+.mode-cd-item:hover{background:#f3f7fd}
+.mode-cd-item.sel{background:#eaf2fe}
+.mode-cd-item .mode-cd-dot{margin-top:4px}
+.mode-cd-txt b{font-size:13px}
+.mode-cd-txt span{font-size:11.5px;line-height:1.4}
+.mode-cd-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;box-shadow:0 0 0 3px rgba(0,0,0,.04)}
+body.theme-dark .mode-cd-item:hover{background:#1B2536}
+body.theme-dark .mode-cd-item.sel{background:#15233b}
+.mdt-step{cursor:pointer;user-select:none}
+.mdt-step-chev{margin-left:auto;display:inline-flex;align-items:center}
+.mdt-step.collapsed + div{display:none}
+.sec-tools{display:inline-flex;align-items:center;gap:3px;margin-left:auto}
+.mdt-step .mdt-step-chev{margin-left:6px}
+.teach-sec-t .teach-sec-chev{margin-left:6px}
+.teach-sec-t .sec-tools .copy-btn,.teach-sec-t .sec-tools .flag-btn,.mdt-step .sec-tools .copy-btn,.mdt-step .sec-tools .flag-btn{padding:3px}
+.bm-ov{background:var(--page-bg);align-items:flex-start;justify-content:center;padding:0;overflow-y:auto}
+.bm-panel{background:transparent;width:100%;max-width:780px;min-height:100vh;max-height:none;border-radius:0;box-shadow:none;padding:0 20px 48px}
+.bm-head{position:sticky;top:0;background:var(--page-bg);font-size:17px;padding:22px 2px 14px;z-index:1}
+.bm-body{padding:16px 0}
+.bm-item{background:var(--glass);border:1px solid var(--border);margin-bottom:8px;border-radius:12px}
+.bm-empty{margin-top:34px}
+body.theme-dark .bm-panel{background:transparent}
+body.theme-dark .bm-head{background:var(--page-bg)}
+body.theme-dark .bm-item{background:#141D2F;border-color:#28364E}
+.teach-sec-t{display:flex;align-items:center;gap:8px}
+.teach-sec-chev{margin-left:auto;display:inline-flex;align-items:center}
+body.theme-dark .psnap{background:rgba(12,20,34,0.96);border-color:#28364E}
+body.theme-dark .psnap-name{color:#EAF1FB}
+body.theme-dark .psnap-dx{color:#C7D4E6}
+body.theme-dark .psnap-chip.ef{background:#0c2f44;color:#7dd3fc}
+body.theme-dark .psnap-chip.alert{background:#3a1414;color:#fca5a5}
+@media(max-width:860px){.psnap-inner{padding:8px 12px}.psnap-dx{display:none}}
+body.theme-dark .skel-box,body.theme-dark .skel-line{background:linear-gradient(100deg,#1a2233 30%,#222d42 50%,#1a2233 70%);background-size:200% 100%}
+.card:hover{box-shadow:var(--shadow-md)}
+.sidebar-item.active{box-shadow:inset 3px 0 0 var(--blue)}
+.btn-primary:active,.nav-export:active,.sn-send:active,.cfm-ok:active,.note-attach:active{transform:translateY(1px)}
+::selection{background:rgba(29,111,232,.2)}
+body.theme-dark ::selection{background:rgba(91,149,242,.32)}
+.tb-btn,.nav-export,.theme-toggle,.nav-burger,.copy-btn,.flag-btn,.chip-tag{transition:all .15s ease}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 .note-text{width:100%;box-sizing:border-box;min-height:60px;border:1px solid #d8e2f0;border-radius:10px;padding:10px 12px;font-size:13px;font-family:inherit;resize:vertical;outline:none;margin-bottom:9px}
 .note-text:focus{border-color:#1D6FE8}
 .note-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
@@ -5190,13 +5429,39 @@ function ConfirmHost(){
     </div>
   )
 }
-function CopyBtn({ text, label="Sao chép" }){
+function CountUp({ value, decimals=0, suffix="" }){
+  const target = typeof value === "number" ? value : parseFloat(value)
+  const [d, setD] = useState(0)
+  useEffect(() => {
+    if(!isFinite(target)) return
+    let reduce = false
+    try { reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches } catch {}
+    if(reduce){ setD(target); return }
+    let raf, start
+    const dur = 850
+    const step = (ts) => {
+      if(!start) start = ts
+      const p = Math.min(1, (ts - start) / dur)
+      const e = 1 - Math.pow(1 - p, 3)
+      setD(target * e)
+      if(p < 1) raf = requestAnimationFrame(step); else setD(target)
+    }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [target])
+  if(!isFinite(target)) return <>{value}</>
+  return <>{d.toFixed(decimals)}{suffix}</>
+}
+function CopyBtn({ text, label="" }){
+  const [done, setDone] = useState(false)
   const copy = async () => {
     const v = typeof text === "function" ? text() : text
-    try { await navigator.clipboard.writeText(v || ""); mpToast("Đã sao chép vào bộ nhớ tạm") }
+    try { await navigator.clipboard.writeText(v || ""); setDone(true); setTimeout(()=>setDone(false), 1200) }
     catch { mpToast("Trình duyệt không cho sao chép tự động", "err") }
   }
-  return <button className="copy-btn" onClick={copy} title="Sao chép nội dung"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>{label}</button>
+  return <button className={`copy-btn${done?" done":""}`} onClick={copy} title="Sao chép nội dung">{done
+    ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+    : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>}{done ? (label ? "Đã chép" : "") : label}</button>
 }
 
 function ThemeToggle(){
@@ -5237,6 +5502,41 @@ function FocusToggle(){
         ? <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
         : <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>}
     </button>
+  )
+}
+
+function mpHelp(){ if(typeof window!=="undefined") window.dispatchEvent(new CustomEvent("mp-help")) }
+function ShortcutHelp(){
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    const h = () => setOpen(true)
+    const esc = (e) => { if(e.key === "Escape") setOpen(false) }
+    window.addEventListener("mp-help", h)
+    window.addEventListener("keydown", esc)
+    return () => { window.removeEventListener("mp-help", h); window.removeEventListener("keydown", esc) }
+  }, [])
+  if(!open) return null
+  const ROWS = [
+    { k:["1","2","3"], d:"Chuyển chế độ: Bác sĩ, Hội chẩn AI, Giảng dạy" },
+    { k:["/"], d:"Tìm nhanh trong báo cáo" },
+    { k:["Ctrl/Cmd","K"], d:"Mở trợ lý MedAmi (chatbot)" },
+    { k:["Esc"], d:"Đóng bảng, menu hoặc popup đang mở" },
+    { k:["?"], d:"Mở bảng phím tắt này" },
+  ]
+  return (
+    <div className="sh-ov" onClick={()=>setOpen(false)}>
+      <div className="sh-panel" onClick={e=>e.stopPropagation()}>
+        <div className="sh-head"><Icon.Layers d={16} color="#1D6FE8"/><span>Phím tắt</span><button className="dn-x" onClick={()=>setOpen(false)} aria-label="Đóng"><Icon.Close d={14} color="#64748B"/></button></div>
+        <div className="sh-body">
+          {ROWS.map((r,i)=>(
+            <div key={i} className="sh-row">
+              <div className="sh-keys">{r.k.map((k,j)=><kbd key={j} className="sh-kbd">{k}</kbd>)}</div>
+              <div className="sh-desc">{r.d}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -5376,6 +5676,7 @@ export default function App() {
         {showHistory && <HistoryPanel onClose={()=>setShowHistory(false)} onOpen={loadRecord} currentId={currentId}/>}
         <ToastHost/>
         <ConfirmHost/>
+        <ShortcutHelp/>
       </ErrorBoundary>
     </>
   )
