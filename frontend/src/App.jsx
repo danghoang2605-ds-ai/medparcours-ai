@@ -1477,12 +1477,7 @@ function triggerPrint(r, mode) {
     teaching:{ title:"Tài liệu học tập ca lâm sàng", label:"MedParcours AI: Tài liệu học tập ca lâm sàng (giảng dạy)" },
   }
   const meta = PRINT_META[mode] || PRINT_META.clinical
-  const win = window.open("", "_blank", "width=900,height=700")
-  win.document.write(`<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>${meta.title}: ${p.ho_ten}</title>
-<style>body{font-family:'Times New Roman',serif;color:#000;font-size:11pt;line-height:1.55;background:#fff;margin:0}.page{padding:18mm 16mm;max-width:210mm;margin:0 auto}h1{font-size:13pt;text-transform:uppercase;margin:0 0 2pt}h2{font-size:10pt;font-weight:700;text-transform:uppercase;border-bottom:1.5px solid #000;padding-bottom:3pt;margin:14pt 0 7pt}.hdr{border-bottom:2.5px solid #000;padding-bottom:10pt;margin-bottom:8pt;display:flex;justify-content:space-between}.hdr-r{text-align:right;font-size:9pt;color:#444}.sub{font-size:9pt;color:#444;margin:2pt 0}.row{display:flex;gap:6pt;font-size:10pt;margin:3pt 0}.lbl{color:#555;min-width:110pt}table{width:100%;border-collapse:collapse;font-size:10pt;margin:6pt 0 12pt}th{background:#eee;font-weight:700;text-align:left;padding:4pt 7pt;border:1px solid #aaa;font-size:9pt;text-transform:uppercase}td{padding:4pt 7pt;border:1px solid #ccc;vertical-align:top}tr:nth-child(even) td{background:#f9f9f9}.alert{border:1.5px solid #000;border-left:4px solid #000;padding:6pt 10pt;margin:5pt 0}.al{font-size:9pt;font-weight:700;text-transform:uppercase;margin-bottom:2pt}.as{font-size:9pt;color:#555}.footer{border-top:1px solid #999;margin-top:20pt;padding-top:7pt;font-size:8pt;color:#666;display:flex;justify-content:space-between}.stamp{border:1.5px solid #999;width:100pt;height:60pt;display:inline-block;margin-top:8pt;text-align:center;font-size:8pt;padding:5pt;color:#999}@media print{@page{size:A4;margin:18mm 16mm}}</style>
-</head><body><div class="page">
-<div class="hdr"><div><div style="font-size:9pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:4pt">${meta.label}</div><h1>${p.ho_ten}</h1><div class="sub">Số bệnh án: ${p.so_benh_an} | ${p.tuoi} tuổi, ${p.gioi_tinh} | ${p.dia_chi}</div><div class="sub">Ngày sinh: ${p.ngay_sinh} | Vào viện: ${p.ngay_vao_vien} | Ra viện: ${p.ngay_ra_vien}</div></div><div class="hdr-r">In ngày: ${new Date().toLocaleDateString("vi-VN")}<br>MedParcours AI v1.2<br><span style="color:#c00;font-weight:700">Cần bác sĩ xác nhận</span></div></div>
-<h2>I. Chẩn đoán</h2><div class="row"><span class="lbl">Chẩn đoán chính:</span><span>${r.chan_doan_chinh}</span></div><div class="row"><span class="lbl">Lý do nhập viện:</span><span>${r.ly_do_vao_vien}</span></div><div class="row"><span class="lbl">Tiền sử:</span><span>${r.tien_su_benh}</span></div>
+  const clinicalBody = `<h2>I. Chẩn đoán</h2><div class="row"><span class="lbl">Chẩn đoán chính:</span><span>${r.chan_doan_chinh}</span></div><div class="row"><span class="lbl">Lý do nhập viện:</span><span>${r.ly_do_vao_vien}</span></div><div class="row"><span class="lbl">Tiền sử:</span><span>${r.tien_su_benh}</span></div>
 <h2>II. Phẫu thuật</h2><table><tr><th>Ngày</th><th>Phương pháp</th><th>Kết quả</th></tr><tr><td>${r.phau_thuat.ngay}</td><td>${r.phau_thuat.phuong_phap}</td><td>${r.phau_thuat.ket_qua}</td></tr></table><div class="row"><span class="lbl">Phẫu thuật viên:</span><span>${r.phau_thuat.bac_si_phau_thuat}</span></div>
 <h2>III. Xét nghiệm</h2><table><tr><th>Chỉ số</th><th>Kết quả</th><th>BT</th><th>Đánh giá</th></tr>${(r.xet_nghiem_key||r.xet_nghiem_meta||[]).map(m=>`<tr><td>${m.key} (${m.desc})</td><td>${m.val}</td><td>${m.normal}</td><td>${m.status==="high"?"Cao":m.status==="low"?"Thấp":"BT"}</td></tr>`).join("")}</table>
 <h2>IV. Diễn biến</h2><table><tr><th style="width:80pt">Ngày</th><th style="width:70pt">Loại</th><th>Mô tả</th></tr>${r.dien_bien_lam_sang.map(ev=>`<tr><td>${ev.ngay}</td><td>${ev.loai==="canh_bao"?"Cảnh báo":ev.loai==="bat_thuong"?"Bất thường":"BT"}</td><td>${ev.mo_ta}</td></tr>`).join("")}</table>
@@ -1490,7 +1485,45 @@ function triggerPrint(r, mode) {
 <h2>VI. Thuốc</h2><table><tr><th>Tên thuốc</th><th>Nhóm</th><th>Liều</th><th>Cách dùng</th></tr>${r.thuoc_cuoi_ky.map(t=>`<tr><td>${t.ten_thuoc}</td><td>${t.nhom}</td><td>${t.lieu}</td><td>${t.cach_dung}</td></tr>`).join("")}</table>
 <h2>VII. Cảnh báo</h2>${r.canh_bao_nguy_co.map(c=>`<div class="alert"><div class="al">[${c.muc_do==="cao"?"ƯU TIÊN CAO":c.muc_do==="trung_binh"?"Trung bình":"Theo dõi"}] ${c.mo_ta}</div><div class="as">Căn cứ: ${c.can_cu}</div></div>`).join("")}
 ${(()=>{const{findings,egfr,ctx}=runPriorityScreens(r);const s=checkDrugSafety(r.thuoc_cuoi_ky,egfr,ctx);const act=findings.filter(f=>f.muc!=="stable").sort((a,b)=>TIER_ORDER[a.muc]-TIER_ORDER[b.muc]);let h="<h2>VIII. Phân tầng ưu tiên lâm sàng</h2>";h+=act.map(f=>`<div class="alert"><div class="al">[${TIER_META[f.muc].label}] ${f.ten}</div><div class="as">${f.ly_do} — Nguồn: ${f.nguon}</div></div>`).join("")||"<p>Không có cảnh báo cần xử trí ngay.</p>";h+=`<h2>IX. Kiểm tra an toàn đơn thuốc</h2><p>Chức năng thận: eGFR ${egfr} mL/phút/1.73m2 (CKD-EPI 2021).</p>`;if(s.interactions.length)h+="<table><tr><th>Cặp thuốc</th><th>Mức</th><th>Hậu quả</th><th>Đề xuất</th></tr>"+s.interactions.map(it=>`<tr><td>${it.thuoc_a} + ${it.thuoc_b}</td><td>${TIER_META[it.muc].label}</td><td>${it.hau_qua}</td><td>${it.de_xuat}</td></tr>`).join("")+"</table>";if(s.favorable.length)h+="<p>Phù hợp khuyến cáo: "+s.favorable.map(f=>`${f.thuoc} (${f.nguon})`).join("; ")+"</p>";return h})()}
-<h2>X. Tóm tắt</h2><p>${r.tom_tat_toan_canh}</p>
+<h2>X. Tóm tắt</h2><p>${r.tom_tat_toan_canh}</p>`
+  const mdtPrintBody = (rr) => {
+    const m = deriveMDT(rr)
+    let h = `<h2>I. Tổng quan nguy cơ (MDT Risk Dashboard)</h2><table><tr><th>Vấn đề</th><th>Mức độ</th></tr>` + m.risk.map(d=>`<tr><td>${d.ten}</td><td>${d.pct}%</td></tr>`).join("") + `</table>`
+    h += `<h2>II. Ưu tiên lâm sàng</h2>` + m.priorities.map(pr=>`<div class="alert"><div class="al">Ưu tiên ${pr.rank}: ${pr.ten}</div><div class="as">${pr.ly_do}</div></div>`).join("")
+    h += `<h2>III. Chuyên khoa được mời</h2><table><tr><th>Chuyên khoa</th><th>Liên quan</th><th>Vai trò</th></tr>` + m.specialties.map(y=>`<tr><td>${y.khoa}</td><td>${y.relevance}</td><td>${y.role}</td></tr>`).join("") + `</table>`
+    h += `<h2>IV. Nhận định theo chuyên khoa</h2>` + m.specialties.map(y=>`<div class="alert"><div class="al">${y.khoa} - Độ tin cậy ${y.confidence}%</div><div class="as"><b>Kết luận chính:</b> ${(y.ket_luan_chinh||[]).join("; ")||"-"}<br><b>Đề xuất:</b> ${(y.de_xuat||[]).join("; ")||"-"}<br><b>Dữ liệu còn thiếu:</b> ${y.con_thieu||"-"}</div></div>`).join("")
+    h += `<h2>V. Kết luận hội chẩn (đồng thuận)</h2><p>${m.consensus}</p>`
+    return h
+  }
+  const teachingPrintBody = (rr) => {
+    const t = deriveTeaching(rr)
+    const li = (arr) => `<ul>` + (arr||[]).map(x=>`<li>${x}</li>`).join("") + `</ul>`
+    const khamTxt = (t.kham && typeof t.kham==="object") ? Object.values(t.kham).join("; ") : (t.kham||"-")
+    let h = `<h2>I. Hành chính</h2><p>${t.hanh_chinh}</p>`
+    h += `<h2>II. Lý do vào viện</h2><p>${t.ly_do}</p>`
+    h += `<h2>III. Bệnh sử</h2>` + li(t.benh_su)
+    h += `<h2>IV. Tiền sử</h2><p>${t.tien_su}</p>`
+    h += `<h2>V. Khám lâm sàng</h2><p>${khamTxt}</p>`
+    h += `<h2>VI. Tóm tắt hội chứng</h2>` + li(t.tom_tat)
+    h += `<h2>VII. Chẩn đoán sơ bộ</h2><p>${t.chan_doan_so_bo}</p>`
+    h += `<h2>VIII. Chẩn đoán phân biệt</h2>` + li(t.ddx)
+    h += `<h2>IX. Biện luận</h2>` + li(t.bien_luan)
+    h += `<h2>X. Cận lâm sàng đề nghị</h2><ul>` + (t.can_lam_sang||[]).map(c=>`<li>${c.viec} - ${c.ly_do}</li>`).join("") + `</ul>`
+    h += `<h2>XI. Điều trị</h2><p>${t.dieu_tri_ngoai||""}</p>` + li(t.dieu_tri_noi)
+    h += `<h2>XII. Tiên lượng - Dự phòng</h2><p>${t.tien_luong||"-"}</p>`
+    h += `<h2>XIII. Red flags cần nhớ</h2><ul>` + (t.red_flags||[]).map(f=>`<li><b>${f.dau_hieu}:</b> ${f.y_nghia}</li>`).join("") + `</ul>`
+    h += `<h2>XIV. Câu hỏi vấn đáp (Socratic)</h2>` + (t.socratic||[]).map((s,k)=>`<div class="alert"><div class="al">Câu ${k+1}: ${s.q}</div><div class="as">Gợi ý đáp án: ${s.a}</div></div>`).join("")
+    return h
+  }
+  let bodyHtml = clinicalBody
+  if(mode==="hoi_chan") bodyHtml = mdtPrintBody(r)
+  else if(mode==="teaching") bodyHtml = teachingPrintBody(r)
+  const win = window.open("", "_blank", "width=900,height=700")
+  win.document.write(`<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>${meta.title}: ${p.ho_ten}</title>
+<style>body{font-family:'Times New Roman',serif;color:#000;font-size:11pt;line-height:1.55;background:#fff;margin:0}.page{padding:18mm 16mm;max-width:210mm;margin:0 auto}h1{font-size:13pt;text-transform:uppercase;margin:0 0 2pt}h2{font-size:10pt;font-weight:700;text-transform:uppercase;border-bottom:1.5px solid #000;padding-bottom:3pt;margin:14pt 0 7pt}.hdr{border-bottom:2.5px solid #000;padding-bottom:10pt;margin-bottom:8pt;display:flex;justify-content:space-between}.hdr-r{text-align:right;font-size:9pt;color:#444}.sub{font-size:9pt;color:#444;margin:2pt 0}.row{display:flex;gap:6pt;font-size:10pt;margin:3pt 0}.lbl{color:#555;min-width:110pt}table{width:100%;border-collapse:collapse;font-size:10pt;margin:6pt 0 12pt}th{background:#eee;font-weight:700;text-align:left;padding:4pt 7pt;border:1px solid #aaa;font-size:9pt;text-transform:uppercase}td{padding:4pt 7pt;border:1px solid #ccc;vertical-align:top}tr:nth-child(even) td{background:#f9f9f9}.alert{border:1.5px solid #000;border-left:4px solid #000;padding:6pt 10pt;margin:5pt 0}.al{font-size:9pt;font-weight:700;text-transform:uppercase;margin-bottom:2pt}.as{font-size:9pt;color:#555}.footer{border-top:1px solid #999;margin-top:20pt;padding-top:7pt;font-size:8pt;color:#666;display:flex;justify-content:space-between}.stamp{border:1.5px solid #999;width:100pt;height:60pt;display:inline-block;margin-top:8pt;text-align:center;font-size:8pt;padding:5pt;color:#999}@media print{@page{size:A4;margin:18mm 16mm}}</style>
+</head><body><div class="page">
+<div class="hdr"><div><div style="font-size:9pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:4pt">${meta.label}</div><h1>${p.ho_ten}</h1><div class="sub">Số bệnh án: ${p.so_benh_an} | ${p.tuoi} tuổi, ${p.gioi_tinh} | ${p.dia_chi}</div><div class="sub">Ngày sinh: ${p.ngay_sinh} | Vào viện: ${p.ngay_vao_vien} | Ra viện: ${p.ngay_ra_vien}</div></div><div class="hdr-r">In ngày: ${new Date().toLocaleDateString("vi-VN")}<br>MedParcours AI v1.2<br><span style="color:#c00;font-weight:700">Cần bác sĩ xác nhận</span></div></div>
+${bodyHtml}
 <div style="display:flex;justify-content:space-between;margin-top:24pt"><div><div class="stamp">Xác nhận bác sĩ phụ trách</div></div><div><div class="stamp">Ký tên bác sĩ</div></div></div>
 <div class="footer"><span>Báo cáo tạo tự động bởi MedParcours AI v1.2. Cần bác sĩ xem xét trước khi dùng cho mục đích lâm sàng.</span><span>HackAIthon 2026</span></div>
 </div><script>window.onload=function(){window.print()}<\/script></body></html>`)
@@ -1928,6 +1961,43 @@ function EchoTimeline({ sieu_am, info }) {
 }
 
 // Bảng tất cả lượt siêu âm, có sắp xếp và lọc theo giai đoạn
+function EchoCompare({ sieu_am }){
+  const all = normalizeEcho(sieu_am)
+  const [ia,setIa]=useState(0)
+  const [ib,setIb]=useState(Math.max(0, all.length-1))
+  if(all.length<2) return null
+  const A=all[Math.min(ia,all.length-1)], B=all[Math.min(ib,all.length-1)]
+  const diff=(a,b)=> (a==null||b==null) ? null : +(b-a).toFixed(0)
+  const Row=({label,unit,a,b,better})=>{
+    const d=diff(a,b)
+    const word = d==null?"":(d>0?"tăng":d<0?"giảm":"không đổi")
+    let tone="flat"
+    if(d!=null && d!==0 && better) tone = ((d>0&&better==="up")||(d<0&&better==="down")) ? "good":"bad"
+    return (
+      <div className="ecmp-row">
+        <span className="ecmp-lbl">{label}</span>
+        <span className="ecmp-a">{a==null?"-":a+unit}</span>
+        <span className="ecmp-arrow">to</span>
+        <span className="ecmp-b">{b==null?"-":b+unit}</span>
+        <span className={`ecmp-d ${tone}`}>{d==null?"-":(d>0?"+":"")+d+unit+" "+word}</span>
+      </div>
+    )
+  }
+  return (
+    <div className="ecmp">
+      <div className="ecmp-head"><Icon.Pulse d={14} color="#1D6FE8"/>So sánh hai lần siêu âm</div>
+      <div className="ecmp-pick">
+        <select value={ia} onChange={e=>setIa(+e.target.value)}>{all.map((s,i)=><option key={i} value={i}>{s.ngay}{s.ef!=null?` (EF ${s.ef}%)`:""}</option>)}</select>
+        <span className="ecmp-vs">so với</span>
+        <select value={ib} onChange={e=>setIb(+e.target.value)}>{all.map((s,i)=><option key={i} value={i}>{s.ngay}{s.ef!=null?` (EF ${s.ef}%)`:""}</option>)}</select>
+      </div>
+      <Row label="EF (phân suất tống máu)" unit="%" a={A.ef} b={B.ef} better="up"/>
+      <Row label="Chênh áp tối đa" unit=" mmHg" a={A.grad_max} b={B.grad_max} better="down"/>
+      <Row label="Chênh áp trung bình" unit=" mmHg" a={A.grad_tb} b={B.grad_tb} better="down"/>
+      <div className="ecmp-notes"><div><b>{A.ngay}:</b> {A.ghi_chu||A.chan_doan||"-"}</div><div><b>{B.ngay}:</b> {B.ghi_chu||B.chan_doan||"-"}</div></div>
+    </div>
+  )
+}
 function EchoSessionTable({ sieu_am }) {
   const all = normalizeEcho(sieu_am)
   const [sortMode, setSortMode] = useState("latest")  // latest | oldest
@@ -2084,7 +2154,7 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
   return (
     <div className="upload-page">
       <div className="upload-bg-circle1" /><div className="upload-bg-circle2" />
-      <button className="up-logout" onClick={onLogout} title="Đăng xuất tài khoản"><Icon.Close d={12} color="#64748B"/>Đăng xuất</button>
+      <ThemeToggle/><button className="up-logout" onClick={async()=>{ if(await mpConfirm({title:"Đăng xuất?",message:"Bạn sẽ quay lại màn hình đăng nhập.",okText:"Đăng xuất",danger:true})) onLogout() }} title="Đăng xuất tài khoản"><Icon.Close d={12} color="#64748B"/>Đăng xuất</button>
       {preview && (
         <div className="fp-overlay" onClick={()=>setPreview(null)}>
           <div className="fp-modal" onClick={e=>e.stopPropagation()}>
@@ -2230,7 +2300,7 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
           {!isLoading && (
             <div className="rec-inline-wrap">
               <div className="rec-inline-h"><Icon.Pulse d={13} color="#1D6FE8"/>Lời dặn của bác sĩ - gõ trực tiếp hoặc bấm micro để đọc</div>
-              <AudioRecorder value={note} onChange={setNote} onAttach={(t)=>{ setStaged(prev=>[...prev,{name:"Lời dặn bác sĩ", isAudio:true, tag:"LỜI DẶN", text:t, size:t.length}]); setNote("") }}/>
+              <AudioRecorder value={note} onChange={setNote} onAttach={(t)=>{ setStaged(prev=>[...prev,{name:"Lời dặn bác sĩ", isAudio:true, tag:"LỜI DẶN", text:t, size:t.length}]); setNote(""); mpToast("Đã đính kèm lời dặn vào hồ sơ") }}/>
             </div>
           )}
         </div>
@@ -2285,6 +2355,23 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
   const [tab, setTab] = useState("report")
   const [viewMode, setViewMode] = useState("clinical")
   const [menuOpen, setMenuOpen] = useState(false)
+  const [query, setQuery] = useState("")
+  const doSearch = useCallback(() => {
+    const term = query.trim().toLowerCase()
+    if(!term) return
+    const root = document.querySelector(".report-main") || document.querySelector(".mode-card")
+    if(!root){ mpToast("Không có nội dung để tìm", "err"); return }
+    const els = root.querySelectorAll("p,li,span,td,th,b,h1,h2,h3,h4,div")
+    for(const el of els){
+      if(el.children.length===0 && (el.textContent||"").toLowerCase().includes(term)){
+        el.scrollIntoView({ behavior:"smooth", block:"center" })
+        el.classList.add("search-hit")
+        setTimeout(()=>el.classList.remove("search-hit"), 2200)
+        return
+      }
+    }
+    mpToast('Không tìm thấy "' + query.trim() + '" trong báo cáo', "err")
+  }, [query])
   useEffect(() => {
     setChatMessages(prev => (prev.length <= 1
       ? [{ role:"assistant", content: modeGreeting(viewMode, report.thong_tin_benh_nhan && report.thong_tin_benh_nhan.ho_ten) }]
@@ -2364,6 +2451,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
                 <button key={key} className={`tab-btn${tab===key?" active":""}`} onClick={()=>setTab(key)}>{ic} {label}</button>
               ))}
             </div>
+            <ThemeToggle/>
             <button className="nav-export" onClick={()=>triggerPrint(report, viewMode)} title="Xuất báo cáo"><Icon.Print d={14} color="#fff"/>Xuất báo cáo</button>
             <div className="nav-menu-wrap">
               <button className="nav-burger" onClick={()=>setMenuOpen(o=>!o)} title="Menu" aria-label="Menu">
@@ -2373,8 +2461,8 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
                 <div className="nav-menu-ov" onClick={()=>setMenuOpen(false)}/>
                 <div className="nav-menu">
                   <button onClick={()=>{setMenuOpen(false);onOpenHistory()}}><Icon.Clock d={14} color="#475569"/>Lịch sử bệnh án</button>
-                  <button onClick={()=>{setMenuOpen(false);onReset()}}><Icon.Back d={13} color="#475569"/>Hồ sơ mới</button>
-                  <button className="danger" onClick={()=>{setMenuOpen(false);onLogout()}}><Icon.Close d={13} color="#DC2626"/>Đăng xuất</button>
+                  <button onClick={async()=>{setMenuOpen(false); if(await mpConfirm({title:"Phân tích hồ sơ mới?",message:"Báo cáo đang xem sẽ được đóng lại. Bạn có thể mở lại trong Lịch sử bệnh án.",okText:"Tiếp tục"})) onReset()}}><Icon.Back d={13} color="#475569"/>Hồ sơ mới</button>
+                  <button className="danger" onClick={async()=>{setMenuOpen(false); if(await mpConfirm({title:"Đăng xuất khỏi MedParcours AI?",message:"Bạn sẽ quay lại màn hình đăng nhập.",okText:"Đăng xuất",danger:true})) onLogout()}}><Icon.Close d={13} color="#DC2626"/>Đăng xuất</button>
                 </div>
               </>}
             </div>
@@ -2387,6 +2475,11 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
         <div className="chip-bar-inner">
           <span className="chip-lbl">Nhắc nhở nhanh:</span>
           {chips.map(c=><span key={c.label} className={`chip-tag ${c.cls}`}>{c.label}</span>)}
+          <div className="rpt-search">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#7A96C8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doSearch()}} placeholder="Tìm trong báo cáo..."/>
+            {query && <button className="rpt-search-x" onClick={()=>setQuery("")} title="Xóa"><Icon.Close d={11} color="#7A96C8"/></button>}
+          </div>
         </div>
       </div>
 
@@ -2436,7 +2529,7 @@ function TrajectoryCard({ assessment }) {
           <div className="traj-lbl">Đánh giá tiến triển</div>
           <div className="traj-verdict" style={{ color:tm.color }}>{tm.label}</div>
         </div>
-        <button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"auto" }}>
+        <span style={{marginLeft:"auto"}}><CopyBtn text={safe} label="Sao chép"/></span><button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"8px" }}>
           {collapsed ? <Icon.ChevDown d={14} color={tm.color}/> : <Icon.ChevUp d={14} color={tm.color}/>}
         </button>
       </div>
@@ -2965,6 +3058,7 @@ function LabPanel({ labs, note }) {
 // ─── PRIORITY ALERTS BANNER ────────────────────────────────────────────────────
 function PriorityBanner({ findings, onSource }) {
   const [collapsed, setCollapsed] = useState(false)
+  const [tierFilter, setTierFilter] = useState(null)
   const byTier = { critical:[], warning:[], stable:[] }
   findings.forEach(f => byTier[f.muc].push(f))
 
@@ -2975,10 +3069,11 @@ function PriorityBanner({ findings, onSource }) {
         <div className="prio-head-r">
           <div className="prio-counts">
             {["critical","warning","stable"].map(t => (
-              <span key={t} className="prio-count" style={{ color:TIER_META[t].color }}>
+              <button key={t} className={`prio-count${tierFilter===t?" on":""}`} style={{ color:TIER_META[t].color }} onClick={()=>setTierFilter(f=>f===t?null:t)} title={tierFilter===t?"Bỏ lọc":`Chỉ xem mức ${TIER_META[t].label}`}>
                 <i style={{ background:TIER_META[t].color }}/>{byTier[t].length} {TIER_META[t].label}
-              </span>
+              </button>
             ))}
+            {tierFilter && <button className="prio-count clear" onClick={()=>setTierFilter(null)} title="Xem tất cả">Tất cả</button>}
           </div>
           <button className="banner-collapse" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"}>
             {collapsed ? <Icon.ChevDown d={14} color="#fff"/> : <Icon.ChevUp d={14} color="#fff"/>}
@@ -2986,8 +3081,8 @@ function PriorityBanner({ findings, onSource }) {
         </div>
       </div>
       {!collapsed && (
-      <div className="prio-board">
-        {["critical","warning","stable"].map(tier => {
+      <div className={`prio-board${tierFilter?" one":""}`}>
+        {["critical","warning","stable"].filter(t=>!tierFilter||t===tierFilter).map(tier => {
           const tm = TIER_META[tier]
           const items = byTier[tier]
           return (
@@ -3318,6 +3413,7 @@ function ReportTab({ report: r, analysis }) {
       {/* PHÂN TÍCH: Chẩn đoán hình ảnh */}
       <Card id="sec-echo" title="Chẩn đoán hình ảnh qua 3 giai đoạn" icon={<Icon.Ultrasound d={16}/>}>
         <EchoTimeline sieu_am={r.sieu_am_tim} info={phaseInfo}/>
+        <EchoCompare sieu_am={r.sieu_am_tim}/>
         <EchoSessionTable sieu_am={r.sieu_am_tim}/>
       </Card>
 
@@ -3940,44 +4036,73 @@ function AudioRecorder({ value, onChange, onAttach }){
   const [supported] = useState(() => typeof window!=="undefined" && !!(window.SpeechRecognition||window.webkitSpeechRecognition))
   const [rec, setRec] = useState(false)
   const [err, setErr] = useState("")
-  const ref = useRef(null)
+  const ref = useRef(null)         // đối tượng SpeechRecognition
+  const finalRef = useRef("")      // tích lũy phần văn bản đã chốt
+  const wantRef = useRef(false)    // người dùng còn muốn ghi (để tự khởi động lại khi im lặng)
   const ERR = {
-    "not-allowed":"Trang web chưa được cấp quyền micro. Hãy cho phép Micro trên thanh địa chỉ rồi thử lại.",
+    "not-allowed":"Trang web chưa được cấp quyền micro. Bấm biểu tượng khóa trên thanh địa chỉ, cho phép Micro rồi thử lại.",
     "service-not-allowed":"Trình duyệt chặn dịch vụ nhận dạng giọng nói. Hãy dùng Chrome hoặc Edge mới nhất.",
-    "no-speech":"Không nghe thấy giọng nói. Hãy nói gần micro hơn rồi thử lại.",
+    "no-speech":"Chưa nghe thấy giọng nói. Hãy nói gần micro hơn rồi thử lại.",
     "audio-capture":"Không tìm thấy micro. Kiểm tra thiết bị micro của máy.",
     "network":"Lỗi mạng: nhận dạng giọng nói cần kết nối Internet.",
-    "aborted":"Đã dừng ghi âm.",
   }
+  useEffect(() => () => { wantRef.current=false; try{ ref.current && ref.current.stop() }catch{} }, [])
   const start = async () => {
     setErr("")
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
     if(!SR){ setErr("Trình duyệt chưa hỗ trợ nhận dạng giọng nói. Hãy dùng Chrome/Edge mới nhất."); return }
-    try { if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) await navigator.mediaDevices.getUserMedia({audio:true}) }
-    catch { setErr("Không truy cập được micro. Hãy cho phép quyền micro cho trang web rồi thử lại."); return }
-    const r = new SR(); r.lang="vi-VN"; r.continuous=true; r.interimResults=true
-    const base = value ? value+" " : ""
-    r.onresult = (e) => { let live=""; for(let i=e.resultIndex;i<e.results.length;i++) live+=e.results[i][0].transcript; onChange && onChange(base+live) }
-    r.onerror = (e) => { setErr(ERR[e.error] || ("Lỗi ghi âm: "+e.error)); setRec(false) }
-    r.onend = () => setRec(false)
+    // Xin quyền rồi NHẢ micro ngay, nếu không SpeechRecognition sẽ không lấy được audio.
+    try {
+      if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
+        const s = await navigator.mediaDevices.getUserMedia({ audio:true })
+        s.getTracks().forEach(t => t.stop())
+      }
+    } catch { setErr("Không truy cập được micro. Hãy cho phép quyền micro cho trang web rồi thử lại."); return }
+    const r = new SR()
+    r.lang="vi-VN"; r.continuous=true; r.interimResults=true; r.maxAlternatives=1
+    finalRef.current = value ? (value.replace(/\s+$/,"") + " ") : ""
+    r.onresult = (e) => {
+      let interim = ""
+      for(let i=e.resultIndex; i<e.results.length; i++){
+        const seg = e.results[i][0].transcript
+        if(e.results[i].isFinal) finalRef.current += seg + " "
+        else interim += seg
+      }
+      onChange && onChange(finalRef.current + interim)
+    }
+    r.onerror = (e) => {
+      if(e.error==="no-speech") return            // bỏ qua, để tự chạy lại
+      wantRef.current = false
+      if(e.error!=="aborted") setErr(ERR[e.error] || ("Lỗi ghi âm: "+e.error))
+      setRec(false)
+    }
+    r.onend = () => {
+      // Chrome tự dừng sau khoảng lặng; nếu người dùng vẫn muốn ghi thì khởi động lại.
+      if(wantRef.current){ try{ r.start() }catch{ setRec(false); wantRef.current=false } }
+      else setRec(false)
+    }
     ref.current = r
-    try { r.start(); setRec(true) } catch { setErr("Không khởi động được ghi âm. Hãy thử lại sau giây lát.") }
+    wantRef.current = true
+    try { r.start(); setRec(true) } catch { setErr("Không khởi động được ghi âm. Hãy thử lại sau giây lát."); wantRef.current=false }
   }
-  const stop = () => { try{ ref.current && ref.current.stop() }catch{} setRec(false) }
-  const attach = () => { const v=(value||"").trim(); if(!v) return; onAttach && onAttach(v); setErr("") }
+  const stop = () => { wantRef.current=false; try{ ref.current && ref.current.stop() }catch{} setRec(false) }
+  const attach = () => { const v=(value||"").trim(); if(!v) return; if(rec) stop(); onAttach && onAttach(v); setErr("") }
+  const onKey = (e) => { if((e.metaKey||e.ctrlKey) && e.key==="Enter"){ e.preventDefault(); attach() } }
+  const chars = (value||"").trim().length
   return (
     <div className={`smart-note${rec?" rec":""}`}>
-      <textarea className="smart-note-ta" value={value} onChange={e=>onChange && onChange(e.target.value)} placeholder="Nhập lời dặn, chỉ định thêm cho hồ sơ... hoặc bấm micro để đọc bằng giọng nói."/>
+      <textarea className="smart-note-ta" value={value} onChange={e=>onChange && onChange(e.target.value)} onKeyDown={onKey} placeholder="Nhập lời dặn, chỉ định thêm cho hồ sơ... hoặc bấm micro để đọc bằng giọng nói."/>
       <div className="smart-note-bar">
-        <button type="button" className={`sn-mic${rec?" on":""}`} onClick={rec?stop:start} disabled={!supported} title={rec?"Dừng ghi":"Ghi âm bằng giọng nói"}>
+        <button type="button" className={`sn-mic${rec?" on":""}`} onClick={rec?stop:start} disabled={!supported} title={rec?"Dừng ghi":"Ghi âm bằng giọng nói (vi-VN)"}>
           {rec
-            ? <><span className="rec-dot pulse"/>Đang nghe...</>
+            ? <><span className="rec-dot pulse"/>Đang nghe... bấm để dừng</>
             : <><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>Ghi âm</>}
         </button>
+        <span className="sn-count">{chars>0 ? `${chars} ký tự` : "Ctrl/Cmd + Enter để đính kèm"}</span>
         <span style={{flex:1}}/>
         <button type="button" className="sn-send" onClick={attach} disabled={!(value||"").trim()}><Icon.Send d={13} color="#fff"/>Đính kèm</button>
       </div>
-      {!supported && <div className="rec-note warn">Trình duyệt chưa hỗ trợ ghi âm giọng nói. Hãy dùng Chrome hoặc Edge mới nhất.</div>}
+      {!supported && <div className="rec-note warn">Trình duyệt chưa hỗ trợ ghi âm giọng nói. Hãy dùng Chrome hoặc Edge mới nhất (trên trang HTTPS đã xuất bản).</div>}
       {err && <div className="rec-note err"><Icon.Alert d={13} color="#B91C1C"/>{err}</div>}
     </div>
   )
@@ -3989,6 +4114,7 @@ const VIEW_MODES = [
   { key:"hoi_chan", label:"Hội chẩn AI" },
   { key:"teaching", label:"Học vụ (Giảng dạy)" },
 ]
+const MODE_DESC = { clinical:"Tóm tắt & cảnh báo cho bác sĩ", hoi_chan:"Hội đồng chuyên khoa ảo", teaching:"Vấn đáp theo bệnh án HMU" }
 function ModeDropdown({ mode, onChange }){
   const [open, setOpen] = useState(false)
   const cur = VIEW_MODES.find(m=>m.key===mode) || VIEW_MODES[0]
@@ -4004,8 +4130,9 @@ function ModeDropdown({ mode, onChange }){
           <div className="mode-cd-ov" onClick={()=>setOpen(false)}/>
           <div className="mode-cd-list">
             {VIEW_MODES.map(m=>(
-              <button key={m.key} className={`mode-cd-item${m.key===mode?" sel":""}`} onClick={()=>{onChange(m.key);setOpen(false)}}>
-                <span className="mode-cd-dot"/>{m.label}
+              <button key={m.key} className={`mode-cd-item${m.key===mode?" sel":""}`} onClick={()=>{onChange(m.key);setOpen(false);mpToast("Đã chuyển sang chế độ: "+m.label)}}>
+                <span className="mode-cd-dot"/>
+                <span className="mode-cd-txt"><b>{m.label}</b><span>{MODE_DESC[m.key]}</span></span>
                 {m.key===mode && <Icon.Dot d={8} color="#1D6FE8"/>}
               </button>
             ))}
@@ -4119,10 +4246,11 @@ function MDTView({ report }){
       <Step n="4" t="Nhận định theo từng chuyên khoa"/>
       <div className="spec-list">
         {mdt.specialties.slice(0,shown).map((y,i)=><SpecCard key={i} y={y}/>)}
-        {!done && <div className="mdt-loading"><span className="rec-dot pulse"/>Hội đồng đang thảo luận...</div>}
+        {!done && <div className="mdt-loading"><span className="mdt-typing"><i/><i/><i/></span>{mdt.specialties[shown] ? `${mdt.specialties[shown].khoa} đang trình bày nhận định...` : "Hội đồng đang tổng hợp ý kiến..."}<span className="mdt-progress">{shown}/{mdt.specialties.length} khoa</span></div>}
       </div>
 
       {done && <>
+        <div className="mdt-reached"><Icon.ShieldCheck d={15} color="#0E9488"/>Hội đồng đã hoàn tất thảo luận và đạt đồng thuận</div>
         <Step n="5" t="Thảo luận liên chuyên khoa"/>
         <div className="thread">
           {mdt.thread.map((m,i)=>(
@@ -4139,7 +4267,7 @@ function MDTView({ report }){
         </div>
 
         <Step n="7" t="Kết luận hội chẩn"/>
-        <div className="mdt-final"><span className="mdt-final-lbl">Đồng thuận cuối cùng</span>{mdt.consensus}</div>
+        <div className="mdt-final"><div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"4px"}}><span className="mdt-final-lbl" style={{margin:0}}>Đồng thuận cuối cùng</span><span style={{marginLeft:"auto"}}><CopyBtn text={mdt.consensus} label="Sao chép"/></span></div>{mdt.consensus}</div>
 
         <Step n="8" t="Hỏi Hội đồng (Ask the MDT)"/>
         <div className="ask-qs">
@@ -4377,6 +4505,59 @@ const EXTRA_CSS = `
 .ul-clean.red li{color:#9f1d1d}.ul-clean.red li:before{background:#EF4444}
 .mdt-loading{display:flex;align-items:center;gap:8px;font-size:13px;color:#7A96C8;padding:6px 2px}
 .mdt-loading .rec-dot{background:#1D6FE8}
+.mdt-typing{display:inline-flex;align-items:center;gap:3px}
+.mdt-typing i{width:5px;height:5px;border-radius:50%;background:#1D6FE8;display:inline-block;animation:mdtBlink 1s infinite ease-in-out}
+.mdt-typing i:nth-child(2){animation-delay:.18s}
+.mdt-typing i:nth-child(3){animation-delay:.36s}
+@keyframes mdtBlink{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-2px)}}
+.mdt-progress{margin-left:auto;font-size:11.5px;font-weight:600;color:#9fb2cc;background:#f1f5fb;padding:3px 9px;border-radius:20px}
+.mdt-reached{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600;color:#0E7C70;background:linear-gradient(135deg,rgba(14,148,136,.12),rgba(29,111,232,.08));border:1px solid rgba(14,148,136,.25);border-radius:11px;padding:11px 14px;margin:4px 0 14px;animation:reachedIn .4s ease}
+@keyframes reachedIn{from{opacity:0;transform:scale(.97)}to{opacity:1;transform:scale(1)}}
+.prio-count{border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);cursor:pointer;transition:all .14s;font-size:11.5px;border-radius:20px;padding:4px 10px;display:inline-flex;align-items:center;gap:6px;font-weight:600}
+.prio-count:hover{background:rgba(255,255,255,.18)}
+.prio-count.on{background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.12)}
+.prio-count.clear{color:#fff!important;background:rgba(255,255,255,.14)}
+.prio-board.one{grid-template-columns:1fr}
+.ecmp{border:1px solid var(--border);border-radius:13px;padding:14px 15px;margin:14px 0;background:var(--glass)}
+.ecmp-head{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--navy);margin-bottom:11px}
+.ecmp-pick{display:flex;align-items:center;gap:9px;margin-bottom:12px;flex-wrap:wrap}
+.ecmp-pick select{border:1px solid var(--border);border-radius:9px;padding:7px 10px;font-size:12.5px;font-family:inherit;color:var(--navy);background:var(--glass);cursor:pointer;outline:none}
+.ecmp-pick select:focus{border-color:var(--blue)}
+.ecmp-vs{font-size:12px;color:var(--muted);font-weight:600}
+.ecmp-row{display:grid;grid-template-columns:1.6fr .8fr auto .8fr 1.3fr;align-items:center;gap:8px;padding:8px 0;border-top:1px dashed var(--border);font-size:12.5px}
+.ecmp-lbl{color:var(--muted2);font-weight:600}
+.ecmp-a,.ecmp-b{font-weight:700;color:var(--navy);text-align:center}
+.ecmp-arrow{color:var(--muted);font-size:11px;text-align:center}
+.ecmp-d{font-weight:700;font-size:12px;text-align:right}
+.ecmp-d.good{color:var(--green)}
+.ecmp-d.bad{color:var(--red)}
+.ecmp-d.flat{color:var(--muted)}
+.ecmp-notes{margin-top:11px;display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--muted2);line-height:1.5}
+@media(max-width:620px){.ecmp-row{grid-template-columns:1fr 1fr auto 1fr;}.ecmp-lbl{grid-column:1/-1}}
+.theme-toggle{width:40px;height:40px;display:inline-flex;align-items:center;justify-content:center;background:#f1f5fb;border:1px solid #e2e8f0;border-radius:11px;color:#475569;cursor:pointer;transition:all .15s}
+.theme-toggle:hover{background:#e7eef8;border-color:#1D6FE8;color:#1D6FE8}
+body.theme-dark{
+  --blue:#5B95F2; --blue-dk:#7BACF7; --blue-lt:#1A2942;
+  --cyan:#2DD4BF; --teal:#2DD4BF; --green:#34D399; --red:#F87171; --amber:#FBBF24;
+  --navy:#E8EEF7; --navy2:#C7D4E6; --navy3:#9FB3CC;
+  --muted:#94A7C0; --muted2:#AEBFD4;
+  --border:#2A3650; --glass:#161E2E;
+  --page-bg:#0E1626;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.35); --shadow-md:0 8px 22px rgba(0,0,0,.45);
+  background:#0E1626; color:#E8EEF7;
+}
+body.theme-dark .app,body.theme-dark .report-outer,body.theme-dark .upload-page,body.theme-dark .up-wrap{background:transparent}
+body.theme-dark .card,body.theme-dark .mode-card,body.theme-dark .prio-col,body.theme-dark .echo-tbl-wrap,body.theme-dark .ecmp,body.theme-dark .sidebar-minimap,body.theme-dark .chip-bar,body.theme-dark .hist-panel,body.theme-dark .summary-card,body.theme-dark .smart-note,body.theme-dark .stat-block,body.theme-dark .upload-card,body.theme-dark .drop-zone{background:var(--glass);border-color:var(--border);color:var(--navy)}
+body.theme-dark .nav,body.theme-dark .topnav,body.theme-dark .nav-bar{background:#11192A;border-color:var(--border)}
+body.theme-dark .theme-toggle,body.theme-dark .nav-burger{background:#1B2536;border-color:var(--border);color:var(--navy2)}
+body.theme-dark .nav-menu,body.theme-dark .mode-cd-list,body.theme-dark .mode-cd-btn,body.theme-dark .rpt-search{background:#1B2536;border-color:var(--border);color:var(--navy)}
+body.theme-dark .nav-menu button,body.theme-dark .mode-cd-item{color:var(--navy2)}
+body.theme-dark .nav-menu button:hover,body.theme-dark .mode-cd-item:hover{background:#222E44}
+body.theme-dark input,body.theme-dark textarea,body.theme-dark select,body.theme-dark .smart-note-ta{background:#0F1828;color:var(--navy);border-color:var(--border)}
+body.theme-dark .smart-note-bar{background:#131D2E;border-color:var(--border)}
+body.theme-dark .tb-group,body.theme-dark .tab-group,body.theme-dark .echo-seg{background:#1B2536}
+body.theme-dark .cfm{background:#1B2536;color:var(--navy)}
+body.theme-dark .prio-box,body.theme-dark .invite{background:#1B2536;border-color:var(--border)}
 .mdt-ket{margin:0 26px;border:1px solid #eef3fa;border-radius:14px;padding:16px 18px;background:#fbfdff}
 .mdt-block{margin-bottom:14px;padding-left:12px;border-left:3px solid #1D6FE8}
 .mdt-block.green{border-color:#22C55E}.mdt-block.red{border-color:#EF4444}.mdt-block.blue{border-color:#1D6FE8}.mdt-block.teal{border-color:#0E9488}
@@ -4619,7 +4800,114 @@ const EXTRA_CSS = `
 .stats-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .login-stats{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .login-stat{min-width:0}
+.sn-count{font-size:11px;color:#9fb2cc;font-weight:500;white-space:nowrap}
+.mode-cd-txt{display:flex;flex-direction:column;line-height:1.25;text-align:left}
+.mode-cd-txt b{font-size:13px;font-weight:600}
+.mode-cd-txt span{font-size:11px;color:#7A96C8;font-weight:400}
+.mode-cd-list{min-width:236px}
+.toast-host{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:200;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+.toast{display:inline-flex;align-items:center;gap:9px;background:#0F2740;color:#fff;font-size:13px;font-weight:500;padding:11px 16px;border-radius:12px;box-shadow:0 10px 30px rgba(15,39,64,.3);animation:toastIn .22s ease}
+.toast.ok{background:linear-gradient(135deg,#0E9488,#1D6FE8)}
+.toast.err{background:#B91C1C}
+@keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.cfm-ov{position:fixed;inset:0;z-index:210;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
+.cfm{background:#fff;border-radius:16px;max-width:380px;width:100%;padding:22px;box-shadow:0 24px 60px rgba(15,39,64,.3)}
+.cfm-t{font-size:16px;font-weight:800;color:#0F2740;margin-bottom:8px}
+.cfm-m{font-size:13.5px;color:#5A748F;line-height:1.6;margin-bottom:20px}
+.cfm-actions{display:flex;gap:10px;justify-content:flex-end}
+.cfm-cancel{border:1px solid #d8e2f0;background:#fff;color:#475569;font-size:13px;font-weight:600;padding:9px 16px;border-radius:10px;cursor:pointer}
+.cfm-cancel:hover{background:#f1f5fb}
+.cfm-ok{border:none;background:#1D6FE8;color:#fff;font-size:13px;font-weight:600;padding:9px 18px;border-radius:10px;cursor:pointer}
+.cfm-ok:hover{filter:brightness(1.06)}
+.cfm-ok.danger{background:#DC2626}
+.copy-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid #cfe0f5;background:#fff;color:#1D6FE8;font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:8px;cursor:pointer;transition:all .12s}
+.copy-btn:hover{background:rgba(29,111,232,.08)}
+.summary-hd .copy-btn{border-color:rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff}
+.summary-hd .copy-btn:hover{background:rgba(255,255,255,.22)}
+.rpt-search{margin-left:auto;display:inline-flex;align-items:center;gap:7px;background:#fff;border:1px solid #d8e2f0;border-radius:9px;padding:6px 10px;transition:border-color .15s}
+.rpt-search:focus-within{border-color:#1D6FE8}
+.rpt-search input{border:none;outline:none;font-size:12.5px;width:170px;background:transparent;color:#0F2740}
+.rpt-search-x{border:none;background:none;cursor:pointer;display:flex;padding:0}
+.search-hit{background:#fff3bf!important;border-radius:5px;box-shadow:0 0 0 3px #ffe066;transition:background .3s,box-shadow .3s}
+@media(max-width:760px){.rpt-search{margin-left:0}.rpt-search input{width:120px}}
 `
+
+// ─── Toast + Confirm + Copy (UX dùng chung) ──────────────────────────────────
+function mpToast(msg, kind="ok"){ if(typeof window!=="undefined") window.dispatchEvent(new CustomEvent("mp-toast",{ detail:{ msg, kind } })) }
+function ToastHost(){
+  const [items, setItems] = useState([])
+  useEffect(() => {
+    const h = (e) => {
+      const id = Date.now() + Math.random()
+      setItems(x => [...x, { id, ...e.detail }])
+      setTimeout(() => setItems(x => x.filter(i => i.id !== id)), 2600)
+    }
+    window.addEventListener("mp-toast", h)
+    return () => window.removeEventListener("mp-toast", h)
+  }, [])
+  return (
+    <div className="toast-host">
+      {items.map(i => (
+        <div key={i.id} className={`toast ${i.kind}`}>
+          {i.kind==="err" ? <Icon.Alert d={15} color="#fff"/> : <Icon.ShieldCheck d={15} color="#fff"/>}
+          {i.msg}
+        </div>
+      ))}
+    </div>
+  )
+}
+let _mpConfirmFn = null
+function mpConfirm(opts){ return new Promise(res => { if(_mpConfirmFn) _mpConfirmFn(opts, res); else res(true) }) }
+function ConfirmHost(){
+  const [st, setSt] = useState(null)
+  useEffect(() => { _mpConfirmFn = (opts, res) => setSt({ ...opts, res }); return () => { _mpConfirmFn = null } }, [])
+  if(!st) return null
+  const done = (v) => { st.res(v); setSt(null) }
+  return (
+    <div className="cfm-ov" onClick={()=>done(false)}>
+      <div className="cfm" onClick={e=>e.stopPropagation()}>
+        <div className="cfm-t">{st.title}</div>
+        <div className="cfm-m">{st.message}</div>
+        <div className="cfm-actions">
+          <button className="cfm-cancel" onClick={()=>done(false)}>{st.cancelText||"Hủy"}</button>
+          <button className={`cfm-ok${st.danger?" danger":""}`} onClick={()=>done(true)}>{st.okText||"Đồng ý"}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+function CopyBtn({ text, label="Sao chép" }){
+  const copy = async () => {
+    const v = typeof text === "function" ? text() : text
+    try { await navigator.clipboard.writeText(v || ""); mpToast("Đã sao chép vào bộ nhớ tạm") }
+    catch { mpToast("Trình duyệt không cho sao chép tự động", "err") }
+  }
+  return <button className="copy-btn" onClick={copy} title="Sao chép nội dung"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>{label}</button>
+}
+
+function ThemeToggle(){
+  const [dark, setDark] = useState(false)
+  useEffect(() => {
+    let v = false
+    try { v = sessionStorage.getItem("mp_theme") === "dark" } catch {}
+    document.body.classList.toggle("theme-dark", v)
+    setDark(v)
+  }, [])
+  const toggle = () => {
+    const v = !dark
+    setDark(v)
+    document.body.classList.toggle("theme-dark", v)
+    try { sessionStorage.setItem("mp_theme", v ? "dark" : "light") } catch {}
+    mpToast(v ? "Đã bật chế độ tối" : "Đã bật chế độ sáng")
+  }
+  return (
+    <button className="theme-toggle" onClick={toggle} title={dark?"Chuyển chế độ sáng":"Chuyển chế độ tối"} aria-label="Đổi giao diện sáng/tối">
+      {dark
+        ? <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        : <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>}
+    </button>
+  )
+}
 
 export default function App() {
   const [authed, setAuthed] = useState(() => { try { return sessionStorage.getItem("mp_auth")==="1" } catch { return false } })
@@ -4737,7 +5025,7 @@ export default function App() {
   }
 
   if (!authed) {
-    return (<><style>{CSS}</style><style>{EXTRA_CSS}</style><LoginPage onLogin={login}/></>)
+    return (<><style>{CSS}</style><style>{EXTRA_CSS}</style><LoginPage onLogin={login}/><ToastHost/></>)
   }
 
   return (
@@ -4753,6 +5041,8 @@ export default function App() {
             onOpenHistory={()=>setShowHistory(true)} onLogout={logout}/>
         )}
         {showHistory && <HistoryPanel onClose={()=>setShowHistory(false)} onOpen={loadRecord} currentId={currentId}/>}
+        <ToastHost/>
+        <ConfirmHost/>
       </ErrorBoundary>
     </>
   )
