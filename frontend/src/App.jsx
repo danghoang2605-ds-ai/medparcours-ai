@@ -1496,6 +1496,72 @@ function reportToText(r){
   L.push(""); L.push("(Tạo bởi MedParcours AI. Cần bác sĩ xem xét trước khi dùng cho mục đích lâm sàng.)")
   return L.join("\n")
 }
+function exportLabsCSV(r) {
+  const labs = (r.xet_nghiem_meta || r.xet_nghiem_key || [])
+  const rows = [["Chi so","Mo ta","Don vi","Ngay","Gia tri","Binh thuong","Trang thai"]]
+  labs.forEach(l => {
+    if (!l) return
+    const dates = l.trendDates || [], vals = l.trend || []
+    if (dates.length && vals.length === dates.length) {
+      dates.forEach((d, i) => rows.push([l.key, l.desc||"", l.unit||"", d, vals[i], l.normal||"", l.status||""]))
+    } else {
+      rows.push([l.key, l.desc||"", l.unit||"", l.ngay||"", l.rawVal!=null?l.rawVal:l.val, l.normal||"", l.status||""])
+    }
+  })
+  const esc = v => { const s = String(v==null?"":v); return /[",\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s }
+  const csv = "\uFEFF" + rows.map(row => row.map(esc).join(",")).join("\r\n")
+  try {
+    const blob = new Blob([csv], { type:"text/csv;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    const name = (r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an) || "benh_an"
+    a.href = url; a.download = "xet_nghiem_" + name + ".csv"
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 1500)
+    mpToast("Đã xuất CSV xét nghiệm")
+  } catch { mpToast("Không xuất được CSV", "err") }
+}
+
+function triggerHandoff(r, docNote, bookmarks) {
+  const p = r.thong_tin_benh_nhan || {}
+  const esc = s => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+  let findings = []
+  try { findings = (runPriorityScreens(r).findings||[]).filter(f=>f.muc!=="stable").sort((a,b)=>TIER_ORDER[a.muc]-TIER_ORDER[b.muc]) } catch {}
+  const PH = ["","Tiền phẫu","Hậu phẫu nội trú","Ngoại trú tái khám"]
+  let phaseLabel = ""
+  try { const pi = computePhaseInfo(r); phaseLabel = "Giai đoạn " + pi.currentPhase + (PH[pi.currentPhase] ? ": " + PH[pi.currentPhase] : "") } catch {}
+  const labs = r.xet_nghiem_meta || r.xet_nghiem_key || []
+  const ef = labs.find(l => l && l.key === "EF")
+  const meds = r.thuoc_cuoi_ky || []
+  const prios = (r.hanh_dong_uu_tien||[]).slice().sort((a,b)=>(a.uu_tien||9)-(b.uu_tien||9))
+  const alertRows = findings.length
+    ? findings.map(f=>`<li><b>[${TIER_META[f.muc].label}]</b> ${esc(f.ten)} - ${esc(f.ly_do)}</li>`).join("")
+    : "<li>Khong co canh bao can xu tri ngay.</li>"
+  const medRows = meds.length
+    ? meds.map(m=>`<tr><td><b>${esc(m.ten_thuoc)}</b></td><td>${esc(m.nhom||"")}</td><td>${esc(m.lieu||"")}</td><td>${esc(m.cach_dung||"")}${m.keo_dai?" (duy tri)":""}</td></tr>`).join("")
+    : `<tr><td colspan="4">Khong co thuoc duy tri.</td></tr>`
+  const prioRows = prios.length
+    ? prios.map(a=>`<li>${esc(a.viec)}${a.ly_do?` <span style="color:#555">- ${esc(a.ly_do)}</span>`:""}</li>`).join("")
+    : "<li>Theo y lenh tai kham.</li>"
+  const bmBlk = (bookmarks && bookmarks.length)
+    ? `<h2>Muc bac si da danh dau</h2><ul>${bookmarks.map(b=>`<li>${esc(b.label)}${b.sub?" - "+esc(b.sub):""}</li>`).join("")}</ul>` : ""
+  const noteBlk = (docNote && docNote.trim())
+    ? `<h2>Ghi chu bac si</h2><div class="box" style="white-space:pre-wrap">${esc(docNote)}</div>` : ""
+  const win = window.open("", "_blank", "width=850,height=700")
+  win.document.write(`<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>Tom tat ban giao: ${esc(p.ho_ten)}</title>
+<style>body{font-family:'Times New Roman',serif;color:#000;font-size:11pt;line-height:1.5;background:#fff;margin:0}.page{padding:14mm 14mm;max-width:210mm;margin:0 auto}h1{font-size:14pt;text-transform:uppercase;margin:0 0 3pt}h2{font-size:10pt;font-weight:700;text-transform:uppercase;border-bottom:1.5px solid #000;padding-bottom:2pt;margin:11pt 0 5pt}.hdr{border-bottom:2.5px solid #000;padding-bottom:8pt;margin-bottom:6pt;display:flex;justify-content:space-between}.hdr-r{text-align:right;font-size:8.5pt;color:#444}.sub{font-size:9pt;color:#444;margin:1pt 0}.diag{font-size:11pt;font-weight:700;margin:4pt 0}ul{margin:4pt 0;padding-left:18pt}li{margin:2pt 0;font-size:10pt}table{width:100%;border-collapse:collapse;font-size:9.5pt;margin:4pt 0}th{background:#eee;font-weight:700;text-align:left;padding:3pt 6pt;border:1px solid #aaa;font-size:8.5pt;text-transform:uppercase}td{padding:3pt 6pt;border:1px solid #ccc;vertical-align:top}.box{border:1px solid #999;border-left:4px solid #000;padding:5pt 9pt;margin:4pt 0;font-size:9.5pt}.pill{display:inline-block;border:1px solid #555;border-radius:9pt;padding:1pt 8pt;font-size:9pt;margin-right:5pt}.footer{border-top:1px solid #999;margin-top:14pt;padding-top:5pt;font-size:8pt;color:#666;display:flex;justify-content:space-between}@media print{@page{size:A4;margin:14mm}}</style>
+</head><body><div class="page">
+<div class="hdr"><div><div style="font-size:8.5pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:3pt">MedParcours AI - Tom tat ban giao 1 trang</div><h1>${esc(p.ho_ten)}</h1><div class="sub">So benh an: ${esc(p.so_benh_an)} | ${esc(p.tuoi)} tuoi, ${esc(p.gioi_tinh)}</div><div class="sub">Vao vien: ${esc(p.ngay_vao_vien)} | Ra vien: ${esc(p.ngay_ra_vien)}</div></div><div class="hdr-r">In ngay: ${new Date().toLocaleDateString("vi-VN")}<br>MedParcours AI v1.2<br><span style="color:#c00;font-weight:700">Can bac si xac nhan</span></div></div>
+<h2>Chan doan & trang thai</h2><div class="diag">${esc(r.chan_doan_chinh)}</div><div><span class="pill">${esc(phaseLabel)}</span>${ef?`<span class="pill">EF ${esc(ef.val)}</span>`:""}</div>
+<h2>Canh bao can theo doi</h2><ul>${alertRows}</ul>
+<h2>Thuoc dang dung</h2><table><tr><th>Thuoc</th><th>Nhom</th><th>Lieu</th><th>Cach dung</th></tr>${medRows}</table>
+<h2>Viec can lam o lan tai kham</h2><ul>${prioRows}</ul>
+${bmBlk}${noteBlk}
+<div class="footer"><span>Tao tu dong boi MedParcours AI v1.2. Can bac si xem xet truoc khi dung lam sang.</span><span>HackAIthon 2026</span></div>
+</div><script>window.onload=function(){window.print()}<\/script></body></html>`)
+  win.document.close()
+}
+
 function triggerPrint(r, mode, docNote, bookmarks) {
   const p = r.thong_tin_benh_nhan
   const PRINT_META = {
@@ -2362,11 +2428,13 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 const NAV_GROUPS = [
   { group:"Tổng quan", items:[
+    {id:"sec-overview", label:"Tổng quan nhanh",     icon:<Icon.Pulse d={11}/>},
     {id:"sec-status",   label:"Bệnh nhân",          icon:<Icon.Stethoscope d={11}/>},
     {id:"sec-timeline", label:"Dòng thời gian",     icon:<Icon.Clock d={11}/>},
     {id:"sec-takeaway", label:"Kết luận nhanh",     icon:<Icon.ShieldCheck d={11}/>},
     {id:"sec-problems", label:"Trạng thái vấn đề",  icon:<Icon.Octagon d={11}/>},
     {id:"sec-actions",  label:"Hành động ưu tiên",  icon:<Icon.Layers d={11}/>},
+    {id:"sec-checklist", label:"Việc cần làm",       icon:<Icon.ShieldCheck d={11}/>},
   ]},
   { group:"3 giai đoạn", items:[
     {id:"sec-phase1", label:"Giai đoạn 1: Tiền phẫu", icon:<Icon.Dot color="#8B5CF6"/>},
@@ -2377,6 +2445,8 @@ const NAV_GROUPS = [
     {id:"sec-echo",      label:"Chẩn đoán hình ảnh", icon:<Icon.Ultrasound d={11}/>},
     {id:"sec-reasoning", label:"Biện luận lâm sàng",     icon:<Icon.Brain d={11}/>},
     {id:"sec-labs",      label:"Xét nghiệm",     icon:<Icon.Flask d={11}/>},
+    {id:"sec-compare",  label:"So sánh xét nghiệm",   icon:<Icon.Flask d={11}/>},
+    {id:"sec-trend",    label:"Xu hướng tổng hợp",   icon:<Icon.Pulse d={11}/>},
     {id:"sec-meds",      label:"Thuốc",          icon:<Icon.Pill d={11}/>},
     {id:"sec-drug",      label:"eGFR & An toàn thuốc", icon:<Icon.ShieldCheck d={11}/>},
     {id:"sec-summary",   label:"Tóm tắt",        icon:<Icon.FileText d={11}/>},
@@ -2549,6 +2619,8 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
                 <div className="nav-menu">
                   <div className="nav-menu-sec">Xuất & chia sẻ</div>
                   <button onClick={()=>{setMenuOpen(false);triggerPrint(report,"full",docNote,bmList)}}><Icon.FileText d={14} color="#475569"/>Xuất bản đầy đủ (3 chế độ)</button>
+                  <button onClick={()=>{setMenuOpen(false);triggerHandoff(report,docNote,bmList)}}><Icon.FileText d={14} color="#475569"/>Tóm tắt 1 trang (bàn giao)</button>
+                  <button onClick={()=>{setMenuOpen(false);exportLabsCSV(report)}}><Icon.Flask d={14} color="#475569"/>Xuất xét nghiệm (CSV)</button>
                   <button onClick={()=>{setMenuOpen(false); (async()=>{ try{ await navigator.clipboard.writeText(reportToText(report)); mpToast("Đã sao chép toàn bộ báo cáo") }catch{ mpToast("Không sao chép được","err") } })()}}><Icon.FileText d={14} color="#475569"/>Sao chép toàn bộ báo cáo</button>
                   <div className="nav-menu-sec">Công cụ</div>
                   <button onClick={()=>{setMenuOpen(false);setBmOpen(true)}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>Mục đã đánh dấu ({bmList.length})</button>
@@ -3172,11 +3244,17 @@ function TermTip({ term, children }){
     </span>
   )
 }
+const LAB_SYSTEM = { "EF":"tim", "NT-proBNP":"tim", "INR":"tim", "Creatinin":"than", "Na+":"than", "K+":"than", "CRP":"nhiem", "WBC":"nhiem", "HGB":"huyet", "PLT":"huyet", "Albumin":"huyet" }
+const SYS_LABEL = { tim:"Tim mạch", than:"Thận - điện giải", nhiem:"Nhiễm khuẩn", huyet:"Huyết học" }
 function LabPanel({ labs, note }) {
   const [filter, setFilter] = useState("all")
+  const [sysFilter, setSysFilter] = useState("all")
   const counts = { high:0, normal:0, low:0 }
   labs.forEach(m => counts[m.status]++)
-  const shown = filter === "all" ? labs : labs.filter(m => m.status === filter)
+  const sysPresent = {}
+  labs.forEach(m => { const s = LAB_SYSTEM[m.key]; if(s) sysPresent[s] = (sysPresent[s]||0)+1 })
+  const sysSeg = [["all","Tất cả",labs.length], ...Object.keys(SYS_LABEL).filter(s=>sysPresent[s]).map(s=>[s,SYS_LABEL[s],sysPresent[s]])]
+  const shown = labs.filter(m => (filter==="all"||m.status===filter) && (sysFilter==="all"||LAB_SYSTEM[m.key]===sysFilter))
   const seg = [
     ["all","Tất cả",labs.length],
     ["high","Cao",counts.high],
@@ -3197,6 +3275,15 @@ function LabPanel({ labs, note }) {
         <span><b>Mũi tên</b> = xu hướng so với lần trước (↑ tăng, ↓ giảm)</span>
         <span><b className="lab-status high" style={{padding:"1px 6px"}}>Màu</b> = mức giá trị (đỏ Cao, cam Thấp, xanh Bình thường)</span>
       </div>
+      <div className="lab-sysbar">
+        <span className="lab-sysbar-lbl">Hệ cơ quan</span>
+        <div className="lab-sysbar-chips">
+          {sysSeg.map(([k,lbl,n]) => (
+            <button key={k} className={"lab-sys-chip"+(sysFilter===k?" on":"")} onClick={()=>setSysFilter(k)}>{lbl} <span className="lab-filter-n">{n}</span></button>
+          ))}
+        </div>
+      </div>
+      {shown.length===0 && <div className="lab-empty">Không có chỉ số nào khớp bộ lọc hiện tại.</div>}
       <div className="lab-grid">
         {shown.map(m => {
           const arrowChar = m.arrow==="up"?"↑":m.arrow==="down"?"↓":"→"
@@ -3510,12 +3597,25 @@ function ReadProgress(){
   return <div className="read-progress"><div className="read-progress-bar" style={{ width: pct + "%" }}/></div>
 }
 function TimelineStrip({ events }){
+  const scrollRef = useRef(null)
+  const [focus, setFocus] = useState(-1)
   if(!events || events.length < 2) return null
   const tone = (l) => l==="canh_bao" ? {c:"#DC2626",bg:"#FEE2E2",t:"Cảnh báo"} : l==="bat_thuong" ? {c:"#D97706",bg:"#FEF3C7",t:"Theo dõi"} : {c:"#0E9488",bg:"#D1FAE5",t:"Ổn định"}
+  const flags = events.map((e,i)=>({i,f:(e.loai==="canh_bao"||e.loai==="bat_thuong")})).filter(x=>x.f).map(x=>x.i)
+  const jump = (dir) => {
+    if(!flags.length) return
+    let next
+    if(dir>0){ next = flags.find(i=>i>focus); if(next==null) next=flags[0] }
+    else { const prev=flags.filter(i=>i<focus); next = prev.length?prev[prev.length-1]:flags[flags.length-1] }
+    setFocus(next)
+    const sc=scrollRef.current; if(!sc) return
+    const item=sc.querySelectorAll(".tls-item")[next]
+    if(item){ item.scrollIntoView({inline:"center",block:"nearest",behavior:"smooth"}); item.classList.add("tls-flash"); setTimeout(()=>item.classList.remove("tls-flash"),1200) }
+  }
   return (
     <div className="tls-card" id="sec-timeline">
-      <div className="tls-head"><Icon.Clock d={15} color="#1D6FE8"/><span>Dòng thời gian diễn biến</span><span className="tls-hint">cuộn ngang để xem</span><span className="sec-tools" onClick={e=>e.stopPropagation()}><FlagBtn pkey={CURRENT_PKEY} label="Dòng thời gian diễn biến" sub="Tổng quan diễn biến" detail={()=>(events||[]).map(e=>(e.ngay||"")+": "+(e.mo_ta||"")).join("\n")}/><CopyBtn text={()=>(events||[]).map(e=>(e.ngay||"")+": "+(e.mo_ta||"")).join("\n")}/></span></div>
-      <div className="tls-scroll">
+      <div className="tls-head"><Icon.Clock d={15} color="#1D6FE8"/><span>Dòng thời gian diễn biến</span><span className="tls-hint">cuộn ngang để xem</span>{flags.length>0 && <span className="tls-nav" onClick={e=>e.stopPropagation()}><button className="tls-nav-btn" onClick={()=>jump(-1)} title="Biến cố trước"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button><span className="tls-nav-lbl">{flags.length} biến cố</span><button className="tls-nav-btn" onClick={()=>jump(1)} title="Biến cố tiếp"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg></button></span>}<span className="sec-tools" onClick={e=>e.stopPropagation()}><FlagBtn pkey={CURRENT_PKEY} label="Dòng thời gian diễn biến" sub="Tổng quan diễn biến" detail={()=>(events||[]).map(e=>(e.ngay||"")+": "+(e.mo_ta||"")).join("\n")}/><CopyBtn text={()=>(events||[]).map(e=>(e.ngay||"")+": "+(e.mo_ta||"")).join("\n")}/></span></div>
+      <div className="tls-scroll" ref={scrollRef}>
         <div className="tls-track">
           {events.map((e,i)=>{ const tn=tone(e.loai); return (
             <div className="tls-item" key={i}>
@@ -3532,6 +3632,221 @@ function TimelineStrip({ events }){
     </div>
   )
 }
+// ─── TỔNG QUAN NHANH (one-glance: marker trends + giai đoạn + ưu tiên) ─────────
+const CO_KEYS = ["EF","CRP","INR","NT-proBNP","Creatinin","Na+"]
+function CoStat({ m }) {
+  const tr = (m.trend || []).filter(v => typeof v === "number")
+  const col = m.status === "normal" ? "#22C55E" : m.status === "high" ? "#EF4444" : "#F59E0B"
+  const W = 72, H = 24, P = 3
+  let path = "", last = null
+  if (tr.length > 1) {
+    const mn = Math.min(...tr), mx = Math.max(...tr), rng = (mx - mn) || 1
+    const pts = tr.map((v, i) => [P + i * (W - 2*P) / (tr.length - 1), H - P - ((v - mn) / rng) * (H - 2*P)])
+    path = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ")
+    last = pts[pts.length - 1]
+  }
+  return (
+    <div className="co-stat">
+      <div className="co-stat-top"><span className="co-stat-key">{m.key}</span><span className="co-stat-dot" style={{ background: col }}/></div>
+      <div className="co-stat-val">{m.val}</div>
+      <svg className="co-spark" viewBox={`0 0 ${W} ${H}`} width={W} height={H} preserveAspectRatio="none">
+        {tr.length > 1 && <path d={path} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>}
+        {last && <circle cx={last[0]} cy={last[1]} r="2.6" fill={col}/>}
+      </svg>
+      <div className="co-stat-norm">BT {m.normal}</div>
+    </div>
+  )
+}
+function CaseOverview({ report: r, findings, phaseInfo, pkey }) {
+  const labs = r.xet_nghiem_meta || r.xet_nghiem_key || []
+  const markers = CO_KEYS.map(k => labs.find(l => l && l.key === k)).filter(Boolean)
+  const crit = (findings || []).filter(f => f.muc === "critical").length
+  const warn = (findings || []).filter(f => f.muc === "warning").length
+  const prios = (r.hanh_dong_uu_tien || []).slice().sort((a,b) => (a.uu_tien||9) - (b.uu_tien||9)).slice(0, 3)
+  const phaseLabel = ["", "Tiền phẫu", "Hậu phẫu nội trú", "Ngoại trú tái khám"][phaseInfo.currentPhase] || ""
+  const detail = "Giai đoạn " + phaseInfo.currentPhase + ": " + phaseLabel + ". "
+    + markers.map(m => m.key + " " + m.val).join(", ") + ". "
+    + (prios.length ? "Ưu tiên: " + prios.map(p => p.viec).join("; ") : "")
+  return (
+    <section id="sec-overview" className="co-wrap">
+      <div className="co-head">
+        <span className="co-h-title"><Icon.Pulse d={15} color="#1D6FE8"/> TỔNG QUAN NHANH</span>
+        <span className="co-phase">Giai đoạn {phaseInfo.currentPhase}: {phaseLabel}</span>
+        {(crit > 0 || warn > 0) && (
+          <span className="co-alerts">
+            {crit > 0 && <span className="co-alert co-alert-crit">{crit} cần xử lý</span>}
+            {warn > 0 && <span className="co-alert co-alert-warn">{warn} theo dõi</span>}
+          </span>
+        )}
+        <div className="co-head-r">
+          <FlagBtn pkey={pkey} label="Tổng quan nhanh" sub="" detail={detail}/>
+          <CopyBtn text={detail}/>
+        </div>
+      </div>
+      {markers.length > 0 && <div className="co-grid">{markers.map((m, i) => <CoStat key={i} m={m}/>)}</div>}
+      {prios.length > 0 && (
+        <div className="co-prios">
+          <span className="co-prios-lbl">Ưu tiên xử lý</span>
+          <ol className="co-prio-list">{prios.map((p, i) => <li key={i}>{p.viec}</li>)}</ol>
+        </div>
+      )}
+    </section>
+  )
+}
+
+// ─── SO SÁNH HAI MỐC XÉT NGHIỆM (visit diff) ──────────────────────────────────
+function TriArrow({ dir }) {
+  if (!dir) return null
+  return <svg width="8" height="8" viewBox="0 0 8 8" style={{ flexShrink: 0 }}>
+    {dir > 0 ? <path d="M4 1 L7 6 L1 6 Z" fill="currentColor"/> : <path d="M4 7 L1 2 L7 2 Z" fill="currentColor"/>}
+  </svg>
+}
+function VisitCompare({ report: r }) {
+  const labs = (r.xet_nghiem_meta || r.xet_nghiem_key || []).filter(l =>
+    l && Array.isArray(l.trend) && Array.isArray(l.trendDates) && l.trend.length === l.trendDates.length && l.trend.length > 1)
+  const order = []
+  labs.forEach(l => l.trendDates.forEach(d => { if (!order.includes(d)) order.push(d) }))
+  const [a, setA] = useState(order[0] || "")
+  const [b, setB] = useState(order[order.length - 1] || "")
+  if (order.length < 2) return <div className="vc-empty">Chưa đủ dữ liệu nhiều mốc để so sánh.</div>
+  const rnd = v => Math.round(v * 100) / 100
+  const valAt = (l, d) => { const i = l.trendDates.indexOf(d); return i >= 0 ? l.trend[i] : null }
+  const rows = labs.map(l => ({ l, va: valAt(l, a), vb: valAt(l, b) })).filter(x => x.va != null || x.vb != null)
+  return (
+    <div className="vc">
+      <div className="vc-pickers">
+        <label className="vc-pick"><span>Mốc A</span><select value={a} onChange={e => setA(e.target.value)}>{order.map(d => <option key={d} value={d}>{d}</option>)}</select></label>
+        <svg width="20" height="12" viewBox="0 0 20 12" className="vc-sep"><path d="M1 6 H17 M13 2 L18 6 L13 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        <label className="vc-pick"><span>Mốc B</span><select value={b} onChange={e => setB(e.target.value)}>{order.map(d => <option key={d} value={d}>{d}</option>)}</select></label>
+      </div>
+      <div className="vc-table">
+        <div className="vc-row vc-thead"><span>Chỉ số</span><span>{a}</span><span>Thay đổi</span><span>{b}</span></div>
+        {rows.map((x, i) => {
+          const { l, va, vb } = x
+          let delta = null, pct = null, dir = 0
+          if (va != null && vb != null) { delta = rnd(vb - va); if (va !== 0) pct = (vb - va) / Math.abs(va) * 100; dir = delta > 0 ? 1 : delta < 0 ? -1 : 0 }
+          return (
+            <div key={i} className="vc-row">
+              <span className="vc-key">{l.key}{l.unit ? <em>{l.unit}</em> : null}</span>
+              <span className="vc-val">{va != null ? va : "—"}</span>
+              <span className={"vc-delta" + (dir > 0 ? " up" : dir < 0 ? " down" : "")}>
+                {delta != null
+                  ? <><TriArrow dir={dir}/>{(delta > 0 ? "+" : "") + delta}{pct != null ? " (" + (pct > 0 ? "+" : "") + pct.toFixed(0) + "%)" : ""}</>
+                  : "—"}
+              </span>
+              <span className="vc-val">{vb != null ? vb : "—"}</span>
+            </div>
+          )
+        })}
+      </div>
+      <div className="vc-note">Giá trị lấy đúng mốc đo; "—" nghĩa là chỉ số không đo ở mốc đó. Tăng/giảm chỉ thể hiện chiều thay đổi, không hàm ý tốt/xấu.</div>
+    </div>
+  )
+}
+
+// ─── CHECKLIST VIỆC CẦN LÀM (tương tác, lưu trạng thái theo bệnh nhân) ─────────
+function FollowupChecklist({ items, pkey }) {
+  const skey = "mp_chk_" + (pkey || "x")
+  const [done, setDone] = useState(() => { try { return JSON.parse(sessionStorage.getItem(skey) || "[]") } catch { return [] } })
+  if (!items || !items.length) return null
+  const toggle = (i) => setDone(prev => {
+    const next = prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]
+    try { sessionStorage.setItem(skey, JSON.stringify(next)) } catch {}
+    return next
+  })
+  const total = items.length
+  const completed = done.filter(i => i < total).length
+  const pct = total ? Math.round(completed / total * 100) : 0
+  const detail = items.map((a, i) => `[${done.includes(i) ? "x" : " "}] ${a.viec || ""}${a.ly_do ? " - " + a.ly_do : ""}`).join("\n")
+  return (
+    <section id="sec-checklist" className="ckl-wrap">
+      <div className="ckl-head">
+        <span className="ckl-title"><Icon.Layers d={15} color="#1D6FE8"/> VIỆC CẦN LÀM</span>
+        <span className="ckl-prog-txt">{completed}/{total} xong</span>
+        <div className="ckl-bar"><div className="ckl-bar-fill" style={{ width: pct + "%" }}/></div>
+        <span className="sec-tools" onClick={e => e.stopPropagation()}>
+          <FlagBtn pkey={pkey} label="Việc cần làm" sub="Theo dõi tiến độ" detail={detail}/>
+          <CopyBtn text={detail}/>
+        </span>
+      </div>
+      <ul className="ckl-list">
+        {items.map((a, i) => {
+          const checked = done.includes(i)
+          return (
+            <li key={i} className={"ckl-item" + (checked ? " done" : "")} onClick={() => toggle(i)} role="button" tabIndex={0}
+              onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(i) } }}>
+              <span className="ckl-box" aria-hidden="true">
+                {checked && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>}
+              </span>
+              <div className="ckl-body">
+                <div className="ckl-viec">{a.viec}</div>
+                {a.ly_do && <div className="ckl-ly">{a.ly_do}</div>}
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  )
+}
+
+// ─── BIỂU ĐỒ XU HƯỚNG TỔNG HỢP (% so với lần đo đầu, đa chỉ số) ────────────────
+const MT_COLORS = ["#1D6FE8","#EF4444","#F59E0B","#0E9488","#8B5CF6","#EC4899","#0EA5E9","#65A30D"]
+function MultiTrend({ report: r }) {
+  const labs = (r.xet_nghiem_meta || r.xet_nghiem_key || []).filter(l =>
+    l && Array.isArray(l.trend) && l.trend.length > 1 && l.trend.every(v => typeof v === "number") && l.trend[0] !== 0)
+  const colorOf = k => MT_COLORS[labs.findIndex(x => x.key === k) % MT_COLORS.length]
+  const defaults = labs.filter(l => ["CRP","NT-proBNP","WBC"].includes(l.key)).map(l => l.key)
+  const [sel, setSel] = useState(defaults.length ? defaults : labs.slice(0, 3).map(l => l.key))
+  if (labs.length < 1) return <div className="vc-empty">Chưa đủ dữ liệu xu hướng để vẽ.</div>
+  const toggle = k => setSel(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
+  const series = labs.filter(l => sel.includes(l.key)).map(l => {
+    const first = l.trend[0]
+    const pts = l.trend.map((v, i) => ({ x: l.trend.length > 1 ? i / (l.trend.length - 1) : 0, y: v / first * 100 }))
+    return { key: l.key, unit: l.unit, color: colorOf(l.key), pts, last: l.trend[l.trend.length - 1], lastPct: Math.round(l.trend[l.trend.length-1]/first*100) }
+  })
+  const allY = series.flatMap(s => s.pts.map(p => p.y))
+  const maxY = Math.max(140, ...(allY.length ? allY : [140])) * 1.04
+  const W = 620, H = 250, PADL = 46, PADR = 16, PADT = 14, PADB = 30
+  const ix = x => PADL + x * (W - PADL - PADR)
+  const iy = y => PADT + (1 - y / maxY) * (H - PADT - PADB)
+  const yTicks = [0, 50, 100].concat(maxY > 250 ? [200, 400].filter(v => v < maxY) : maxY > 150 ? [150] : [])
+  return (
+    <div className="mt">
+      <div className="mt-chips">
+        {labs.map(l => (
+          <button key={l.key} className={"mt-chip" + (sel.includes(l.key) ? " on" : "")} onClick={() => toggle(l.key)}
+            style={sel.includes(l.key) ? { borderColor: colorOf(l.key), color: colorOf(l.key) } : undefined}>
+            <span className="mt-chip-dot" style={{ background: colorOf(l.key) }}/>{l.key}
+          </button>
+        ))}
+      </div>
+      <svg className="mt-svg" viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet">
+        {yTicks.map(v => (
+          <g key={v}>
+            <line x1={PADL} y1={iy(v)} x2={W - PADR} y2={iy(v)} style={{stroke:"var(--border)"}} strokeWidth="1" strokeDasharray={v === 100 ? "0" : "3 3"}/>
+            <text x={PADL - 6} y={iy(v) + 3} textAnchor="end" fontSize="9" style={{fill:"var(--muted2)"}}>{v}%</text>
+          </g>
+        ))}
+        <text x={PADL} y={H - 8} fontSize="9" style={{fill:"var(--muted2)"}}>Lần đo đầu</text>
+        <text x={W - PADR} y={H - 8} fontSize="9" style={{fill:"var(--muted2)"}} textAnchor="end">Gần nhất</text>
+        {series.map(s => {
+          const d = s.pts.map((p, i) => (i ? "L" : "M") + ix(p.x).toFixed(1) + " " + iy(p.y).toFixed(1)).join(" ")
+          const lp = s.pts[s.pts.length - 1]
+          return (
+            <g key={s.key}>
+              <path d={d} fill="none" stroke={s.color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+              {s.pts.map((p, i) => <circle key={i} cx={ix(p.x)} cy={iy(p.y)} r="2.6" fill={s.color}/>)}
+              <text x={ix(lp.x) - 3} y={iy(lp.y) - 6} fontSize="9.5" fontWeight="700" fill={s.color} textAnchor="end">{s.lastPct}%</text>
+            </g>
+          )
+        })}
+      </svg>
+      <div className="mt-note">Mỗi đường = giá trị theo % so với lần đo đầu của chính chỉ số đó (lần đầu = 100%). Dùng để so sánh tốc độ cải thiện/xấu đi giữa các chỉ số có đơn vị khác nhau. Trục ngang theo thứ tự lần đo, không theo khoảng cách ngày thực.</div>
+    </div>
+  )
+}
+
 function ReportTab({ report: r, analysis }) {
   const [tlFilter, setTlFilter] = useState("all")
   const [modalSource, setModalSource] = useState(null)
@@ -3644,6 +3959,8 @@ function ReportTab({ report: r, analysis }) {
       {/* Dải trạng thái 15 giây: giai đoạn + đánh giá tiến triển + đếm cảnh báo (sau thông tin bệnh nhân) */}
       <HeroStatus info={phaseInfo} findings={findings} trajectory={trajectory}/>
 
+      <CaseOverview report={r} findings={findings} phaseInfo={phaseInfo} pkey={r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an}/>
+
       {/* Banner trạng thái + Kết luận nhanh + Trạng thái vấn đề + Hành động */}
       <div id="sec-status"><ClinicalStatusBanner info={phaseInfo} report={r}/></div>
       <TimelineStrip events={r.dien_bien_lam_sang}/>
@@ -3651,6 +3968,7 @@ function ReportTab({ report: r, analysis }) {
 
       {r.problem_status && <ProblemStatus data={r.problem_status} pkey={r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an}/>}
       {r.hanh_dong_uu_tien && r.hanh_dong_uu_tien.length > 0 && <NextActions items={r.hanh_dong_uu_tien}/>}
+      {r.hanh_dong_uu_tien && r.hanh_dong_uu_tien.length > 0 && <FollowupChecklist items={r.hanh_dong_uu_tien} pkey={r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an}/>}
 
       {/* BA GIAI ĐOẠN (chỉ khi xác định được mốc phẫu thuật) */}
       {phaseInfo.surg ? (
@@ -3692,6 +4010,8 @@ function ReportTab({ report: r, analysis }) {
 
       {/* PHÂN TÍCH: Lý luận lâm sàng */}
       <ClinicalReasoning items={reasoningItems}/>
+      <Card id="sec-compare" title="So sánh hai mốc xét nghiệm" icon={<Icon.Flask d={16}/>}><VisitCompare report={r}/></Card>
+      <Card id="sec-trend" title="Xu hướng tổng hợp (% so với lần đầu)" icon={<Icon.Pulse d={16}/>}><MultiTrend report={r}/></Card>
 
       {/* PHÂN TÍCH: Xét nghiệm */}
       <LabPanel labs={r.xet_nghiem_key||r.xet_nghiem_meta||[]} note={r.xet_nghiem_truoc_mo?.ghi_chu}/>
@@ -5044,34 +5364,19 @@ body.theme-dark .hero-h1 em{color:#7FB0FF}
 body.theme-dark .stat-n{color:#EAF1FB}
 body.theme-dark .stat-sub{color:#AEC0D8}
 body.theme-dark .hero-tag,body.theme-dark .hero-tag-lines span{color:#C6D5E8}
-body.theme-dark .takeaway-txt,body.theme-dark .clin-txt,body.theme-dark .lead,body.theme-dark .desc{color:#D6E2F2}
-.sidebar-item.active svg{opacity:1}
-.bm-x{border:none;background:none;cursor:pointer;padding:2px;flex-shrink:0}
-body.theme-dark .bm-panel{background:#161F33}
-body.theme-dark .bm-head{color:#EAF1FB;border-color:#28364E}
-body.theme-dark .bm-item:hover{background:#1B2536}
-body.theme-dark .bm-label{color:#EAF1FB}
-.sh-ov{position:fixed;inset:0;z-index:140;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
-.sh-panel{background:#fff;border-radius:16px;width:432px;max-width:100%;box-shadow:0 24px 60px rgba(15,39,64,.3);overflow:hidden}
-.sh-head{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--border);font-size:14px;font-weight:700;color:var(--navy)}
-.sh-head span{flex:1}
-.sh-body{padding:6px 16px 16px}
-.sh-row{display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px dashed var(--border)}
-.sh-row:last-child{border-bottom:none}
-.sh-keys{display:flex;gap:5px;flex-shrink:0;min-width:126px;flex-wrap:wrap}
-.sh-kbd{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 7px;background:#f1f5fb;border:1px solid var(--border);border-bottom-width:2px;border-radius:6px;font-size:11.5px;font-weight:700;color:var(--navy2);font-family:inherit}
-.sh-desc{font-size:13px;color:var(--muted2);line-height:1.45}
-body.theme-dark .sh-panel{background:#161F33}
-body.theme-dark .sh-head{color:#EAF1FB;border-color:#28364E}
-body.theme-dark .sh-kbd{background:#1B2536;border-color:#2F4368;color:#C7D4E6}
-.sidebar::-webkit-scrollbar,.bm-body::-webkit-scrollbar,.tls-scroll::-webkit-scrollbar,.dn-ta::-webkit-scrollbar{width:8px;height:8px}
-.sidebar::-webkit-scrollbar-thumb,.bm-body::-webkit-scrollbar-thumb,.tls-scroll::-webkit-scrollbar-thumb,.dn-ta::-webkit-scrollbar-thumb{background:rgba(110,137,168,.35);border-radius:8px}
-.sidebar::-webkit-scrollbar-thumb:hover,.tls-scroll::-webkit-scrollbar-thumb:hover{background:rgba(110,137,168,.55)}
-body.theme-dark .sidebar::-webkit-scrollbar-thumb,body.theme-dark .bm-body::-webkit-scrollbar-thumb,body.theme-dark .tls-scroll::-webkit-scrollbar-thumb{background:rgba(127,176,255,.28)}
-button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
-.prio-box-name{display:flex;align-items:flex-start;gap:6px}
-.prio-box-name .flag-btn{margin-left:auto;margin-top:1px}
-
+/* ===== DARK v4: chu bullet + the teaching/reasoning/timeline ===== */
+body.theme-dark .ul-clean li{color:#C6D5E8}
+body.theme-dark .disc{border-color:#2A3A52}
+body.theme-dark .phase-chip{background:#1A2536;color:#C6D5E8;border-color:#2A3A52}
+body.theme-dark .phase-ketluan{background:#141E2C;color:#C6D5E8}
+body.theme-dark .ai-insight{background:#141E2C;border-color:#2A3A52}
+body.theme-dark .ai-insight *{color:#C6D5E8}
+body.theme-dark .reason-item{background:#151E2C !important;border-color:#2A3A52 !important}
+body.theme-dark .ul-pair li{background:#141E2C;border-color:#2A3A52}
+body.theme-dark .ul-pair li b{color:#E2EBF7}
+body.theme-dark .ul-pair li span{color:#9FB3CC}
+body.theme-dark .teach-chip{background:#1A2536;color:#C6D5E8;border-color:#2A3A52}
+/* ===== DARK v4.5: Update contrast color */
 /* Them Darkmode */
 body.theme-dark .phase-chip:not(.lead) {
   background: #1B2A42;
@@ -5349,7 +5654,239 @@ body.theme-dark .summary-phase-title{
 body.theme-dark .summary-phase-num{
   color:#FFFFFF !important;
 }
+/* =====================================
+   DARK MODE: ECHO CHART + PRIORITY BOARD
+   ===================================== */
 
+/* 1. Đồ thị diễn biến EF và chênh áp */
+body.theme-dark .echo-tl-wrap{
+  background:#131D2E;
+  border-color:#2A3A52;
+  box-shadow:0 4px 18px rgba(0,0,0,0.22);
+}
+
+body.theme-dark .echo-tl-wrap svg{
+  background:#101A2B;
+  border:1px solid #263750;
+  border-radius:12px;
+}
+
+body.theme-dark .echo-tl-legend span{
+  color:#C7D4E6;
+}
+
+/* Nhãn EF đang dùng màu xanh đậm inline nên khó đọc trên nền tối */
+body.theme-dark .echo-tl-wrap svg text[fill="#1D3A6E"]{
+  fill:#DCE8F8 !important;
+}
+
+/* Làm các nhãn trục xanh sáng hơn */
+body.theme-dark .echo-tl-wrap svg text[fill="#1D6FE8"]{
+  fill:#60A5FA !important;
+}
+
+/* Nhãn ngày */
+body.theme-dark .echo-tl-wrap svg text[fill="#94A3B8"]{
+  fill:#AFC1D8 !important;
+}
+
+/* Khung phân tích AI dưới biểu đồ */
+body.theme-dark .echo-tl-wrap .ai-insight{
+  background:#17243A;
+  border-color:#304765;
+}
+
+body.theme-dark .echo-tl-wrap .ai-insight-text{
+  color:#E2EBF7;
+}
+
+/* 2. Phân tầng ưu tiên lâm sàng */
+body.theme-dark .prio-board{
+  background:#2A3A52;
+}
+
+/* Tiêu đề Xử lý / Theo dõi / Ổn định */
+body.theme-dark .prio-col-head{
+  background:#18243A !important;
+  border-bottom:1px solid #30435F;
+}
+
+/* Phần thân mỗi cột */
+body.theme-dark .prio-col-body{
+  background:#101A2B;
+}
+
+/* Card nội dung */
+body.theme-dark .prio-box{
+  background:#18243A;
+  border-color:#30435F;
+  box-shadow:0 2px 8px rgba(0,0,0,0.14);
+}
+
+body.theme-dark .prio-box-name{
+  color:#F8FAFC;
+}
+
+body.theme-dark .prio-box-reason{
+  color:#C7D5E8;
+}
+
+body.theme-dark .prio-box-lbl{
+  color:#EAF1FB;
+}
+
+/* Dòng “Không có mục nào” hiện đang quá mờ */
+body.theme-dark .prio-col-empty{
+  color:#91A6C2;
+}
+
+/* Số lượng ở đầu mỗi cột */
+body.theme-dark .prio-col-n{
+  background:#0F192A;
+  color:#F1F5F9;
+  border:1px solid #30435F;
+}
+
+/* Nút nguồn hướng dẫn */
+body.theme-dark .prio-src{
+  background:#EAF2FF;
+  color:#1D4ED8;
+  border-color:#BFDBFE;
+}
+
+body.theme-dark .prio-src:hover{
+  background:#1D6FE8;
+  color:#FFFFFF;
+}
+
+/* ===== TONG QUAN NHANH (CaseOverview) ===== */
+.co-wrap{max-width:1100px;margin:0 auto 20px;background:#fff;border:1px solid var(--border);border-radius:16px;padding:16px 18px;box-shadow:var(--shadow-sm)}
+.co-head{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.co-h-title{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:800;letter-spacing:.06em;color:var(--navy);text-transform:uppercase}
+.co-phase{font-size:11.5px;font-weight:700;color:#1D6FE8;background:rgba(29,111,232,0.1);padding:3px 11px;border-radius:999px}
+.co-alerts{display:inline-flex;gap:6px}
+.co-alert{font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px}
+.co-alert-crit{color:#DC2626;background:rgba(239,68,68,0.12)}
+.co-alert-warn{color:#D97706;background:rgba(245,158,11,0.14)}
+.co-head-r{margin-left:auto;display:inline-flex;gap:6px;align-items:center}
+.co-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px}
+.co-stat{border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:var(--page-bg);transition:transform .18s ease,box-shadow .18s ease}
+.co-stat:hover{transform:translateY(-2px);box-shadow:var(--shadow-sm)}
+.co-stat-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:2px}
+.co-stat-key{font-size:11px;font-weight:800;color:var(--muted);letter-spacing:.03em}
+.co-stat-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.co-stat-val{font-size:17px;font-weight:800;color:var(--navy);line-height:1.15}
+.co-spark{display:block;width:100%;height:24px;margin:3px 0 1px}
+.co-stat-norm{font-size:10px;color:var(--muted2)}
+.co-prios{display:flex;align-items:flex-start;gap:12px;margin-top:14px;padding-top:12px;border-top:1px dashed var(--border);flex-wrap:wrap}
+.co-prios-lbl{font-size:12px;font-weight:800;color:var(--navy2);white-space:nowrap;padding-top:1px}
+.co-prio-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;flex:1;min-width:200px}
+.co-prio-list li{font-size:12.5px;color:var(--navy2);line-height:1.5}
+body.theme-dark .co-wrap{background:#0F1A2A;border-color:#2A3A52}
+body.theme-dark .co-stat{background:#141E2C;border-color:#2A3A52}
+body.theme-dark .co-phase{background:rgba(29,111,232,0.22);color:#7FB0FF}
+/* ===== SO SANH HAI MOC XET NGHIEM (VisitCompare) ===== */
+.vc-pickers{display:flex;align-items:flex-end;gap:14px;margin-bottom:14px;flex-wrap:wrap}
+.vc-pick{display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.03em}
+.vc-pick select{font-size:13px;font-weight:600;color:var(--navy);background:#fff;border:1px solid var(--border);border-radius:9px;padding:7px 11px;cursor:pointer;min-width:120px}
+.vc-sep{color:var(--blue);margin-bottom:9px}
+.vc-table{border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.vc-row{display:grid;grid-template-columns:1.4fr 1fr 1.5fr 1fr;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--border);font-size:13px}
+.vc-row:last-child{border-bottom:none}
+.vc-thead{background:var(--page-bg);font-size:11px;font-weight:800;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.vc-thead span:nth-child(2),.vc-thead span:nth-child(4),.vc-thead span:nth-child(3){text-align:center}
+.vc-key{font-weight:700;color:var(--navy)}
+.vc-key em{font-style:normal;font-weight:500;color:var(--muted2);font-size:11px;margin-left:4px}
+.vc-val{text-align:center;font-weight:700;color:var(--navy2);font-variant-numeric:tabular-nums}
+.vc-delta{display:inline-flex;align-items:center;justify-content:center;gap:4px;font-size:12px;font-weight:700;color:var(--muted);font-variant-numeric:tabular-nums}
+.vc-delta.up{color:#DC2626}
+.vc-delta.down{color:#0E9488}
+.vc-note{font-size:11px;color:var(--muted2);margin-top:10px;line-height:1.5}
+.vc-empty{font-size:13px;color:var(--muted);padding:8px 0}
+@media(max-width:560px){.vc-row{grid-template-columns:1.2fr .8fr 1.3fr .8fr;font-size:12px;padding:8px 10px}}
+body.theme-dark .vc-pick select{background:#141E2C;border-color:#2A3A52;color:#E2EBF7}
+body.theme-dark .vc-table{border-color:#2A3A52}
+body.theme-dark .vc-row{border-color:#2A3A52}
+body.theme-dark .vc-thead{background:#141E2C}
+body.theme-dark .vc-delta.up{color:#F87171}
+body.theme-dark .vc-delta.down{color:#2DD4BF}
+/* ===== F5: timeline event nav ===== */
+.tls-nav{display:inline-flex;align-items:center;gap:7px;margin-left:8px}
+.tls-nav-btn{width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;border-radius:7px;border:1px solid var(--border);background:#fff;color:#1D6FE8;cursor:pointer;transition:all .15s}
+.tls-nav-btn:hover{background:rgba(29,111,232,0.08);transform:translateY(-1px)}
+.tls-nav-lbl{font-size:11px;font-weight:700;color:var(--muted);white-space:nowrap}
+.tls-flash{animation:tlsflash 1.2s ease}
+@keyframes tlsflash{0%,100%{box-shadow:0 0 0 0 rgba(29,111,232,0)}30%{box-shadow:0 0 0 3px rgba(29,111,232,0.45)}}
+body.theme-dark .tls-nav-btn{background:#141E2C;border-color:#2A3A52;color:#7FB0FF}
+body.theme-dark .tls-nav-btn:hover{background:#1E2A40}
+/* ===== F3: loc he co quan (lab system filter) ===== */
+.lab-sysbar{display:flex;align-items:center;gap:10px;margin:10px 0 4px;flex-wrap:wrap}
+.lab-sysbar-lbl{font-size:11px;font-weight:800;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
+.lab-sysbar-chips{display:flex;gap:7px;flex-wrap:wrap}
+.lab-sys-chip{font-size:12px;font-weight:600;color:var(--navy2);background:#fff;border:1px solid var(--border);border-radius:999px;padding:5px 12px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:5px}
+.lab-sys-chip:hover{border-color:var(--blue);color:var(--blue)}
+.lab-sys-chip.on{background:var(--blue);border-color:var(--blue);color:#fff}
+.lab-sys-chip.on .lab-filter-n{color:#fff;opacity:.85}
+.lab-empty{font-size:13px;color:var(--muted);padding:14px 4px;text-align:center}
+body.theme-dark .lab-sys-chip{background:#141E2C;border-color:#2A3A52;color:#C6D5E8}
+body.theme-dark .lab-sys-chip:hover{border-color:#3B82F6;color:#7FB0FF}
+body.theme-dark .lab-sys-chip.on{background:#1D6FE8;border-color:#1D6FE8;color:#fff}
+/* ===== CHECKLIST viec can lam ===== */
+.ckl-wrap{max-width:1100px;margin:0 auto 20px;background:#fff;border:1px solid var(--border);border-radius:16px;padding:16px 18px;box-shadow:var(--shadow-sm)}
+.ckl-head{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+.ckl-title{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:800;letter-spacing:.06em;color:var(--navy);text-transform:uppercase}
+.ckl-prog-txt{font-size:11.5px;font-weight:700;color:var(--blue);white-space:nowrap}
+.ckl-bar{flex:1;min-width:120px;height:7px;background:var(--page-bg);border-radius:999px;overflow:hidden}
+.ckl-bar-fill{height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan));border-radius:999px;transition:width .5s cubic-bezier(.22,1,.36,1)}
+.ckl-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.ckl-item{display:flex;align-items:flex-start;gap:11px;padding:11px 13px;border:1px solid var(--border);border-radius:11px;cursor:pointer;transition:all .15s;background:var(--page-bg)}
+.ckl-item:hover{border-color:var(--blue);transform:translateX(2px)}
+.ckl-box{flex-shrink:0;width:20px;height:20px;border-radius:6px;border:2px solid var(--muted2);display:inline-flex;align-items:center;justify-content:center;margin-top:1px;transition:all .15s}
+.ckl-item.done .ckl-box{background:var(--blue);border-color:var(--blue)}
+.ckl-viec{font-size:13.5px;font-weight:600;color:var(--navy);line-height:1.45}
+.ckl-ly{font-size:12px;color:var(--muted);line-height:1.5;margin-top:2px}
+.ckl-item.done .ckl-viec{text-decoration:line-through;color:var(--muted)}
+.ckl-item.done{opacity:.72}
+body.theme-dark .ckl-wrap{background:#0F1A2A;border-color:#2A3A52}
+body.theme-dark .ckl-item{background:#141E2C;border-color:#2A3A52}
+body.theme-dark .ckl-bar{background:#1A2536}
+/* ===== XU HUONG TONG HOP (MultiTrend) ===== */
+.mt-chips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px}
+.mt-chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--muted);background:#fff;border:1px solid var(--border);border-radius:999px;padding:5px 12px;cursor:pointer;transition:all .15s}
+.mt-chip:hover{border-color:var(--blue)}
+.mt-chip.on{background:rgba(29,111,232,0.06);font-weight:700}
+.mt-chip-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.mt-svg{display:block;max-width:680px;margin:0 auto;overflow:visible}
+.mt-note{font-size:11px;color:var(--muted2);margin-top:10px;line-height:1.5}
+body.theme-dark .mt-chip{background:#141E2C;border-color:#2A3A52}
+body.theme-dark .mt-chip.on{background:rgba(29,111,232,0.18)}
+body.theme-dark .takeaway-txt,body.theme-dark .clin-txt,body.theme-dark .lead,body.theme-dark .desc{color:#D6E2F2}
+.sidebar-item.active svg{opacity:1}
+.bm-x{border:none;background:none;cursor:pointer;padding:2px;flex-shrink:0}
+body.theme-dark .bm-panel{background:#161F33}
+body.theme-dark .bm-head{color:#EAF1FB;border-color:#28364E}
+body.theme-dark .bm-item:hover{background:#1B2536}
+body.theme-dark .bm-label{color:#EAF1FB}
+.sh-ov{position:fixed;inset:0;z-index:140;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
+.sh-panel{background:#fff;border-radius:16px;width:432px;max-width:100%;box-shadow:0 24px 60px rgba(15,39,64,.3);overflow:hidden}
+.sh-head{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--border);font-size:14px;font-weight:700;color:var(--navy)}
+.sh-head span{flex:1}
+.sh-body{padding:6px 16px 16px}
+.sh-row{display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px dashed var(--border)}
+.sh-row:last-child{border-bottom:none}
+.sh-keys{display:flex;gap:5px;flex-shrink:0;min-width:126px;flex-wrap:wrap}
+.sh-kbd{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 7px;background:#f1f5fb;border:1px solid var(--border);border-bottom-width:2px;border-radius:6px;font-size:11.5px;font-weight:700;color:var(--navy2);font-family:inherit}
+.sh-desc{font-size:13px;color:var(--muted2);line-height:1.45}
+body.theme-dark .sh-panel{background:#161F33}
+body.theme-dark .sh-head{color:#EAF1FB;border-color:#28364E}
+body.theme-dark .sh-kbd{background:#1B2536;border-color:#2F4368;color:#C7D4E6}
+.sidebar::-webkit-scrollbar,.bm-body::-webkit-scrollbar,.tls-scroll::-webkit-scrollbar,.dn-ta::-webkit-scrollbar{width:8px;height:8px}
+.sidebar::-webkit-scrollbar-thumb,.bm-body::-webkit-scrollbar-thumb,.tls-scroll::-webkit-scrollbar-thumb,.dn-ta::-webkit-scrollbar-thumb{background:rgba(110,137,168,.35);border-radius:8px}
+.sidebar::-webkit-scrollbar-thumb:hover,.tls-scroll::-webkit-scrollbar-thumb:hover{background:rgba(110,137,168,.55)}
+body.theme-dark .sidebar::-webkit-scrollbar-thumb,body.theme-dark .bm-body::-webkit-scrollbar-thumb,body.theme-dark .tls-scroll::-webkit-scrollbar-thumb{background:rgba(127,176,255,.28)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.prio-box-name{display:flex;align-items:flex-start;gap:6px}
+.prio-box-name .flag-btn{margin-left:auto;margin-top:1px}
 @media(max-width:860px){
   .report-outer{padding:14px 12px 48px;gap:0}
   .sidebar{display:none}
