@@ -2190,7 +2190,6 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
   return (
     <div className="upload-page">
       <div className="upload-bg-circle1" /><div className="upload-bg-circle2" />
-      <ThemeToggle/><button className="up-logout" onClick={async()=>{ if(await mpConfirm({title:"Đăng xuất?",message:"Bạn sẽ quay lại màn hình đăng nhập.",okText:"Đăng xuất",danger:true})) onLogout() }} title="Đăng xuất tài khoản"><Icon.Close d={12} color="#64748B"/>Đăng xuất</button>
       {preview && (
         <div className="fp-overlay" onClick={()=>setPreview(null)}>
           <div className="fp-modal" onClick={e=>e.stopPropagation()}>
@@ -2211,6 +2210,10 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
         <div className="logo">
           <BrandMark size={36} radius={10}/>
           <div><span className="logo-text">Med<em>Parcours</em></span> <span className="logo-sub">AI</span></div>
+        </div>
+        <div className="top-nav-actions">
+          <ThemeToggle/>
+          <button className="up-logout" onClick={async()=>{ if(await mpConfirm({title:"Đăng xuất?",message:"Bạn sẽ quay lại màn hình đăng nhập.",okText:"Đăng xuất",danger:true})) onLogout() }} title="Đăng xuất tài khoản"><Icon.Close d={12} color="#64748B"/>Đăng xuất</button>
         </div>
       </nav>
       <div className="hero-wrap">
@@ -4993,6 +4996,55 @@ body.theme-dark .bm-go:hover{background:#22304a}
 body.theme-dark .bm-item-top:hover{background:rgba(127,176,255,.06)}
 body.theme-dark .bm-item .bm-detail{border-color:#28364E}
 [id^="sec-"],.phase-sec,.tls-card{scroll-margin-top:74px}
+.mode-card{animation:mpfadeup .34s ease}
+@keyframes mpfadeup{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.sidebar-item,.chip-tag,.tb-btn,.tab-group button,.mode-cd-btn{transition:all .16s ease}
+.risk-fill,.score-fill,.bar-fill,.prog-fill,.donut-seg{transition:all .8s cubic-bezier(.22,1,.36,1)}
+.stat-card,.ov-card,.phase-sec,.tls-card{transition:box-shadow .2s ease,transform .2s ease}
+.stat-card:hover,.ov-card:hover{transform:translateY(-1px);box-shadow:var(--shadow-md)}
+.fab,.dn-fab{transition:transform .18s ease,box-shadow .18s ease,filter .18s ease}
+.fab:hover,.dn-fab:hover{transform:translateY(-2px)}
+.top-nav-actions{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.top-nav .up-logout{position:static;top:auto;right:auto}
+body.theme-dark{--muted:#AEC0D8;--muted2:#C8D6E8;--navy3:#AFC1DA;--navy2:#D2DEEE}
+body.theme-dark .top-nav{background:rgba(15,23,40,0.72);border-color:var(--border)}
+body.theme-dark .up-logout{background:#1B2536;border-color:var(--border)}
+body.theme-dark .takeaway-card{background:#13212B;border-color:#235049;border-left-color:#2DD4BF}
+body.theme-dark .takeaway-card li,body.theme-dark .takeaway-card{color:#DCE6F4}
+body.theme-dark .hero-status{background:#11192A;border-color:var(--border)}
+body.theme-dark .phase-sec{background:#131D2E}
+body.theme-dark .reason-phase{background:#1B2536;border-color:var(--border)}
+body.theme-dark .echo-bar-title{color:#EAF1FB}
+body.theme-dark .next-actions{background:#231D11;border-color:#473a20;border-left-color:#FBBF24}
+body.theme-dark .next-actions,body.theme-dark .next-actions .na-viec,body.theme-dark .next-actions .na-ly,body.theme-dark .next-actions li,body.theme-dark .next-actions p,body.theme-dark .next-actions span{color:#E7DCC8}
+body.theme-dark .medio{background:#201A0C;border-color:#3a3119}
+/* ===== DARK MODE v3: toi hoa cac the translucent bi nhat ===== */
+body.theme-dark .lab-cell{background:#141E2C;border-color:#2A3A52}
+body.theme-dark .lab-legend{background:#141E2C;border-color:#2A3A52;color:#B4C4DA}
+body.theme-dark .lab-clarify{background:#2A2410;color:#FCD9A6;border-color:#4A3D22}
+body.theme-dark .lab-desc,body.theme-dark .lab-normal,body.theme-dark .lab-foot,body.theme-dark .date-val{color:#9FB3CC}
+body.theme-dark .drug-egfr-box{background:#13202E;border-color:#2A3A52}
+body.theme-dark .drug-egfr-box *{color:#C6D5E8}
+body.theme-dark .fc-msgs{background:#0E1726}
+body.theme-dark .bot{background:#1A2536;border-color:#2A3A52;color:#E2EBF7}
+body.theme-dark .bot *{color:#E2EBF7}
+body.theme-dark .alert-item{background:#161F2E;border-color:#2A3A52}
+body.theme-dark .alert-item *{color:#D6E2F2}
+body.theme-dark .dc-opt{background:#141E2C;border-color:#2A3A52;color:#D6E2F2}
+body.theme-dark .echo-tl-insight{background:#141E2C;border-color:#2A3A52;color:#C6D5E8}
+body.theme-dark .stage-wrap{background:#141E2C;border-color:#2A3A52}
+body.theme-dark .sug-chip{background:#1A2536;border-color:#2A3A52;color:#C6D5E8}
+body.theme-dark .sug-chip:hover{background:#22304a}
+body.theme-dark .chat-input-row{background:#0F1828;border-color:#2A3A52}
+body.theme-dark .prio-col,body.theme-dark .prio-count,body.theme-dark .prio-counts,body.theme-dark .tl-filter-btn{background:#141E2C;border-color:#2A3A52;color:#C6D5E8}
+body.theme-dark .prio-col-n{background:#1A2536;color:#E2EBF7}
+body.theme-dark .upload-page{background:#0A1220}
+body.theme-dark .hero-h1,body.theme-dark .hero-desc,body.theme-dark .feat-item{color:#E2EBF7}
+body.theme-dark .hero-h1 em{color:#7FB0FF}
+body.theme-dark .stat-n{color:#EAF1FB}
+body.theme-dark .stat-sub{color:#AEC0D8}
+body.theme-dark .hero-tag,body.theme-dark .hero-tag-lines span{color:#C6D5E8}
+body.theme-dark .takeaway-txt,body.theme-dark .clin-txt,body.theme-dark .lead,body.theme-dark .desc{color:#D6E2F2}
 .sidebar-item.active svg{opacity:1}
 .bm-x{border:none;background:none;cursor:pointer;padding:2px;flex-shrink:0}
 body.theme-dark .bm-panel{background:#161F33}
