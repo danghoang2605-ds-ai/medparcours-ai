@@ -57,19 +57,47 @@ function ensurePdfJs() {
 
 // Bóc toàn bộ text của 1 file PDF (đọc HẾT trang để không bỏ sót; có trần an toàn
 // 1500 trang). Server sẽ lọc giữ phần lâm sàng. onProgress(done,total) để báo tiến độ.
+//
+// TỐI ƯU: đọc theo BATCH song song (PDF_BATCH_SIZE trang/lượt) thay vì tuần tự
+// từng trang. pdf.js (>=2.x, bản đang dùng 3.11.174) cho phép gọi getPage() đồng
+// thời an toàn — mỗi PDFPageProxy độc lập, không chia sẻ state. Rủi ro thực tế là
+// RAM (giữ nhiều trang cùng lúc) và worker quá tải nếu batch quá lớn -> dùng
+// batch nhỏ (8 trang) thay vì Promise.all toàn bộ, và gọi page.cleanup() ngay
+// sau khi lấy text xong để giải phóng bộ nhớ trang đó trước khi qua batch sau.
+// Thứ tự trang trong kết quả VẪN ĐÚNG 1..N dù xử lý song song, vì mỗi batch ghi
+// kết quả vào đúng vị trí mảng theo số trang, không dựa vào thứ tự hoàn thành.
+const PDF_BATCH_SIZE = 8
+
 async function extractPdfText(file, onProgress) {
   const lib = await ensurePdfJs()
   const buf = await file.arrayBuffer()
   const pdf = await lib.getDocument({ data: buf }).promise
   const maxPages = Math.min(pdf.numPages, 1500)
-  const parts = []
-  for (let i = 1; i <= maxPages; i++) {
-    const page = await pdf.getPage(i)
-    const tc = await page.getTextContent()
-    const txt = tc.items.map(it => it.str).join(" ").trim()
-    parts.push(`==== TRANG ${i} ====\n${txt}`)
-    if (onProgress) onProgress(i, maxPages)
+  const parts = new Array(maxPages)
+  let done = 0
+
+  const readOnePage = async (pageNum) => {
+    const page = await pdf.getPage(pageNum)
+    try {
+      const tc = await page.getTextContent()
+      const txt = tc.items.map(it => it.str).join(" ").trim()
+      parts[pageNum - 1] = `==== TRANG ${pageNum} ====\n${txt}`
+    } finally {
+      // Giải phóng tài nguyên trang ngay (canvas/text layer cache nội bộ của
+      // pdf.js) - quan trọng khi đọc hàng trăm trang để RAM không tích dần.
+      try { page.cleanup() } catch {}
+    }
+    done++
+    if (onProgress) onProgress(done, maxPages)
   }
+
+  for (let batchStart = 1; batchStart <= maxPages; batchStart += PDF_BATCH_SIZE) {
+    const batchEnd = Math.min(batchStart + PDF_BATCH_SIZE - 1, maxPages)
+    const batch = []
+    for (let p = batchStart; p <= batchEnd; p++) batch.push(readOnePage(p))
+    await Promise.all(batch)
+  }
+
   return { text: parts.join("\n\n"), pages: pdf.numPages }
 }
 
@@ -176,6 +204,7 @@ const CSS = `
   .fmt-lbl{font-size:11px;color:#94A3B8}
   .fmt-chips{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;max-width:320px}
   .fmt-chip{font-size:10px;font-weight:700;padding:3px 9px;border-radius:999px}
+  .fmt-chip-soon{font-size:10px;font-weight:600;padding:3px 9px;border-radius:999px;color:#94A3B8;background:#F1F5F9;border:1px dashed #CBD5E1}
   .stage-wrap{border-radius:28px;padding:20px;background:rgba(255,255,255,0.9);backdrop-filter:blur(20px);box-shadow:0 8px 40px rgba(30,80,200,0.1);border:1px solid rgba(200,220,255,0.5)}
   .stage-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
   .stage-title{font-size:14px;font-weight:700;color:var(--navy)}
@@ -1075,17 +1104,24 @@ const MOCK_REPORT = {
 // AI (Claude) chỉ diễn giải kết quả mà lớp này bắt được.
 
 // Bản đồ biệt dược Việt -> hoạt chất gốc (fallback khi hồ sơ không ghi trong ngoặc)
+// ĐỒNG BỘ với BRAND_TO_GENERIC trong clinical_rules.py — sửa 1 nơi thì sửa cả 2.
 const BRAND_TO_GENERIC = {
   "vincerol":"acenocoumarol", "sintrom":"acenocoumarol", "coumadin":"warfarin",
   "medoxasol":"levofloxacin", "tavanic":"levofloxacin", "ciprobay":"ciprofloxacin",
   "forxiga":"dapagliflozin", "jardiance":"empagliflozin",
   "agifuros":"furosemid", "lasix":"furosemid", "takizd":"furosemid",
   "buflan":"cefoperazone", "pantoloc":"pantoprazole", "nexium":"esomeprazole",
-  "betaloc zok":"metoprolol", "concor":"bisoprolol", "lipitor":"atorvastatin",
+  "betaloc":"metoprolol", "concor":"bisoprolol", "lipitor":"atorvastatin",
   "glucophage":"metformin", "aldactone":"spironolactone", "cordarone":"amiodarone",
+  "plavix":"clopidogrel", "brilinta":"ticagrelor", "xarelto":"rivaroxaban",
+  "eliquis":"apixaban", "pradaxa":"dabigatran", "crestor":"rosuvastatin",
+  "diamicron":"gliclazide", "amaryl":"glimepiride", "amlor":"amlodipine",
+  "losartas":"losartan", "cozaar":"losartan", "diovan":"valsartan",
+  "klacid":"clarithromycin", "zithromax":"azithromycin", "rocephin":"ceftriaxone",
+  "lanoxin":"digoxin",
 }
 
-// Hoạt chất -> nhóm dược lý (để tra tương tác theo nhóm)
+// ĐỒNG BỘ với GENERIC_GROUPS trong clinical_rules.py.
 const GENERIC_INFO = {
   "acenocoumarol":{ ten:"Acenocoumarol", nhom:["khang_vitamin_k"] },
   "warfarin":{ ten:"Warfarin", nhom:["khang_vitamin_k"] },
@@ -1096,16 +1132,46 @@ const GENERIC_INFO = {
   "empagliflozin":{ ten:"Empagliflozin", nhom:["sglt2i"] },
   "pantoprazole":{ ten:"Pantoprazole", nhom:["ppi"] },
   "esomeprazole":{ ten:"Esomeprazole", nhom:["ppi"] },
+  "omeprazole":{ ten:"Omeprazole", nhom:["ppi"] },
   "cefoperazone":{ ten:"Cefoperazone", nhom:["cephalosporin"] },
+  "ceftriaxone":{ ten:"Ceftriaxone", nhom:["cephalosporin"] },
+  "cefuroxime":{ ten:"Cefuroxime", nhom:["cephalosporin"] },
   "metformin":{ ten:"Metformin", nhom:["biguanid"] },
   "spironolactone":{ ten:"Spironolacton", nhom:["loi_tieu_giu_kali"] },
   "metoprolol":{ ten:"Metoprolol", nhom:["chen_beta"] },
   "bisoprolol":{ ten:"Bisoprolol", nhom:["chen_beta"] },
+  "carvedilol":{ ten:"Carvedilol", nhom:["chen_beta"] },
   "atorvastatin":{ ten:"Atorvastatin", nhom:["statin"] },
+  "simvastatin":{ ten:"Simvastatin", nhom:["statin"] },
+  "rosuvastatin":{ ten:"Rosuvastatin", nhom:["statin"] },
   "amiodarone":{ ten:"Amiodarone", nhom:["chong_loan_nhip"] },
+  "clarithromycin":{ ten:"Clarithromycin", nhom:["macrolid"] },
+  "azithromycin":{ ten:"Azithromycin", nhom:["macrolid"] },
+  "ibuprofen":{ ten:"Ibuprofen", nhom:["nsaid"] },
+  "diclofenac":{ ten:"Diclofenac", nhom:["nsaid"] },
+  "meloxicam":{ ten:"Meloxicam", nhom:["nsaid"] },
+  "celecoxib":{ ten:"Celecoxib", nhom:["nsaid"] },
+  "enalapril":{ ten:"Enalapril", nhom:["acei"] },
+  "lisinopril":{ ten:"Lisinopril", nhom:["acei"] },
+  "captopril":{ ten:"Captopril", nhom:["acei"] },
+  "losartan":{ ten:"Losartan", nhom:["arb"] },
+  "valsartan":{ ten:"Valsartan", nhom:["arb"] },
+  "telmisartan":{ ten:"Telmisartan", nhom:["arb"] },
+  "aspirin":{ ten:"Aspirin", nhom:["khang_ket_tap_tieu_cau"] },
+  "clopidogrel":{ ten:"Clopidogrel", nhom:["khang_ket_tap_tieu_cau"] },
+  "ticagrelor":{ ten:"Ticagrelor", nhom:["khang_ket_tap_tieu_cau"] },
+  "rivaroxaban":{ ten:"Rivaroxaban", nhom:["khang_dong_truc_tiep"] },
+  "apixaban":{ ten:"Apixaban", nhom:["khang_dong_truc_tiep"] },
+  "dabigatran":{ ten:"Dabigatran", nhom:["khang_dong_truc_tiep"] },
+  "insulin":{ ten:"Insulin", nhom:["insulin"] },
+  "gliclazide":{ ten:"Gliclazide", nhom:["sulfonylurea"] },
+  "glimepiride":{ ten:"Glimepiride", nhom:["sulfonylurea"] },
+  "amlodipine":{ ten:"Amlodipine", nhom:["chen_kenh_calci"] },
+  "nifedipine":{ ten:"Nifedipine", nhom:["chen_kenh_calci"] },
+  "digoxin":{ ten:"Digoxin", nhom:["digoxin"] },
 }
 
-// Bảng tương tác theo nhóm dược lý (MVP: các cặp phổ biến + cặp có trong ca demo)
+// ĐỒNG BỘ với INTERACTION_RULES trong clinical_rules.py.
 const INTERACTIONS = [
   { a:"khang_vitamin_k", b:"fluoroquinolon", muc:"warning",
     hau_qua:"Fluoroquinolon làm tăng tác dụng chống đông của thuốc kháng vitamin K, có thể đẩy INR lên cao và tăng nguy cơ chảy máu.",
@@ -1118,18 +1184,46 @@ const INTERACTIONS = [
   { a:"khang_vitamin_k", b:"macrolid", muc:"warning",
     hau_qua:"Ức chế chuyển hóa thuốc chống đông, tăng INR, nguy cơ chảy máu.",
     de_xuat:"Theo dõi INR, cân nhắc kháng sinh nhóm khác.", nguon:"Tương tác coumarin-macrolid" },
+  { a:"khang_vitamin_k", b:"chong_loan_nhip", muc:"critical",
+    hau_qua:"Amiodarone tăng mạnh tác dụng chống đông, nguy cơ xuất huyết.",
+    de_xuat:"Cần giảm liều thuốc chống đông ngay từ đầu, theo dõi INR.",
+    nguon:"Tương tác warfarin-amiodarone" },
   { a:"loi_tieu_giu_kali", b:"acei", muc:"warning",
     hau_qua:"Tăng kali máu, nguy cơ rối loạn nhịp.", de_xuat:"Theo dõi kali máu và chức năng thận.",
     nguon:"Tương tác ACEI-lợi tiểu giữ kali" },
+  { a:"loi_tieu_giu_kali", b:"arb", muc:"warning",
+    hau_qua:"Tăng kali máu, nguy cơ rối loạn nhịp tim (cơ chế tương tự phối hợp với ACEI).",
+    de_xuat:"Theo dõi kali máu và chức năng thận định kỳ.", nguon:"Tương tác ARB-lợi tiểu giữ kali" },
+  { a:"acei", b:"arb", muc:"warning",
+    hau_qua:"Phối hợp 2 thuốc ức chế hệ Renin-Angiotensin cùng lúc không tăng hiệu quả rõ rệt nhưng tăng nguy cơ tăng kali máu và suy thận.",
+    de_xuat:"Thường KHÔNG phối hợp ACEI + ARB cùng lúc; xem lại chỉ định.", nguon:"ESC/ESH Tăng huyết áp" },
   { a:"statin", b:"macrolid", muc:"warning",
     hau_qua:"Tăng nồng độ statin, nguy cơ đau cơ và tiêu cơ vân.", de_xuat:"Tạm ngừng statin trong đợt kháng sinh.",
     nguon:"Tương tác statin-macrolid" },
   { a:"chen_beta", b:"chong_loan_nhip", muc:"warning",
     hau_qua:"Cộng gộp ức chế tim, nguy cơ nhịp chậm, block nhĩ thất.", de_xuat:"Theo dõi nhịp tim, ECG.",
     nguon:"Tương tác chẹn beta-chống loạn nhịp" },
+  { a:"chen_beta", b:"chen_kenh_calci", muc:"warning",
+    hau_qua:"Phối hợp có thể cộng gộp ức chế dẫn truyền nhĩ thất và co cơ tim, nguy cơ nhịp chậm/tụt huyết áp (đặc biệt nhóm non-dihydropyridine).",
+    de_xuat:"Theo dõi nhịp tim và huyết áp sát khi mới phối hợp.", nguon:"Tương tác chẹn beta-chẹn kênh calci" },
+  { a:"khang_ket_tap_tieu_cau", b:"khang_dong_truc_tiep", muc:"critical",
+    hau_qua:"Phối hợp kháng kết tập tiểu cầu với kháng đông trực tiếp (DOAC) làm tăng đáng kể nguy cơ chảy máu.",
+    de_xuat:"Chỉ phối hợp khi có chỉ định rõ ràng (vd sau đặt stent + rung nhĩ); xem lại thời gian điều trị kép.",
+    nguon:"ESC Hội chứng mạch vành cấp / Rung nhĩ" },
+  { a:"khang_vitamin_k", b:"khang_ket_tap_tieu_cau", muc:"critical",
+    hau_qua:"Tăng nguy cơ chảy máu khi phối hợp kháng vitamin K với thuốc kháng kết tập tiểu cầu.",
+    de_xuat:"Chỉ phối hợp khi có chỉ định rõ ràng, theo dõi sát dấu hiệu chảy máu.",
+    nguon:"ESC Rung nhĩ / Hội chứng mạch vành cấp" },
+  { a:"digoxin", b:"chong_loan_nhip", muc:"warning",
+    hau_qua:"Amiodarone làm tăng nồng độ digoxin trong máu, có thể gây ngộ độc digoxin.",
+    de_xuat:"Giảm liều digoxin (thường 30-50%) khi phối hợp với amiodarone, theo dõi nồng độ.",
+    nguon:"Tương tác digoxin-amiodarone" },
+  { a:"digoxin", b:"loi_tieu_quai", muc:"warning",
+    hau_qua:"Lợi tiểu quai gây hạ kali máu, làm tăng nguy cơ ngộ độc digoxin dù nồng độ digoxin không đổi.",
+    de_xuat:"Theo dõi kali máu định kỳ khi phối hợp.", nguon:"Tương tác digoxin-lợi tiểu quai" },
 ]
 
-// Luật chỉnh liều theo chức năng thận (eGFR)
+// ĐỒNG BỘ với RENAL_RULES trong clinical_rules.py.
 const RENAL_RULES = [
   { generic:"metformin", egfr_lt:30, muc:"critical",
     note:"Chống chỉ định khi eGFR dưới 30 do nguy cơ nhiễm toan lactic.", nguon:"ADA 2025 / KDIGO" },
@@ -1137,6 +1231,16 @@ const RENAL_RULES = [
     note:"Không khởi trị khi eGFR dưới 25.", nguon:"ESC / ADA 2025" },
   { generic:"levofloxacin", egfr_lt:50, muc:"warning",
     note:"Cần chỉnh liều khi độ thanh thải creatinin dưới 50 mL/phút.", nguon:"Hướng dẫn kê đơn fluoroquinolon" },
+  { generic:"rivaroxaban", egfr_lt:30, muc:"critical",
+    note:"Chống chỉ định/cần chỉnh liều khi eGFR dưới 30 — nguy cơ tích lũy thuốc, tăng chảy máu.", nguon:"ESC Rung nhĩ 2025" },
+  { generic:"apixaban", egfr_lt:25, muc:"warning",
+    note:"Cần chỉnh liều khi eGFR dưới 25-30, theo dõi sát dấu hiệu chảy máu.", nguon:"ESC Rung nhĩ 2025" },
+  { generic:"dabigatran", egfr_lt:30, muc:"critical",
+    note:"Chống chỉ định khi eGFR dưới 30 — thải trừ chủ yếu qua thận.", nguon:"ESC Rung nhĩ 2025" },
+  { generic:"spironolactone", egfr_lt:30, muc:"critical",
+    note:"Tăng nguy cơ tăng kali máu nặng khi eGFR dưới 30, cần theo dõi kali sát hoặc tránh dùng.", nguon:"ESC Suy tim 2025 / KDIGO" },
+  { generic:"gliclazide", egfr_lt:30, muc:"warning",
+    note:"Tăng nguy cơ hạ đường huyết khi chức năng thận giảm nặng, cần chỉnh liều.", nguon:"ADA 2025" },
 ]
 
 // Thuốc phù hợp guideline trong bối cảnh cụ thể (gắn nhãn xanh, không cảnh báo)
@@ -1197,7 +1301,7 @@ function resolveGenerics(meds) {
   })
 }
 
-// Kiểm tra an toàn đơn thuốc: tương tác + chỉnh liều thận + thuốc phù hợp
+// Kiểm tra an toàn đơn thuốc: tương tác + chỉnh liều thận + thuốc phù hợp + trùng nhóm
 function checkDrugSafety(meds, egfr, ctx) {
   const resolved = resolveGenerics(meds)
   const interactions = []
@@ -1227,7 +1331,183 @@ function checkDrugSafety(meds, egfr, ctx) {
       favorable.push(entry)
     }
   }
-  return { resolved, interactions, renalFlags, favorable }
+  // Trùng nhóm thuốc — ĐỒNG BỘ với logic trong check_drug_safety() (clinical_rules.py)
+  const duplicateGroups = []
+  const seenPairs = new Set()
+  for (let i = 0; i < resolved.length; i++) {
+    for (let j = i + 1; j < resolved.length; j++) {
+      const A = resolved[i], B = resolved[j]
+      if (!A.generic || !B.generic || A.generic === B.generic) continue
+      const common = A.nhom_duoc.filter(g => B.nhom_duoc.includes(g))
+      for (const grp of common) {
+        const pairKey = [A.generic, B.generic].sort().join("|") + "|" + grp
+        if (seenPairs.has(pairKey)) continue
+        seenPairs.add(pairKey)
+        duplicateGroups.push({
+          nhom: grp, thuoc_a: A.generic, thuoc_b: B.generic,
+          ghi_chu: `Hai thuốc khác hoạt chất nhưng cùng nhóm dược lý (${grp}) — kiểm tra có cần dùng đồng thời hay là sai sót quên ngừng thuốc cũ.`,
+        })
+      }
+    }
+  }
+  return { resolved, interactions, renalFlags, favorable, duplicateGroups }
+}
+
+// ─── Thang điểm nguy cơ (CHA2DS2-VASc + HAS-BLED) — bản JS CHỈ DÙNG CHO DEMO
+// OFFLINE (MOCK_REPORT, khi analysis=null vì không gọi backend). Đây là bản
+// PORT TRỰC TIẾP từ compute_cha2ds2_vasc()/compute_has_bled() trong
+// clinical_rules.py — giữ đúng công thức, ngưỡng, cấu trúc trả về để tương
+// thích với RiskScoresCard. KHÔNG dùng hàm này khi có backend: ReportPage chỉ
+// gọi nó trong nhánh "else" (analysis null), mọi hồ sơ phân tích qua backend
+// thật vẫn lấy risk_scores từ analysis — giữ đúng 1 nguồn sự thật khi có thể.
+// Nếu sửa ngưỡng/từ khóa ở clinical_rules.py, PHẢI soát lại bản JS này theo.
+const CRS_CV_KEYWORDS = {
+  suy_tim: ["suy tim","ef giam","phan suat tong mau giam","rlcn tam thu"],
+  tang_huyet_ap: ["tang huyet ap","tha","cao huyet ap"],
+  dtd: ["dai thao duong","dtd","hba1c"],
+  // LƯU Ý: đã bỏ "huyet khoi"/"thuyen tac" — quá rộng, thường khớp nhầm câu
+  // CẢNH BÁO NGUY CƠ (vd "nguy cơ huyết khối van do INR thấp") không phải
+  // biến cố tiền sử thật. Đồng bộ với clinical_rules.py CV_KEYWORDS.
+  dot_quy: ["dot quy","tai bien mach mau nao","nhoi mau nao","tia ","thieu mau nao cuc bo"],
+  // Bổ sung sau khi phát hiện bỏ sót thật với PATIENT_B ("Bệnh mạch vành đã
+  // đặt 2 stent ĐMV" không khớp bộ cũ). Đồng bộ với clinical_rules.py.
+  benh_mach_mau: ["nhoi mau co tim","nmct","benh dong mach ngoai bien","hep dong mach canh","mang xo vua dmc","xo vua dong mach","benh mach mau","benh mach vanh","dat stent","stent dmv","stent mach vanh","can thiep mach vanh","dat gia do mach vanh","bac cau mach vanh","cabg","pci"],
+}
+const CRS_HB_KEYWORDS = {
+  benh_gan: ["xo gan","viem gan","suy gan","benh gan man"],
+  // LƯU Ý: đã bỏ "chay mau" đơn lẻ — quá rộng, khớp nhầm câu cảnh báo nguy
+  // cơ dự phòng. Đồng bộ với clinical_rules.py HB_KEYWORDS["tien_su_chay_mau"].
+  chay_mau: ["xuat huyet","tien su chay mau","loet da day xuat huyet"],
+  thuoc_chay_mau: ["nsaid","aspirin","khang ket tap tieu cau","ibuprofen","diclofenac"],
+  ruou: ["nghien ruou","uong ruou nhieu","lam dung ruou","ruou bia"],
+}
+// Cụm phủ định + cửa sổ ký tự — ĐỒNG BỘ với NEGATION_PHRASES/NEGATION_WINDOW_CHARS
+// trong clinical_rules.py. Sửa 1 nơi thì PHẢI sửa nơi kia theo.
+const CRS_NEGATION_PHRASES = ["khong ghi nhan","khong co","khong bi","chua tung","chua co","khong phat hien","phu nhan","loai tru"]
+const CRS_NEGATION_WINDOW = 35
+function crsHasAnyPositive(haystack, keywords) {
+  for (const kw of keywords) {
+    let start = 0
+    while (true) {
+      const idx = haystack.indexOf(kw, start)
+      if (idx === -1) break
+      const windowStart = Math.max(0, idx - CRS_NEGATION_WINDOW)
+      const window = haystack.slice(windowStart, idx)
+      if (!CRS_NEGATION_PHRASES.some(neg => window.includes(neg))) return true
+      start = idx + kw.length
+    }
+  }
+  return false
+}
+function crsStripAccents(s) {
+  if (!s) return ""
+  return s.replace(/Đ/g,"D").replace(/đ/g,"d")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase()
+}
+function crsHasAny(haystack, words) { return words.some(w => haystack.includes(w)) }
+function crsGatherText(report) {
+  const parts = [report.chan_doan_chinh || "", report.tien_su_benh || ""]
+  for (const c of (report.canh_bao_nguy_co || [])) { parts.push(c.mo_ta || ""); parts.push(c.can_cu || "") }
+  return crsStripAccents(parts.join(" "))
+}
+function crsIsMechanicalValve(report) {
+  const txt = crsGatherText(report)
+  const pt = crsStripAccents((report.phau_thuat || {}).phuong_phap || "")
+  const combined = txt + " " + pt
+  return ["van co hoc","on-x","on x","st jude","thay van"].some(m => combined.includes(m))
+}
+function computeCha2ds2VascClient(report) {
+  const info = report.thong_tin_benh_nhan || {}
+  const tuoi = info.tuoi
+  const gioiStripped = crsStripAccents(info.gioi_tinh || "")
+  const gioiTinhNu = !gioiStripped.includes("nam") && gioiStripped.includes("nu")
+  const txt = crsGatherText(report)
+  const items = []
+  let total = 0
+  const item = (ten, diem, co, ghiChu) => { if (co) total += diem; items.push({ten, diem_neu_co:diem, co, ghi_chu:ghiChu}) }
+
+  item("C - Suy tim / rối loạn chức năng thất trái", 1, crsHasAnyPositive(txt, CRS_CV_KEYWORDS.suy_tim), "Dò từ khóa suy tim/EF giảm trong chẩn đoán-tiền sử")
+  item("H - Tăng huyết áp", 1, crsHasAnyPositive(txt, CRS_CV_KEYWORDS.tang_huyet_ap), "Dò từ khóa tăng huyết áp/THA")
+  if (tuoi != null) {
+    if (tuoi >= 75) item("A2 - Tuổi ≥ 75", 2, true, `Tuổi ${tuoi}`)
+    else if (tuoi >= 65) item("A - Tuổi 65-74", 1, true, `Tuổi ${tuoi}`)
+    else item("A/A2 - Nhóm tuổi nguy cơ (65-74 hoặc ≥75)", 0, false, `Tuổi ${tuoi} (dưới 65)`)
+  } else item("A/A2 - Nhóm tuổi nguy cơ (65-74 hoặc ≥75)", 0, false, "Không xác định: thiếu tuổi")
+  item("D - Đái tháo đường", 1, crsHasAnyPositive(txt, CRS_CV_KEYWORDS.dtd), "Dò từ khóa đái tháo đường/ĐTĐ/HbA1C")
+  item("S2 - Tiền sử đột quỵ/TIA/thuyên tắc", 2, crsHasAnyPositive(txt, CRS_CV_KEYWORDS.dot_quy), "Dò từ khóa đột quỵ/TIA/thuyên tắc/huyết khối")
+  item("V - Bệnh mạch máu (NMCT cũ, bệnh ĐM ngoại biên, mảng xơ vữa ĐMC)", 1, crsHasAnyPositive(txt, CRS_CV_KEYWORDS.benh_mach_mau), "Dò từ khóa NMCT/bệnh động mạch ngoại biên/xơ vữa ĐMC")
+  if (info.gioi_tinh) item("Sc - Giới nữ", 1, gioiTinhNu, `Giới tính ghi nhận: ${info.gioi_tinh}`)
+  else item("Sc - Giới nữ", 0, false, "Không xác định: thiếu giới tính")
+
+  const mechanicalValve = crsIsMechanicalValve(report)
+  return {
+    ten_thang_diem: "CHA2DS2-VASc", tong_diem: total, thang_diem_toi_da: 9, chi_tiet: items,
+    nguon_guideline: "ESC/AHA Atrial Fibrillation Guideline",
+    canh_bao_boi_canh: mechanicalValve
+      ? "Bệnh nhân có VAN CƠ HỌC: CHA2DS2-VASc được xây dựng cho rung nhĩ KHÔNG do van — với van cơ học, chỉ định chống đông (warfarin/kháng vitamin K) là BẮT BUỘC bất kể điểm số này. Điểm số ở đây chỉ mang tính minh họa thêm bối cảnh nguy cơ tổng quát, KHÔNG dùng để quyết định có chống đông hay không."
+      : "Thang điểm áp dụng cho rung nhĩ không do bệnh van tim. Cần bác sĩ xác nhận trước khi dùng để ra quyết định chống đông.",
+    mechanical_valve: mechanicalValve, nhan: "Hỗ trợ quyết định — cần bác sĩ xác nhận",
+  }
+}
+function computeHasBledClient(report, egfr, inrTrend) {
+  const info = report.thong_tin_benh_nhan || {}
+  const tuoi = info.tuoi
+  const txt = crsGatherText(report)
+  const v = report.dau_hieu_sinh_ton || {}
+  const sbp = v.ha_tt
+  const items = []
+  let total = 0
+  const item = (ten, diem, co, ghiChu) => { if (co) total += diem; items.push({ten, diem_neu_co:diem, co, ghi_chu:ghiChu}) }
+
+  if (sbp != null) item("H - Tăng huyết áp không kiểm soát (HATT > 160)", 1, sbp > 160, `Huyết áp tâm thu ghi nhận gần nhất: ${sbp} mmHg`)
+  else item("H - Tăng huyết áp không kiểm soát (HATT > 160)", 0, false, "Không xác định: thiếu huyết áp tâm thu")
+
+  if (egfr != null) item("A - Bất thường chức năng thận (eGFR < 60)", 1, egfr < 60, `eGFR ${egfr} mL/phút/1.73m2 (CKD-EPI 2021)`)
+  else item("A - Bất thường chức năng thận (eGFR < 60)", 0, false, "Không xác định: thiếu eGFR (cần Creatinin + tuổi + giới)")
+
+  item("A - Bất thường chức năng gan", 1, crsHasAnyPositive(txt, CRS_HB_KEYWORDS.benh_gan), "Dò từ khóa xơ gan/viêm gan/suy gan trong chẩn đoán-tiền sử")
+  item("S - Tiền sử đột quỵ", 1, crsHasAnyPositive(txt, CRS_CV_KEYWORDS.dot_quy), "Dò từ khóa đột quỵ/tai biến mạch máu não")
+  item("B - Tiền sử/cơ địa chảy máu", 1, crsHasAnyPositive(txt, CRS_HB_KEYWORDS.chay_mau), "Dò từ khóa xuất huyết/chảy máu trong tiền sử")
+
+  let labile = false, labileNote = "Không xác định: chưa đủ dữ liệu INR (cần ≥ 3 lần đo)"
+  if (inrTrend && inrTrend.length >= 3) {
+    const lo = Math.min(...inrTrend), hi = Math.max(...inrTrend)
+    labile = (hi - lo) >= 1.5
+    labileNote = `Dải INR ghi nhận: ${lo} đến ${hi} (chênh ${Math.round((hi-lo)*100)/100})`
+  }
+  item("L - INR dao động (labile / TTR thấp)", 1, labile, labileNote)
+
+  if (tuoi != null) item("E - Tuổi > 65", 1, tuoi > 65, `Tuổi ${tuoi}`)
+  else item("E - Tuổi > 65", 0, false, "Không xác định: thiếu tuổi")
+
+  let thuocNguyCo = false
+  for (const d of (report.thuoc_cuoi_ky || [])) {
+    const name = crsStripAccents(d.ten_thuoc || "")
+    if (crsHasAny(name, CRS_HB_KEYWORDS.thuoc_chay_mau)) { thuocNguyCo = true; break }
+  }
+  item("D - Thuốc tăng nguy cơ chảy máu (kháng tiểu cầu/NSAID)", 1, thuocNguyCo, "Dò trong danh sách thuốc hiện dùng")
+  item("D - Lạm dụng rượu", 1, crsHasAnyPositive(txt, CRS_HB_KEYWORDS.ruou), "Dò từ khóa lạm dụng rượu trong tiền sử")
+
+  return {
+    ten_thang_diem: "HAS-BLED", tong_diem: total, thang_diem_toi_da: 9, chi_tiet: items,
+    nguon_guideline: "ESC Guideline on Atrial Fibrillation (HAS-BLED)",
+    muc_nguy_co: total >= 3 ? "cao" : "thap_trung_binh",
+    dien_giai_muc_nguy_co: total >= 3
+      ? "Điểm ≥ 3: nguy cơ chảy máu cao — cần theo dõi sát hơn khi dùng chống đông, KHÔNG đồng nghĩa với việc ngừng chống đông (vẫn cần cân nhắc lợi ích/nguy cơ)."
+      : "Điểm dưới 3: nguy cơ chảy máu thấp đến trung bình theo thang điểm này.",
+    nhan: "Hỗ trợ quyết định — cần bác sĩ xác nhận",
+  }
+}
+function computeRiskScoresClient(report) {
+  const labs = report.xet_nghiem_meta || report.xet_nghiem_key || []
+  const creat = labs.find(l => l.key === "Creatinin")
+  const egfr = computeEGFR(creat?.rawVal, report.thong_tin_benh_nhan?.tuoi, /nam/i.test(report.thong_tin_benh_nhan?.gioi_tinh || ""))
+  const inrLab = labs.find(l => (l.key || "").trim().toUpperCase() === "INR")
+  const inrTrend = inrLab?.trend
+  return {
+    cha2ds2_vasc: computeCha2ds2VascClient(report),
+    has_bled: computeHasBledClient(report, egfr, inrTrend),
+  }
 }
 
 // Sàng lọc ưu tiên: so ngưỡng vital + lab, trả về findings 3 mức
@@ -1562,7 +1842,7 @@ ${bmBlk}${noteBlk}
   win.document.close()
 }
 
-function triggerPrint(r, mode, docNote, bookmarks) {
+function triggerPrint(r, mode, docNote, bookmarks, analysis) {
   const p = r.thong_tin_benh_nhan
   const PRINT_META = {
     clinical:{ title:"Báo cáo lâm sàng", label:"MedParcours AI: Báo cáo lâm sàng tự động" },
@@ -1571,6 +1851,41 @@ function triggerPrint(r, mode, docNote, bookmarks) {
     full:{ title:"Bản bàn giao đầy đủ", label:"MedParcours AI: Bản bàn giao đầy đủ (Lâm sàng, Hội chẩn, Giảng dạy)" },
   }
   const meta = PRINT_META[mode] || PRINT_META.clinical
+  // Thang điểm nguy cơ (CHA2DS2-VASc/HAS-BLED): CHỈ in khi có từ backend
+  // (analysis.risk_scores) — không tự tính lại ở client, đúng nguyên tắc
+  // "rule engine tất định là nguồn sự thật duy nhất" áp dụng cho cả màn hình
+  // xem VÀ bản in. Nếu không có (chưa phân tích qua backend), mục này ẩn
+  // hẳn khỏi bản in, KHÔNG hiện số sai hoặc số cũ.
+  const riskScoresPrintBlock = (() => {
+    const rs = analysis && analysis.risk_scores
+    if (!rs || (!rs.cha2ds2_vasc && !rs.has_bled)) return ""
+    let h = `<h2>XI. Thang điểm nguy cơ (chống đông)</h2>`
+    h += `<p style="font-size:9pt;color:#555">Hỗ trợ quyết định, không tự kê đơn/chỉnh liều. Cần bác sĩ xác nhận.</p>`
+    if (rs.cha2ds2_vasc) {
+      const cv = rs.cha2ds2_vasc
+      h += `<div class="alert"><div class="al">${cv.ten_thang_diem}: ${cv.tong_diem}/${cv.thang_diem_toi_da} điểm</div><div class="as">${cv.canh_bao_boi_canh}</div></div>`
+    }
+    if (rs.has_bled) {
+      const hb = rs.has_bled
+      h += `<div class="alert"><div class="al">${hb.ten_thang_diem}: ${hb.tong_diem}/${hb.thang_diem_toi_da} điểm</div><div class="as">${hb.dien_giai_muc_nguy_co}</div></div>`
+    }
+    return h
+  })()
+  // TTR và care-gaps: CHỈ in khi có từ backend, cùng nguyên tắc với risk scores.
+  const ttrPrintBlock = (() => {
+    const ttr = analysis && analysis.ttr
+    if (!ttr) return ""
+    return `<h2>XII. TTR — Time in Therapeutic Range</h2>
+<p style="font-size:9pt;color:#555">${ttr.phuong_phap}</p>
+<div class="alert"><div class="al">TTR: ${ttr.ttr_percent}% (${ttr.so_lan_trong_dich}/${ttr.so_lan_do} lần trong đích ${ttr.dich_dieu_tri})</div><div class="as">${ttr.dien_giai}</div></div>`
+  })()
+  const careGapsPrintBlock = (() => {
+    const gaps = analysis && analysis.care_gaps
+    if (!gaps || !gaps.length) return ""
+    const sevLabel = { cao:"ƯU TIÊN CAO", trung_binh:"Trung bình", thap:"Theo dõi" }
+    return `<h2>XIII. Khoảng trống theo guideline</h2>` +
+      gaps.map(g=>`<div class="alert"><div class="al">[${sevLabel[g.muc_do]||g.muc_do}] ${g.tieu_de}</div><div class="as">${g.ly_do}</div></div>`).join("")
+  })()
   const clinicalBody = `<h2>I. Chẩn đoán</h2><div class="row"><span class="lbl">Chẩn đoán chính:</span><span>${r.chan_doan_chinh}</span></div><div class="row"><span class="lbl">Lý do nhập viện:</span><span>${r.ly_do_vao_vien}</span></div><div class="row"><span class="lbl">Tiền sử:</span><span>${r.tien_su_benh}</span></div>
 <h2>II. Phẫu thuật</h2><table><tr><th>Ngày</th><th>Phương pháp</th><th>Kết quả</th></tr><tr><td>${r.phau_thuat.ngay}</td><td>${r.phau_thuat.phuong_phap}</td><td>${r.phau_thuat.ket_qua}</td></tr></table><div class="row"><span class="lbl">Phẫu thuật viên:</span><span>${r.phau_thuat.bac_si_phau_thuat}</span></div>
 <h2>III. Xét nghiệm</h2><table><tr><th>Chỉ số</th><th>Kết quả</th><th>BT</th><th>Đánh giá</th></tr>${(r.xet_nghiem_key||r.xet_nghiem_meta||[]).map(m=>`<tr><td>${m.key} (${m.desc})</td><td>${m.val}</td><td>${m.normal}</td><td>${m.status==="high"?"Cao":m.status==="low"?"Thấp":"BT"}</td></tr>`).join("")}</table>
@@ -1579,6 +1894,9 @@ function triggerPrint(r, mode, docNote, bookmarks) {
 <h2>VI. Thuốc</h2><table><tr><th>Tên thuốc</th><th>Nhóm</th><th>Liều</th><th>Cách dùng</th></tr>${r.thuoc_cuoi_ky.map(t=>`<tr><td>${t.ten_thuoc}</td><td>${t.nhom}</td><td>${t.lieu}</td><td>${t.cach_dung}</td></tr>`).join("")}</table>
 <h2>VII. Cảnh báo</h2>${r.canh_bao_nguy_co.map(c=>`<div class="alert"><div class="al">[${c.muc_do==="cao"?"ƯU TIÊN CAO":c.muc_do==="trung_binh"?"Trung bình":"Theo dõi"}] ${c.mo_ta}</div><div class="as">Căn cứ: ${c.can_cu}</div></div>`).join("")}
 ${(()=>{const{findings,egfr,ctx}=runPriorityScreens(r);const s=checkDrugSafety(r.thuoc_cuoi_ky,egfr,ctx);const act=findings.filter(f=>f.muc!=="stable").sort((a,b)=>TIER_ORDER[a.muc]-TIER_ORDER[b.muc]);let h="<h2>VIII. Phân tầng ưu tiên lâm sàng</h2>";h+=act.map(f=>`<div class="alert"><div class="al">[${TIER_META[f.muc].label}] ${f.ten}</div><div class="as">${f.ly_do} — Nguồn: ${f.nguon}</div></div>`).join("")||"<p>Không có cảnh báo cần xử trí ngay.</p>";h+=`<h2>IX. Kiểm tra an toàn đơn thuốc</h2><p>Chức năng thận: eGFR ${egfr} mL/phút/1.73m2 (CKD-EPI 2021).</p>`;if(s.interactions.length)h+="<table><tr><th>Cặp thuốc</th><th>Mức</th><th>Hậu quả</th><th>Đề xuất</th></tr>"+s.interactions.map(it=>`<tr><td>${it.thuoc_a} + ${it.thuoc_b}</td><td>${TIER_META[it.muc].label}</td><td>${it.hau_qua}</td><td>${it.de_xuat}</td></tr>`).join("")+"</table>";if(s.favorable.length)h+="<p>Phù hợp khuyến cáo: "+s.favorable.map(f=>`${f.thuoc} (${f.nguon})`).join("; ")+"</p>";return h})()}
+${riskScoresPrintBlock}
+${ttrPrintBlock}
+${careGapsPrintBlock}
 <h2>X. Tóm tắt</h2><p>${r.tom_tat_toan_canh}</p>`
   const mdtPrintBody = (rr) => {
     const m = deriveMDT(rr)
@@ -2231,7 +2549,7 @@ function LogoBar({ compact }) {
   )
 }
 
-function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, onRetry, onOpenHistory, onLogout }) {
+function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, onRetry, onOpenHistory, onOpenEcg, onLogout }) {
   const [dragging, setDragging] = useState(false)
   const [staged, setStaged] = useState([])
   const [note, setNote] = useState("")
@@ -2317,7 +2635,12 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
                 <button className="upload-err-x" onClick={onDismissError}><Icon.Close d={13} color="#B91C1C"/></button>
               </div>
               <div className="upload-err-msg">{error}</div>
-              <div className="upload-err-hint">Máy chủ AI có thể đang khởi động lại sau thời gian không hoạt động. Bạn có thể thử lại sau vài giây, hoặc xem hồ sơ mẫu để trải nghiệm tính năng.</div>
+              {/* Gợi ý "máy chủ khởi động lại" chỉ đúng cho lỗi hạ tầng (mã lỗi,
+                  timeout...) — nếu backend đã trả lý do rõ ràng (sai định dạng,
+                  ảnh cần OCR, file rỗng...) thì hint này gây hiểu nhầm, nên ẩn. */}
+              {!/định dạng|OCR|PDF|Word|Excel|PowerPoint|\.docx|\.xlsx|\.pptx|nội dung/i.test(error) && (
+                <div className="upload-err-hint">Máy chủ AI có thể đang khởi động lại sau thời gian không hoạt động. Bạn có thể thử lại sau vài giây, hoặc xem hồ sơ mẫu để trải nghiệm tính năng.</div>
+              )}
               <div className="upload-err-actions">
                 {onRetry && <button className="upload-err-retry" onClick={onRetry}><Icon.Pulse d={13} color="#fff"/>Thử lại</button>}
                 <button className="upload-err-demo" onClick={()=>onUpload(null)}>Xem hồ sơ mẫu</button>
@@ -2353,15 +2676,18 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
               <div style={{padding:"16px 0"}}>
                 <div className="upload-icon"><Icon.Upload d={26} color="#1D6FE8"/></div>
                 <p className="upload-title">Kéo thả hoặc nhấn để chọn</p>
-                <p className="upload-sub">Thêm PDF, ảnh, Word, Excel, PowerPoint</p>
+                <p className="upload-sub">PDF, Word, Excel, PowerPoint — ảnh cần OCR đang phát triển</p>
                 <button className="btn-primary" onClick={e=>{e.stopPropagation();inputRef.current.click()}}><Icon.Upload d={15} color="white"/>Chọn tài liệu</button>
                 <div className="fmt-row">
                   <span className="fmt-lbl">Định dạng hỗ trợ</span>
                   <div className="fmt-chips">
-                    {["PDF","DOC","XLS","PPT","PNG","JPG"].map(t=>{
+                    {["PDF","DOCX","XLSX","PPTX"].map(t=>{
                       const k = FILE_KINDS[t.toLowerCase()] || kindOf("x."+t.toLowerCase())
                       return <span key={t} className="fmt-chip" style={{color:k.color,background:k.bg}}>{t}</span>
                     })}
+                    {["PNG","JPG"].map(t=>(
+                      <span key={t} className="fmt-chip fmt-chip-soon" title="Cần OCR, đang phát triển (giai đoạn 2)">{t} (sắp có)</span>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -2417,7 +2743,7 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
               <p className="upload-privacy">Bác sĩ kiểm tra định dạng và số trang trước khi quét. Dữ liệu xử lý bảo mật.</p>
             </div>
           )}
-          {!isLoading&&staged.length===0&&<div style={{textAlign:"center"}}><span className="demo-link" onClick={()=>onUpload(null)}>Xem demo: hồ sơ Nguyễn Văn A <span style={{fontSize:10}}>▶</span></span> <button className="hist-link" onClick={onOpenHistory}><Icon.FileText d={13} color="#1D6FE8"/>Lịch sử bệnh án</button></div>}
+          {!isLoading&&staged.length===0&&<div style={{textAlign:"center"}}><span className="demo-link" onClick={()=>onUpload(null)}>Xem demo: hồ sơ Nguyễn Văn A <span style={{fontSize:10}}>▶</span></span> <button className="hist-link" onClick={onOpenHistory}><Icon.FileText d={13} color="#1D6FE8"/>Lịch sử bệnh án</button> <button className="hist-link" onClick={onOpenEcg}><Icon.Pulse d={13} color="#1D6FE8"/>Quét điện tâm đồ</button></div>}
           {!isLoading && (
             <div className="rec-inline-wrap">
               <div className="rec-inline-h"><Icon.Pulse d={13} color="#1D6FE8"/>Lời dặn của bác sĩ - gõ trực tiếp hoặc bấm micro để đọc</div>
@@ -2456,6 +2782,7 @@ const NAV_GROUPS = [
     {id:"sec-meds",      label:"Thuốc",          icon:<Icon.Pill d={11}/>},
     {id:"sec-drug",      label:"eGFR & An toàn thuốc", icon:<Icon.ShieldCheck d={11}/>},
     {id:"sec-risk",      label:"Thang điểm nguy cơ",   icon:<Icon.Shield d={11}/>},
+    {id:"sec-caregap",   label:"Khoảng trống guideline", icon:<Icon.Octagon d={11}/>},
     {id:"sec-summary",   label:"Tóm tắt",        icon:<Icon.FileText d={11}/>},
   ]},
 ]
@@ -2616,7 +2943,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
             </div>
             <FocusToggle/>
             <ThemeToggle/>
-            <button className="nav-export" onClick={()=>triggerPrint(report, viewMode, docNote, bmList)} title="Xuất báo cáo"><Icon.Print d={14} color="#fff"/>Xuất báo cáo</button>
+            <button className="nav-export" onClick={()=>triggerPrint(report, viewMode, docNote, bmList, analysis)} title="Xuất báo cáo"><Icon.Print d={14} color="#fff"/>Xuất báo cáo</button>
             <div className="nav-menu-wrap">
               <button className="nav-burger" onClick={()=>setMenuOpen(o=>!o)} title="Menu" aria-label="Menu">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -2625,7 +2952,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
                 <div className="nav-menu-ov" onClick={()=>setMenuOpen(false)}/>
                 <div className="nav-menu">
                   <div className="nav-menu-sec">Xuất & chia sẻ</div>
-                  <button onClick={()=>{setMenuOpen(false);triggerPrint(report,"full",docNote,bmList)}}><Icon.FileText d={14} color="#475569"/>Xuất bản đầy đủ (3 chế độ)</button>
+                  <button onClick={()=>{setMenuOpen(false);triggerPrint(report,"full",docNote,bmList,analysis)}}><Icon.FileText d={14} color="#475569"/>Xuất bản đầy đủ (3 chế độ)</button>
                   <button onClick={()=>{setMenuOpen(false);triggerHandoff(report,docNote,bmList)}}><Icon.FileText d={14} color="#475569"/>Tóm tắt 1 trang (bàn giao)</button>
                   <button onClick={()=>{setMenuOpen(false);exportLabsCSV(report)}}><Icon.Flask d={14} color="#475569"/>Xuất xét nghiệm (CSV)</button>
                   <button onClick={()=>{setMenuOpen(false); (async()=>{ try{ await navigator.clipboard.writeText(reportToText(report)); mpToast("Đã sao chép toàn bộ báo cáo") }catch{ mpToast("Không sao chép được","err") } })()}}><Icon.FileText d={14} color="#475569"/>Sao chép toàn bộ báo cáo</button>
@@ -3416,8 +3743,8 @@ function EgfrMathFormula({ female }) {
 
 // ─── DRUG SAFETY CARD ──────────────────────────────────────────────────────────
 function DrugSafetyCard({ safety, egfr, egfrDetail, onSource }) {
-  const { interactions, renalFlags, favorable } = safety
-  const total = interactions.length + renalFlags.length
+  const { interactions, renalFlags, favorable, duplicateGroups } = safety
+  const total = interactions.length + renalFlags.length + (duplicateGroups||[]).length
   const d = egfrDetail || {}
   return (
     <Card id="sec-drug" title="Kiểm tra an toàn đơn thuốc" icon={<Icon.Shield d={16}/>}>
@@ -3497,6 +3824,21 @@ function DrugSafetyCard({ safety, egfr, egfrDetail, onSource }) {
         </div>
       )}
 
+      {(duplicateGroups||[]).length > 0 && (
+        <div className="drug-section">
+          <div className="drug-section-hd">Trùng nhóm thuốc ({duplicateGroups.length})</div>
+          {duplicateGroups.map((dg,i) => (
+            <div key={i} className="drug-alert" style={{ background:TIER_META.warning.bg, borderColor:TIER_META.warning.border }}>
+              <div className="drug-alert-top">
+                <span className="drug-pair">{dg.thuoc_a} <span className="drug-x">+</span> {dg.thuoc_b}</span>
+                <span className="drug-level" style={{ color:TIER_META.warning.color }}>{TIER_META.warning.dot} Cùng nhóm: {dg.nhom}</span>
+              </div>
+              <div className="drug-conseq">{dg.ghi_chu}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {favorable.length > 0 && (
         <div className="drug-section">
           <div className="drug-section-hd">Phù hợp khuyến cáo ({favorable.length})</div>
@@ -3554,11 +3896,11 @@ function RiskScoreGauge({ value, max, label, color }) {
 // Thang điểm CHA2DS2-VASc + HAS-BLED. Chỉ hiển thị khi backend (rule engine
 // tất định) đã trả risk_scores qua analysis — không tự tính lại ở client để
 // tránh có 2 nguồn kết quả khác nhau cho cùng một bệnh nhân.
-function RiskScoresCard({ riskScores, onSource }) {
-  if (!riskScores) return null
-  const cv = riskScores.cha2ds2_vasc
-  const hb = riskScores.has_bled
-  if (!cv && !hb) return null
+function RiskScoresCard({ riskScores, ttr, onSource }) {
+  if (!riskScores && !ttr) return null
+  const cv = riskScores && riskScores.cha2ds2_vasc
+  const hb = riskScores && riskScores.has_bled
+  if (!cv && !hb && !ttr) return null
 
   return (
     <Card id="sec-risk" title="Thang điểm nguy cơ (chống đông)" icon={<Icon.Shield d={16}/>}>
@@ -3604,7 +3946,73 @@ function RiskScoresCard({ riskScores, onSource }) {
         </div>
       )}
 
+      {ttr && (
+        <div className="risk-block">
+          <div className="risk-block-hd">
+            <span>TTR — Time in Therapeutic Range</span>
+            <span className="risk-block-sub">% thời gian INR trong đích điều trị</span>
+          </div>
+          <RiskScoreGauge value={ttr.ttr_percent} max={100} label="TTR" color={ttr.canh_bao_thap?"#DC2626":"#059669"}/>
+          <div className="risk-context-note">{ttr.dien_giai}</div>
+          <div className="risk-rows">
+            <div className="risk-row">
+              <span className="risk-row-chip" style={{background:"#F1F5F9",color:"#64748B",borderColor:"#E2E8F0"}}>{ttr.so_lan_do}</span>
+              <div className="risk-row-body">
+                <div className="risk-row-name">Tổng số lần đo INR</div>
+                <div className="risk-row-note">Đích điều trị: {ttr.dich_dieu_tri} — {ttr.so_lan_trong_dich} lần trong đích</div>
+              </div>
+            </div>
+            {ttr.cac_lan_ngoai_dich.length > 0 && (
+              <div className="risk-row on">
+                <span className="risk-row-chip" style={{background:"#FEF2F2",color:"#DC2626",borderColor:"#FECACA"}}>{ttr.cac_lan_ngoai_dich.length}</span>
+                <div className="risk-row-body">
+                  <div className="risk-row-name">Lần ngoài đích</div>
+                  <div className="risk-row-note">{ttr.cac_lan_ngoai_dich.map(o=>`${o.gia_tri} (${o.huong==="duoi_dich"?"dưới đích":"trên đích"})`).join(", ")}</div>
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="drug-disclaimer">{ttr.phuong_phap}</div>
+        </div>
+      )}
+
       <div className="drug-disclaimer">Biến đầu vào dò từ chẩn đoán/tiền sử trong hồ sơ; mục ghi "không xác định" nghĩa là hồ sơ không nêu rõ, KHÔNG phải bệnh nhân chắc chắn không có.</div>
+    </Card>
+  )
+}
+
+// Care-gap detector: khoảng trống theo guideline (mục 9-B3). Tất định 100%,
+// chỉ hiển thị khi backend trả care_gaps qua analysis — không tự tính ở
+// client (logic phụ thuộc parse ngày dd/mm/yyyy + so sánh ngày hiện tại,
+// không phù hợp port sang JS chỉ để demo offline).
+function CareGapCard({ careGaps, onSource }) {
+  if (!careGaps || careGaps.length === 0) return null
+  const sevOrder = { cao: 0, trung_binh: 1, thap: 2 }
+  const sorted = [...careGaps].sort((a,b) => (sevOrder[a.muc_do]??9) - (sevOrder[b.muc_do]??9))
+  const sevMeta = {
+    cao: { label: "Ưu tiên cao", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
+    trung_binh: { label: "Trung bình", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
+    thap: { label: "Theo dõi", color: "#64748B", bg: "#F8FAFC", border: "#E2E8F0" },
+  }
+  return (
+    <Card id="sec-caregap" title="Khoảng trống theo guideline" icon={<Icon.Octagon d={16}/>}>
+      <div className="risk-disclaimer-top">
+        Danh sách dữ liệu/xét nghiệm hệ thống chưa thấy trong hồ sơ — không có nghĩa là chắc chắn thiếu, chỉ là chưa thấy. Bác sĩ tự xác nhận có cần bổ sung.
+      </div>
+      <div className="risk-rows">
+        {sorted.map((g,i) => {
+          const sm = sevMeta[g.muc_do] || sevMeta.thap
+          return (
+            <div key={i} className="drug-alert" style={{ background:sm.bg, borderColor:sm.border }}>
+              <div className="drug-alert-top">
+                <span className="drug-pair">{g.tieu_de}</span>
+                <span className="drug-level" style={{ color:sm.color }}>{sm.label}</span>
+              </div>
+              <div className="drug-conseq">{g.ly_do}</div>
+            </div>
+          )
+        })}
+      </div>
     </Card>
   )
 }
@@ -3973,19 +4381,29 @@ function ReportTab({ report: r, analysis }) {
   // Nguồn chân lý: rule engine backend (Bước 2) nếu có; nếu không (demo) thì tính client-side.
   let findings, egfr, safety, egfrDetail
   let riskScores = null
+  let ttr = null
+  let careGaps = []
   if (analysis) {
     findings = analysis.priority_findings || []
     egfr = analysis.egfr
     egfrDetail = analysis.egfr_detail || null
     const ds = analysis.drug_safety || {}
-    safety = { interactions: ds.interactions || [], renalFlags: ds.renal_flags || [], favorable: ds.favorable || [] }
+    safety = { interactions: ds.interactions || [], renalFlags: ds.renal_flags || [], favorable: ds.favorable || [], duplicateGroups: ds.duplicate_groups || [] }
     riskScores = analysis.risk_scores || null
+    ttr = analysis.ttr || null
+    careGaps = analysis.care_gaps || []
   } else {
     const s = runPriorityScreens(r)
     findings = s.findings; egfr = s.egfr
     safety = checkDrugSafety(r.thuoc_cuoi_ky || [], egfr, s.ctx)
     const creatLab = (r.xet_nghiem_key||r.xet_nghiem_meta||[]).find(l => /creatinin/i.test(l.key))
     egfrDetail = buildEgfrDetail(creatLab?.rawVal, r.thong_tin_benh_nhan?.tuoi, /nam/i.test(r.thong_tin_benh_nhan?.gioi_tinh||""))
+    // Demo offline (không backend): tính risk_scores bằng bản JS port để
+    // RiskScoresCard vẫn hiện được — xem ghi chú đầy đủ tại computeRiskScoresClient().
+    // ttr/careGaps KHÔNG port sang JS (cần parse ngày dd/mm/yyyy + so sánh với
+    // "hôm nay", ít giá trị demo offline so với rủi ro lệch logic) — ở demo
+    // offline, 2 Card này tự ẩn (đúng theo thiết kế null-safe của chúng).
+    riskScores = computeRiskScoresClient(r)
   }
   const trajectory = assessTrajectory(r)
   const phaseInfo = computePhaseInfo(r)
@@ -4144,7 +4562,10 @@ function ReportTab({ report: r, analysis }) {
       <DrugSafetyCard safety={safety} egfr={egfr} egfrDetail={egfrDetail} onSource={setModalSource}/>
 
       {/* PHÂN TÍCH: Thang điểm nguy cơ chống đông (chỉ hiện khi backend trả risk_scores) */}
-      <RiskScoresCard riskScores={riskScores} onSource={setModalSource}/>
+      <RiskScoresCard riskScores={riskScores} ttr={ttr} onSource={setModalSource}/>
+
+      {/* PHÂN TÍCH: Khoảng trống theo guideline (chỉ hiện khi backend trả care_gaps) */}
+      <CareGapCard careGaps={careGaps} onSource={setModalSource}/>
 
       {/* Tóm tắt toàn cảnh */}
       <SummaryCard text={r.tom_tat_toan_canh}/>
@@ -4218,6 +4639,12 @@ function FloatingChat({ report, hoSoText, messages, setMessages, onExpand, mode 
       const res = await fetch(`${API_URL}/chat`, { method:"POST", headers:{ "Content-Type":"application/json" },
         body:JSON.stringify({ question:q, ho_so_text:hoSoText||JSON.stringify(report), chat_history:messages.slice(-6), mode }) })
       const data = await res.json()
+      // fetch KHÔNG tự throw khi status lỗi (400/500) nếu backend vẫn trả JSON
+      // hợp lệ (FastAPI HTTPException trả {"detail":"..."}, không có "answer").
+      // Nếu không kiểm tra res.ok, data.answer sẽ là undefined -> hiện bong
+      // bóng chat rỗng, nhìn như app vỡ. Coi lỗi HTTP như lỗi mạng -> rơi
+      // xuống catch để dùng DEMO_CHAT, người dùng vẫn có câu trả lời hữu ích.
+      if (!res.ok || !data || !data.answer) throw new Error(data?.detail || "no answer")
       setMessages(prev => [...prev, { role:"assistant", content:data.answer }])
     } catch {
       const key = Object.keys(DEMO_CHAT).find(k => q.toLowerCase().includes(k))
@@ -4297,6 +4724,9 @@ function ChatTab({ report, hoSoText, messages, setMessages, mode }) {
       const res = await fetch(`${API_URL}/chat`, {method:"POST", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({question:q, ho_so_text:hoSoText||JSON.stringify(report), chat_history:messages.slice(-6), mode})})
       const data = await res.json()
+      // Xem ghi chú ở FloatingChat.send(): fetch không tự throw khi status lỗi
+      // nhưng vẫn trả JSON hợp lệ -> phải tự kiểm tra res.ok + data.answer.
+      if (!res.ok || !data || !data.answer) throw new Error(data?.detail || "no answer")
       setMessages(prev => [...prev, {role:"assistant", content:data.answer}])
     } catch {
       const key = Object.keys(DEMO_CHAT).find(k => q.toLowerCase().includes(k))
@@ -5169,6 +5599,141 @@ function HistoryPanel({ onClose, onOpen, currentId }){
   )
 }
 
+// ─── EcgPanel: công cụ quét/số hóa điện tâm đồ — ĐỘC LẬP với report ─────────
+// Khác với RiskScoresCard/CareGapCard (gắn liền 1 bệnh nhân đã phân tích),
+// đây là công cụ phụ trợ riêng: bác sĩ upload ảnh ECG bất kỳ (không cần đã
+// phân tích hồ sơ PDF nào) để số hóa lại + ước tính nhịp tim. Mở dạng overlay
+// full-screen (giống HistoryPanel) thay vì 1 tab trong ReportPage, vì không
+// có mối quan hệ dữ liệu nào với report hiện tại (nếu có).
+//
+// AN TOÀN: chỉ trực quan hóa hỗ trợ, KHÔNG tự chẩn đoán. Không hiện sẵn dữ
+// liệu demo/ảnh tổng hợp giả làm ví dụ — tránh gây hiểu lầm là dữ liệu thật
+// (đã xác nhận với Đăng). Trạng thái mặc định là "trống, mời upload".
+function EcgPanel({ onClose }) {
+  const [staged, setStaged] = useState(null)      // { url, name } ảnh đã chọn
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState(null)       // response từ /ecg
+  const [error, setError] = useState(null)
+  const inputRef = useRef()
+
+  const reset = () => { setStaged(null); setResult(null); setError(null) }
+
+  const onPickFile = (file) => {
+    if (!file) return
+    reset()
+    const url = URL.createObjectURL(file)
+    setStaged({ url, name: file.name, file })
+  }
+
+  const analyze = async () => {
+    if (!staged?.file) return
+    setLoading(true); setError(null)
+    try {
+      const buf = await staged.file.arrayBuffer()
+      const b64 = btoa(new Uint8Array(buf).reduce((s, b) => s + String.fromCharCode(b), ""))
+      const res = await fetch(`${API_URL}/ecg`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image_base64: b64 }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) throw new Error(data?.detail || "Không số hóa được ảnh.")
+      setResult(data)
+    } catch (e) {
+      setError(e.message || "Lỗi không xác định khi xử lý ảnh.")
+    }
+    setLoading(false)
+  }
+
+  // Vẽ lại signal[] thành đường SVG (polyline đơn giản, không cần lib biểu đồ)
+  const signalPath = (signal, w = 600, h = 160) => {
+    if (!signal || signal.length === 0) return ""
+    const stepX = w / signal.length
+    return signal.map((v, i) => `${i === 0 ? "M" : "L"} ${(i * stepX).toFixed(1)} ${(h - v * h).toFixed(1)}`).join(" ")
+  }
+
+  return (
+    <div className="ecg-overlay" onClick={onClose}>
+      <div className="ecg-modal" onClick={e => e.stopPropagation()}>
+        <div className="hist-head">
+          <span className="hist-title"><Icon.Pulse d={17} color="#1D6FE8"/>Quét điện tâm đồ (ECG)</span>
+          <button className="fp-close" onClick={onClose} title="Đóng"><Icon.Close d={15} color="#475569"/></button>
+        </div>
+
+        <div className="ecg-disclaimer">
+          <Icon.Alert d={13} color="#D97706"/>
+          Công cụ trực quan hóa hỗ trợ — số hóa lại ảnh ECG và ước tính nhịp tim. KHÔNG tự chẩn đoán (không gán "rung nhĩ", "block nhĩ thất"...). Mọi kết quả cần bác sĩ xác nhận.
+        </div>
+
+        <input ref={inputRef} type="file" accept=".png,.jpg,.jpeg" style={{ display: "none" }}
+          onChange={e => { onPickFile(e.target.files[0]); e.target.value = "" }}/>
+
+        {!staged && (
+          <div className="ecg-dropzone" onClick={() => inputRef.current.click()}>
+            <Icon.Upload d={26} color="#1D6FE8"/>
+            <p className="upload-title">Chọn ảnh điện tâm đồ</p>
+            <p className="upload-sub">Ảnh chụp/scan, định dạng PNG hoặc JPG</p>
+          </div>
+        )}
+
+        {staged && (
+          <div className="ecg-workspace">
+            <div className="ecg-col">
+              <div className="ecg-col-label">Ảnh gốc</div>
+              <img src={staged.url} alt={staged.name} className="ecg-img"/>
+              <div className="ecg-actions">
+                <button className="stage-clear" onClick={reset}>Chọn ảnh khác</button>
+                {!result && <button className="btn-primary" onClick={analyze} disabled={loading}>
+                  {loading ? "Đang xử lý..." : "Số hóa & ước tính nhịp tim"}
+                </button>}
+              </div>
+            </div>
+
+            <div className="ecg-col">
+              <div className="ecg-col-label">Kết quả số hóa</div>
+              {loading && <div className="ecg-loading">Đang xử lý ảnh...</div>}
+              {error && <div className="rec-note err"><Icon.Alert d={13} color="#B91C1C"/>{error}</div>}
+              {result && (
+                <>
+                  <svg viewBox="0 0 600 160" className="ecg-signal-svg">
+                    <path d={signalPath(result.signal)} fill="none" stroke="#DC2626" strokeWidth="1.5"/>
+                  </svg>
+                  {result.warning && (
+                    <div className="rec-note warn"><Icon.Alert d={13} color="#92400e"/>{result.warning}</div>
+                  )}
+                  <div className="ecg-hr-row">
+                    <div className="ecg-hr-box">
+                      <div className="ecg-hr-lbl">Nhịp tim ước tính</div>
+                      <div className="ecg-hr-val">
+                        {result.heart_rate?.bpm_avg != null ? `${result.heart_rate.bpm_avg} lần/phút` : "Không xác định"}
+                      </div>
+                    </div>
+                    <div className="ecg-hr-box">
+                      <div className="ecg-hr-lbl">Độ tin cậy tỉ lệ px/mm</div>
+                      <div className="ecg-hr-val" style={{fontSize:14}}>
+                        {result.calibration?.do_tin_cay === "cao" ? "Cao" : result.calibration?.do_tin_cay === "trung_binh" ? "Trung bình" : "Thấp / không xác định"}
+                      </div>
+                    </div>
+                  </div>
+                  {result.heart_rate?.nhip_deu_theo_nguong_sach === false && (
+                    <div className="rec-note warn">
+                      <Icon.Alert d={13} color="#92400e"/>
+                      Khoảng R-R dao động vượt ngưỡng tham khảo — nghi ngờ nhịp không đều, cần bác sĩ xác nhận trực tiếp trên ảnh gốc.
+                    </div>
+                  )}
+                  {result.heart_rate?.warning && (
+                    <div className="rec-note err"><Icon.Alert d={13} color="#B91C1C"/>{result.heart_rate.warning}</div>
+                  )}
+                  <div className="drug-disclaimer">{result.disclaimer}</div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // CSS bổ sung cho các tính năng demo
 const EXTRA_CSS = `
 .login-wrap{position:relative;min-height:100vh;display:flex;align-items:center;justify-content:center;overflow:hidden;background:radial-gradient(1200px 600px at 15% 10%,#13284a 0%,#0A1628 55%),linear-gradient(135deg,#0A1628,#0d2444 55%,#0E5a55);padding:28px 16px}
@@ -6000,6 +6565,35 @@ body.theme-dark .risk-row{background:#141E2C}
 body.theme-dark .risk-row.on{background:#2a1616}
 body.theme-dark .risk-row-name{color:#D6E2F2}
 body.theme-dark .risk-row-note{color:#7689A8}
+body.theme-dark .fmt-chip-soon{color:#64748B;background:#141E2C;border-color:#2A3A52}
+
+/* ── EcgPanel: quét điện tâm đồ ──────────────────────────────────────────── */
+.ecg-overlay{position:fixed;inset:0;background:rgba(10,22,40,.55);display:flex;align-items:center;justify-content:center;z-index:200;padding:20px}
+.ecg-modal{background:var(--glass);border-radius:20px;max-width:920px;width:100%;max-height:88vh;overflow-y:auto;padding:22px 26px;box-shadow:0 30px 70px rgba(0,0,0,.35)}
+.ecg-disclaimer{display:flex;gap:9px;align-items:flex-start;background:#FFFBEB;border:1px solid #FDE68A;border-radius:11px;padding:11px 14px;font-size:12.5px;color:#92400e;line-height:1.55;margin-bottom:16px}
+.ecg-dropzone{border:2px dashed #BFD3EE;border-radius:16px;padding:40px 20px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s}
+.ecg-dropzone:hover{border-color:#1D6FE8;background:rgba(29,111,232,.04)}
+.ecg-workspace{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:700px){.ecg-workspace{grid-template-columns:1fr}}
+.ecg-col-label{font-size:12px;font-weight:700;color:#5A748F;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+.ecg-img{width:100%;border-radius:12px;border:1px solid var(--border);max-height:260px;object-fit:contain;background:#fff}
+.ecg-actions{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap}
+.ecg-loading{font-size:13px;color:#5A748F;padding:20px 0;text-align:center}
+.ecg-signal-svg{width:100%;height:140px;background:#fff;border:1px solid var(--border);border-radius:10px}
+.ecg-hr-row{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.ecg-hr-box{flex:1;min-width:140px;background:#F8FAFC;border:1px solid var(--border);border-radius:12px;padding:11px 14px}
+.ecg-hr-lbl{font-size:11px;color:#7689A8;font-weight:600;margin-bottom:4px}
+.ecg-hr-val{font-size:20px;font-weight:700;color:#0F2740}
+body.theme-dark .ecg-modal{background:#0F1A2C}
+body.theme-dark .ecg-disclaimer{background:#2a2010;border-color:#5c4a1a;color:#fcd34d}
+body.theme-dark .ecg-dropzone{border-color:#2A3A52}
+body.theme-dark .ecg-dropzone:hover{background:rgba(29,111,232,.08)}
+body.theme-dark .ecg-col-label{color:#7689A8}
+body.theme-dark .ecg-img{background:#1A2536;border-color:#2A3A52}
+body.theme-dark .ecg-signal-svg{background:#1A2536;border-color:#2A3A52}
+body.theme-dark .ecg-hr-box{background:#141E2C;border-color:#2A3A52}
+body.theme-dark .ecg-hr-lbl{color:#7689A8}
+body.theme-dark .ecg-hr-val{color:#EAF1FB}
 `
 
 // ─── Toast + Confirm + Copy (UX dùng chung) ──────────────────────────────────
@@ -6171,6 +6765,7 @@ export default function App() {
   const [uploadError, setUploadError] = useState(null)
   const [chatMessages, setChatMessages] = useState([])
   const [showHistory, setShowHistory] = useState(false)
+  const [showEcg, setShowEcg] = useState(false)
   const [currentId, setCurrentId] = useState(null)
 
   useEffect(() => {
@@ -6205,10 +6800,14 @@ export default function App() {
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), 240000)  // 240s cho hồ sơ rất dày
 
-    // Áp dụng kết quả trả về từ backend (dùng chung cho cả 2 đường)
+    // Áp dụng kết quả trả về từ backend (dùng chung cho cả 2 đường).
+    // LƯU Ý: lỗi từ FastAPI HTTPException nằm ở field "detail", còn lỗi tự
+    // định nghĩa trong run_analysis_pipeline (hồ sơ quá ngắn...) nằm ở field
+    // "error" — phải đọc cả 2, ưu tiên "detail" vì đó là message backend cố
+    // ý viết rõ nguyên nhân (sai định dạng file, ảnh chưa hỗ trợ OCR...).
     const applyData = (data, status) => {
       if (!data || !data.success) {
-        setUploadError((data && data.error) || `Máy chủ trả lỗi (mã ${status}). Hãy thử lại.`)
+        setUploadError((data && (data.detail || data.error)) || `Máy chủ trả lỗi (mã ${status}). Hãy thử lại.`)
         setLoading(false); return false
       }
       setReport(data.report)
@@ -6224,7 +6823,7 @@ export default function App() {
       if (isPdf) {
         try {
           const { text, pages } = await extractPdfText(file, (done, total) => {
-            setLoadingMsg(`Đang đọc trang ${done}/${total}`)
+            setLoadingMsg(`Đang đọc ${done}/${total} trang`)
           })
           setLoadingMsg(pages > 120 ? "Đang lọc trang quan trọng và phân tích..." : "AI đang đọc và tổng hợp dữ liệu")
           if (text && text.replace(/[^A-Za-zÀ-ỹ0-9]/g, "").length >= 100) {
@@ -6283,7 +6882,7 @@ export default function App() {
       <style>{CSS}</style>
       <style>{EXTRA_CSS}</style>
       <ErrorBoundary>
-        {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)} onRetry={()=>lastFile && handleUpload(lastFile)} onOpenHistory={()=>setShowHistory(true)} onLogout={logout}/>}
+        {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)} onRetry={()=>lastFile && handleUpload(lastFile)} onOpenHistory={()=>setShowHistory(true)} onOpenEcg={()=>setShowEcg(true)} onLogout={logout}/>}
         {state === "report" && report && (
           <ReportPage report={report} hoSoText={hoSoText} analysis={analysis}
             onReset={()=>{setState("upload");setReport(null);setAnalysis(null);setChatMessages([]);setCurrentId(null)}}
@@ -6291,6 +6890,7 @@ export default function App() {
             onOpenHistory={()=>setShowHistory(true)} onLogout={logout}/>
         )}
         {showHistory && <HistoryPanel onClose={()=>setShowHistory(false)} onOpen={loadRecord} currentId={currentId}/>}
+        {showEcg && <EcgPanel onClose={()=>setShowEcg(false)}/>}
         <ToastHost/>
         <ConfirmHost/>
         <ShortcutHelp/>
