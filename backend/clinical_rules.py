@@ -12,57 +12,22 @@ NGUYÊN TẮC:
   - Đây là MVP Hackathon: dictionary cứng, dễ đọc, dễ bác sĩ kiểm tra và bổ sung.
 """
 from typing import Optional
-import re as _re
-from datetime import date as _date
+import unicodedata
+import re
 
 
-# ─── DÒNG THỜI GIAN: phân 3 giai đoạn (1 trước mổ, 2 nội trú, 3 ngoại trú) ─────
-def _parse_vn_date(s):
+def _strip_accents(s: str) -> str:
+    """Bỏ dấu tiếng Việt + viết thường, để dò từ khóa bất kể có dấu hay không.
+    Dùng chung logic với main.py (STRONG_KEYWORDS) để 2 nơi nhất quán.
+    LƯU Ý: chữ Đ/đ không decompose qua NFD (là ký tự độc lập trong Unicode,
+    không phải D + dấu), nên phải replace tay trước khi normalize — nếu không,
+    keyword như "ĐTĐ" sẽ không bao giờ khớp được với "dtd"."""
     if not s:
-        return None
-    m = _re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", str(s))
-    if not m:
-        return None
-    try:
-        return _date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
-    except ValueError:
-        return None
-
-
-def compute_phase_info(report: dict) -> dict:
-    """Xác định bệnh nhân nội trú hay ngoại trú + giai đoạn hiện tại + mốc tương đối."""
-    surg = _parse_vn_date(report.get("phau_thuat", {}).get("ngay"))
-    discharge = _parse_vn_date(report.get("thong_tin_benh_nhan", {}).get("ngay_ra_vien"))
-    echo_dates = [_parse_vn_date(s.get("ngay")) for s in report.get("sieu_am_tim", {}).get("lan_kham", [])]
-    lab_dates = [_parse_vn_date(l.get("ngay")) for l in report.get("xet_nghiem_key", [])]
-    all_dates = [d for d in echo_dates + lab_dates if d]
-    current = max(all_dates) if all_dates else (discharge or surg)
-    is_outpatient = bool(discharge and current and current >= discharge)
-    days_post_op = (current - surg).days if (surg and current) else None
-    days_post_dc = (current - discharge).days if (discharge and current) else None
-    # Giai đoạn hiện tại của bệnh nhân
-    if is_outpatient:
-        current_phase = 3
-    elif surg and current and current >= surg:
-        current_phase = 2
-    else:
-        current_phase = 1
-    return {
-        "surg": surg, "discharge": discharge, "current": current,
-        "is_outpatient": is_outpatient, "current_phase": current_phase,
-        "days_post_op": days_post_op, "days_post_discharge": days_post_dc,
-    }
-
-
-def phase_of_date(date_str, info) -> Optional[int]:
-    d = _parse_vn_date(date_str)
-    if not d or not info.get("surg"):
-        return None
-    if d < info["surg"]:
-        return 1
-    if info.get("discharge") and d > info["discharge"]:
-        return 3
-    return 2
+        return ""
+    s = s.replace("Đ", "D").replace("đ", "d")
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn"
+    ).lower()
 
 
 # ─── BẢN ĐỒ BIỆT DƯỢC VIỆT -> HOẠT CHẤT GỐC ───────────────────────────────────
@@ -74,6 +39,12 @@ BRAND_TO_GENERIC = {
     "buflan": "cefoperazone", "pantoloc": "pantoprazole", "nexium": "esomeprazole",
     "betaloc": "metoprolol", "concor": "bisoprolol", "lipitor": "atorvastatin",
     "glucophage": "metformin", "aldactone": "spironolactone", "cordarone": "amiodarone",
+    "plavix": "clopidogrel", "brilinta": "ticagrelor", "xarelto": "rivaroxaban",
+    "eliquis": "apixaban", "pradaxa": "dabigatran", "crestor": "rosuvastatin",
+    "diamicron": "gliclazide", "amaryl": "glimepiride", "amlor": "amlodipine",
+    "losartas": "losartan", "cozaar": "losartan", "diovan": "valsartan",
+    "klacid": "clarithromycin", "zithromax": "azithromycin", "rocephin": "ceftriaxone",
+    "lanoxin": "digoxin",
 }
 
 # Hoạt chất -> nhóm dược lý
@@ -81,13 +52,23 @@ GENERIC_GROUPS = {
     "acenocoumarol": ["khang_vitamin_k"], "warfarin": ["khang_vitamin_k"],
     "levofloxacin": ["fluoroquinolon"], "ciprofloxacin": ["fluoroquinolon"],
     "furosemid": ["loi_tieu_quai"], "dapagliflozin": ["sglt2i"], "empagliflozin": ["sglt2i"],
-    "pantoprazole": ["ppi"], "esomeprazole": ["ppi"], "cefoperazone": ["cephalosporin"],
+    "pantoprazole": ["ppi"], "esomeprazole": ["ppi"], "omeprazole": ["ppi"],
+    "cefoperazone": ["cephalosporin"], "ceftriaxone": ["cephalosporin"], "cefuroxime": ["cephalosporin"],
     "metformin": ["biguanid"], "spironolactone": ["loi_tieu_giu_kali"],
-    "metoprolol": ["chen_beta"], "bisoprolol": ["chen_beta"],
-    "atorvastatin": ["statin"], "simvastatin": ["statin"],
+    "metoprolol": ["chen_beta"], "bisoprolol": ["chen_beta"], "carvedilol": ["chen_beta"],
+    "atorvastatin": ["statin"], "simvastatin": ["statin"], "rosuvastatin": ["statin"],
     "amiodarone": ["chong_loan_nhip"], "clarithromycin": ["macrolid"],
-    "erythromycin": ["macrolid"], "ibuprofen": ["nsaid"], "diclofenac": ["nsaid"],
-    "enalapril": ["acei"], "lisinopril": ["acei"],
+    "erythromycin": ["macrolid"], "azithromycin": ["macrolid"],
+    "ibuprofen": ["nsaid"], "diclofenac": ["nsaid"], "meloxicam": ["nsaid"], "celecoxib": ["nsaid"],
+    "enalapril": ["acei"], "lisinopril": ["acei"], "captopril": ["acei"],
+    "losartan": ["arb"], "valsartan": ["arb"], "telmisartan": ["arb"],
+    "aspirin": ["khang_ket_tap_tieu_cau"], "clopidogrel": ["khang_ket_tap_tieu_cau"],
+    "ticagrelor": ["khang_ket_tap_tieu_cau"],
+    "rivaroxaban": ["khang_dong_truc_tiep"], "apixaban": ["khang_dong_truc_tiep"],
+    "dabigatran": ["khang_dong_truc_tiep"],
+    "insulin": ["insulin"], "gliclazide": ["sulfonylurea"], "glimepiride": ["sulfonylurea"],
+    "amlodipine": ["chen_kenh_calci"], "nifedipine": ["chen_kenh_calci"],
+    "digoxin": ["digoxin"],
 }
 
 # ─── BẢNG TƯƠNG TÁC THUỐC (do bác sĩ soạn) ─────────────────────────────────────
@@ -113,6 +94,14 @@ INTERACTION_RULES = [
      "hau_qua": "Tăng kali máu, nguy cơ rối loạn nhịp tim.",
      "de_xuat": "Theo dõi kali máu và chức năng thận.",
      "nguon": "Tương tác ACEI-lợi tiểu giữ kali"},
+    {"a": "loi_tieu_giu_kali", "b": "arb", "muc": "warning",
+     "hau_qua": "Tăng kali máu, nguy cơ rối loạn nhịp tim (cơ chế tương tự phối hợp với ACEI).",
+     "de_xuat": "Theo dõi kali máu và chức năng thận định kỳ.",
+     "nguon": "Tương tác ARB-lợi tiểu giữ kali"},
+    {"a": "acei", "b": "arb", "muc": "warning",
+     "hau_qua": "Phối hợp 2 thuốc ức chế hệ Renin-Angiotensin cùng lúc không tăng hiệu quả rõ rệt nhưng tăng nguy cơ tăng kali máu và suy thận.",
+     "de_xuat": "Thường KHÔNG phối hợp ACEI + ARB cùng lúc; xem lại chỉ định.",
+     "nguon": "ESC/ESH Tăng huyết áp"},
     {"a": "statin", "b": "macrolid", "muc": "warning",
      "hau_qua": "Tăng nồng độ statin, nguy cơ đau cơ và tiêu cơ vân.",
      "de_xuat": "Tạm ngừng statin trong đợt kháng sinh.",
@@ -121,6 +110,26 @@ INTERACTION_RULES = [
      "hau_qua": "Cộng gộp ức chế tim, nguy cơ nhịp chậm, block nhĩ thất.",
      "de_xuat": "Theo dõi nhịp tim, điện tâm đồ.",
      "nguon": "Tương tác chẹn beta-chống loạn nhịp"},
+    {"a": "chen_beta", "b": "chen_kenh_calci", "muc": "warning",
+     "hau_qua": "Phối hợp có thể cộng gộp ức chế dẫn truyền nhĩ thất và co cơ tim, nguy cơ nhịp chậm/tụt huyết áp (đặc biệt nhóm non-dihydropyridine).",
+     "de_xuat": "Theo dõi nhịp tim và huyết áp sát khi mới phối hợp.",
+     "nguon": "Tương tác chẹn beta-chẹn kênh calci"},
+    {"a": "khang_ket_tap_tieu_cau", "b": "khang_dong_truc_tiep", "muc": "critical",
+     "hau_qua": "Phối hợp kháng kết tập tiểu cầu với kháng đông trực tiếp (DOAC) làm tăng đáng kể nguy cơ chảy máu.",
+     "de_xuat": "Chỉ phối hợp khi có chỉ định rõ ràng (vd sau đặt stent + rung nhĩ); xem lại thời gian điều trị kép.",
+     "nguon": "ESC Hội chứng mạch vành cấp / Rung nhĩ"},
+    {"a": "khang_vitamin_k", "b": "khang_ket_tap_tieu_cau", "muc": "critical",
+     "hau_qua": "Tăng nguy cơ chảy máu khi phối hợp kháng vitamin K với thuốc kháng kết tập tiểu cầu.",
+     "de_xuat": "Chỉ phối hợp khi có chỉ định rõ ràng, theo dõi sát dấu hiệu chảy máu.",
+     "nguon": "ESC Rung nhĩ / Hội chứng mạch vành cấp"},
+    {"a": "digoxin", "b": "chong_loan_nhip", "muc": "warning",
+     "hau_qua": "Amiodarone làm tăng nồng độ digoxin trong máu, có thể gây ngộ độc digoxin.",
+     "de_xuat": "Giảm liều digoxin (thường 30-50%) khi phối hợp với amiodarone, theo dõi nồng độ.",
+     "nguon": "Tương tác digoxin-amiodarone"},
+    {"a": "digoxin", "b": "loi_tieu_quai", "muc": "warning",
+     "hau_qua": "Lợi tiểu quai gây hạ kali máu, làm tăng nguy cơ ngộ độc digoxin dù nồng độ digoxin không đổi.",
+     "de_xuat": "Theo dõi kali máu định kỳ khi phối hợp.",
+     "nguon": "Tương tác digoxin-lợi tiểu quai"},
 ]
 
 # ─── LUẬT CHỈNH LIỀU THEO CHỨC NĂNG THẬN (eGFR) ───────────────────────────────
@@ -133,16 +142,28 @@ RENAL_RULES = [
     {"generic": "levofloxacin", "egfr_lt": 50, "muc": "warning",
      "note": "Cần chỉnh liều khi độ thanh thải creatinin dưới 50 mL/phút.",
      "nguon": "Hướng dẫn kê đơn fluoroquinolon"},
+    {"generic": "rivaroxaban", "egfr_lt": 30, "muc": "critical",
+     "note": "Chống chỉ định/cần chỉnh liều khi eGFR dưới 30 — nguy cơ tích lũy thuốc, tăng chảy máu.",
+     "nguon": "ESC Rung nhĩ 2025"},
+    {"generic": "apixaban", "egfr_lt": 25, "muc": "warning",
+     "note": "Cần chỉnh liều khi eGFR dưới 25-30, theo dõi sát dấu hiệu chảy máu.",
+     "nguon": "ESC Rung nhĩ 2025"},
+    {"generic": "dabigatran", "egfr_lt": 30, "muc": "critical",
+     "note": "Chống chỉ định khi eGFR dưới 30 — thải trừ chủ yếu qua thận.",
+     "nguon": "ESC Rung nhĩ 2025"},
+    {"generic": "spironolactone", "egfr_lt": 30, "muc": "critical",
+     "note": "Tăng nguy cơ tăng kali máu nặng khi eGFR dưới 30, cần theo dõi kali sát hoặc tránh dùng.",
+     "nguon": "ESC Suy tim 2025 / KDIGO"},
+    {"generic": "gliclazide", "egfr_lt": 30, "muc": "warning",
+     "note": "Tăng nguy cơ hạ đường huyết khi chức năng thận giảm nặng, cần chỉnh liều.",
+     "nguon": "ADA 2025"},
 ]
 
 # ─── THUỐC PHÙ HỢP GUIDELINE (gắn nhãn xanh) ──────────────────────────────────
 FAVORABLE_RULES = [
     {"generic": "dapagliflozin", "dieu_kien": "suy_tim",
      "note": "SGLT2i được ESC khuyến cáo cho bệnh nhân suy tim, cải thiện tiên lượng.",
-     "nguon": "ESC suy tim 2025",
-     "caution_if": "ha_natri",
-     "caution_note": "Bệnh nhân đang hạ natri máu: SGLT2i có thể gây lợi niệu thẩm thấu làm "
-                     "rối loạn điện giải nặng hơn. Theo dõi sát natri máu khi dùng."},
+     "nguon": "ESC suy tim 2025"},
 ]
 
 
@@ -157,38 +178,6 @@ def compute_egfr(creatinine_umol: Optional[float], age: Optional[int], sex_male:
     if not sex_male:
         egfr *= 1.012
     return round(egfr)
-
-
-def egfr_detail(creatinine_umol: Optional[float], age: Optional[int], sex_male: bool) -> Optional[dict]:
-    """Trả về toàn bộ thông tin để hiển thị minh bạch công thức và đầu vào."""
-    if not creatinine_umol or not age:
-        return {
-            "value": None,
-            "formula": "CKD-EPI 2021 (race-free)",
-            "thieu": "Thiếu Creatinin hoặc tuổi để tính eGFR.",
-            "creatinine_umol": creatinine_umol,
-            "age": age,
-            "sex": "Nam" if sex_male else "Nữ",
-        }
-    scr_mgdl = creatinine_umol / 88.4
-    k = 0.9 if sex_male else 0.7
-    alpha = -0.302 if sex_male else -0.241
-    value = compute_egfr(creatinine_umol, age, sex_male)
-    return {
-        "value": value,
-        "formula": "eGFR = 142 x min(Scr/k, 1)^a x max(Scr/k, 1)^-1.200 x 0.9938^Tuoi" + (" x 1.012 (nu)" if not sex_male else ""),
-        "ten_cong_thuc": "CKD-EPI 2021 (race-free)",
-        "creatinine_umol": round(creatinine_umol, 1),
-        "creatinine_mgdl": round(scr_mgdl, 2),
-        "age": age,
-        "sex": "Nam" if sex_male else "Nữ",
-        "k": k,
-        "alpha": alpha,
-        "scr_div_k": round(scr_mgdl / k, 3),
-        "dien_giai": (f"Scr {round(scr_mgdl,2)} mg/dL ({round(creatinine_umol,1)} umol/L), "
-                      f"tuoi {age}, gioi {'Nam' if sex_male else 'Nu'} "
-                      f"(k={k}, a={alpha}) -> eGFR {value} mL/phut/1.73m2"),
-    }
 
 
 # ─── CHUẨN HÓA TÊN THUỐC -> HOẠT CHẤT ─────────────────────────────────────────
@@ -209,7 +198,7 @@ def resolve_generic(ten_thuoc: str) -> Optional[str]:
 def check_drug_safety(drugs: list, egfr: Optional[int], context: dict) -> dict:
     """
     drugs: list các dict có khóa 'ten_thuoc' (hoặc 'ten_goc').
-    Trả về interactions, renal_flags, favorable.
+    Trả về interactions, renal_flags, favorable, duplicate_groups.
     """
     resolved = []
     for d in drugs or []:
@@ -242,13 +231,40 @@ def check_drug_safety(drugs: list, egfr: Optional[int], context: dict) -> dict:
     for m in resolved:
         for rule in FAVORABLE_RULES:
             if rule["generic"] == m["generic"] and context.get(rule["dieu_kien"]):
-                entry = {"thuoc": m["generic"], **rule}
-                # Cross-check nguy cơ: nếu bệnh cảnh có điều kiện thận trọng -> gắn cảnh báo
-                if rule.get("caution_if") and context.get(rule["caution_if"]):
-                    entry["than_trong"] = rule["caution_note"]
-                favorable.append(entry)
+                favorable.append({"thuoc": m["generic"], **rule})
 
-    return {"interactions": interactions, "renal_flags": renal_flags, "favorable": favorable}
+    # Trùng nhóm thuốc (mục 9-B1): 2 thuốc khác hoạt chất nhưng CÙNG nhóm dược
+    # lý — thường không cần dùng đồng thời, có thể là sai sót kê đơn hoặc
+    # quên ngừng thuốc cũ. Chỉ báo khi đã xác định được "generic" (bỏ qua
+    # thuốc không nhận diện được, để tránh báo nhầm "trùng nhóm rỗng").
+    duplicate_groups = []
+    seen_pairs = set()
+    for i in range(len(resolved)):
+        for j in range(i + 1, len(resolved)):
+            A, B = resolved[i], resolved[j]
+            if not A["generic"] or not B["generic"] or A["generic"] == B["generic"]:
+                continue  # cùng hoạt chất hệt nhau thì không tính "trùng nhóm" mà là trùng thuốc hẳn
+            common_groups = set(A["groups"]) & set(B["groups"])
+            for grp in common_groups:
+                pair_key = tuple(sorted([A["generic"], B["generic"]]) + [grp])
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+                duplicate_groups.append({
+                    "nhom": grp,
+                    "thuoc_a": A["generic"],
+                    "thuoc_b": B["generic"],
+                    "ghi_chu": f"Hai thuốc khác hoạt chất nhưng cùng nhóm dược lý "
+                               f"({grp}) — kiểm tra có cần dùng đồng thời hay là "
+                               f"sai sót quên ngừng thuốc cũ.",
+                })
+
+    return {
+        "interactions": interactions,
+        "renal_flags": renal_flags,
+        "favorable": favorable,
+        "duplicate_groups": duplicate_groups,
+    }
 
 
 # ─── SÀNG LỌC ƯU TIÊN (Sepsis / AKI / điện giải / suy tim) ────────────────────
@@ -256,34 +272,11 @@ def run_priority_screens(report: dict) -> dict:
     """So ngưỡng vital + lab, trả về findings 3 mức: critical / warning / stable."""
     v = report.get("dau_hieu_sinh_ton", {}) or {}
     labs = report.get("xet_nghiem_key") or []
-    # Khớp key linh hoạt: không phân biệt hoa thường, chấp nhận biến thể tên
-    # (vd Claude trả "CREATININE"/"Creatinine" thay vì "Creatinin").
-    KEY_ALIASES = {
-        "creatinin": ["creatinin", "creatinine", "cre"],
-        "na+": ["na+", "na", "natri", "sodium", "ion natri"],
-        "k+": ["k+", "k", "kali", "potassium", "ion kali"],
-        "crp": ["crp", "protein phản ứng c", "c-reactive"],
-        "nt-probnp": ["nt-probnp", "ntprobnp", "probnp", "bnp"],
-    }
-    def lab_of(key):
-        aliases = KEY_ALIASES.get(key.lower(), [key.lower()])
-        for l in labs:
-            lk = str(l.get("key", "")).lower().strip()
-            if lk == key.lower() or lk in aliases or any(a in lk for a in aliases):
-                return l
-        return None
+    lab_of = lambda key: next((l for l in labs if l.get("key") == key), None)
 
     dx = (report.get("chan_doan_chinh", "") + " " + report.get("tien_su_benh", "")).lower()
     bnp = lab_of("NT-proBNP")
-    na_for_ctx = lab_of("Na+")
-    na_ctx_val = na_for_ctx.get("rawVal") if na_for_ctx else None
-    phase_info = compute_phase_info(report)
-    context = {
-        "suy_tim": ("suy tim" in dx or "probnp" in dx or (bnp and bnp.get("rawVal", 0) > 900)),
-        "ha_natri": (na_ctx_val is not None and na_ctx_val < 135),
-        "current_phase": phase_info["current_phase"],
-        "days_post_op": phase_info["days_post_op"],
-    }
+    context = {"suy_tim": ("suy tim" in dx or "probnp" in dx or (bnp and bnp.get("rawVal", 0) > 900))}
 
     findings = []
     add = lambda muc, ten, ly_do, nguon: findings.append(
@@ -312,10 +305,8 @@ def run_priority_screens(report: dict) -> dict:
     # Suy thận (KDIGO)
     creat = lab_of("Creatinin")
     creat_val = creat.get("rawVal") if creat else None
-    sex_male = "nam" in report.get("thong_tin_benh_nhan", {}).get("gioi_tinh", "").lower()
-    pt_age = report.get("thong_tin_benh_nhan", {}).get("tuoi")
-    egfr = compute_egfr(creat_val, pt_age, sex_male)
-    egfr_info = egfr_detail(creat_val, pt_age, sex_male)
+    egfr = compute_egfr(creat_val, report.get("thong_tin_benh_nhan", {}).get("tuoi"),
+                        "nam" in report.get("thong_tin_benh_nhan", {}).get("gioi_tinh", "").lower())
     if egfr is not None:
         if egfr < 30:
             add("critical", "Suy thận nặng", f"eGFR {egfr} mL/phút/1.73m2 (dưới 30)", "KDIGO 2026")
@@ -345,29 +336,13 @@ def run_priority_screens(report: dict) -> dict:
         elif na_val < 135:
             add("warning", "Hạ natri máu", f"Na {na_val} mmol/L (dưới 135)", "Điện giải đồ")
 
-    # Suy tim (NT-proBNP) - DIỄN GIẢI THEO GIAI ĐOẠN ĐO (không phải phase hiện tại)
+    # Suy tim (NT-proBNP)
     bnp_val = bnp.get("rawVal") if bnp else None
-    cphase = phase_info["current_phase"]
-    # Phase của CHÍNH lần đo NT-proBNP (quan trọng: giá trị cũ hậu phẫu khác giá trị ngoại trú mới)
-    bnp_phase = phase_of_date(bnp.get("ngay"), phase_info) if bnp else None
-    if bnp_phase is None:
-        bnp_phase = cphase
-    if bnp_val is not None and bnp_val > 900:
-        if bnp_phase in (1, 2):
-            # Đo trước/ngay sau mổ: tăng có thể do đáp ứng phẫu thuật, KHÔNG kết luận suy tim
-            extra = (" Bệnh nhân hiện ở giai đoạn ngoại trú nhưng CHƯA có NT-proBNP đo lại sau xuất viện "
-                     "để đánh giá suy tim hiện tại.") if cphase == 3 else ""
-            add("warning", "NT-proBNP đo ở giai đoạn hậu phẫu",
-                f"NT-proBNP {bnp_val} pg/mL đo ở giai đoạn hậu phẫu. Tăng NT-proBNP ngay sau mổ tim lớn "
-                f"là phổ biến, có thể không phản ánh suy tim mạn, cần đối chiếu lâm sàng.{extra}", "ESC suy tim 2025")
-        elif bnp_phase == 3:
-            # Đo khi đã ngoại trú (giá trị mới thực sự) -> ý nghĩa lâm sàng nặng hơn
-            muc = "critical" if (bnp_val > 2000 and context["suy_tim"]) else "warning"
-            add(muc, "NT-proBNP vẫn tăng ở giai đoạn ngoại trú",
-                f"NT-proBNP {bnp_val} pg/mL đo ở giai đoạn ngoại trú, gợi ý nguy cơ suy giảm chức năng tim, "
-                f"cần đối chiếu lâm sàng và đánh giá đáp ứng điều trị.", "ESC suy tim 2025")
-        else:
-            add("warning", "Marker suy tim tăng", f"NT-proBNP {bnp_val} pg/mL", "ESC suy tim 2025")
+    if bnp_val is not None and bnp_val > 2000 and context["suy_tim"]:
+        add("critical", "Suy tim cần quản lý tích cực",
+            f"NT-proBNP {bnp_val} pg/mL (rất cao) kèm chẩn đoán suy tim", "ESC suy tim 2025")
+    elif bnp_val is not None and bnp_val > 900:
+        add("warning", "Marker suy tim tăng", f"NT-proBNP {bnp_val} pg/mL", "ESC suy tim 2025")
 
     # Viêm nhiễm (CRP)
     crp = lab_of("CRP")
@@ -375,29 +350,7 @@ def run_priority_screens(report: dict) -> dict:
     if crp_val is not None and crp_val > 10:
         add("warning", "Phản ứng viêm còn cao", f"CRP {crp_val} mg/L (chưa về dưới 5)", "Xét nghiệm")
 
-    # ─── TỔNG HỢP BỆNH CẢNH (clinical reasoning theo Tấn) ────────────────────
-    # Không đánh giá lẻ: gom các bất thường cùng tồn tại thành một bệnh cảnh thống nhất.
-    picture = []
-    if context["ha_natri"]:
-        picture.append("hạ natri máu")
-    if egfr is not None and egfr < 60:
-        picture.append("suy giảm chức năng thận")
-    if k_val is not None and k_val > 5.5:
-        picture.append("tăng kali máu")
-    if bnp_val is not None and bnp_val > 900 and context["suy_tim"]:
-        picture.append("gánh nặng suy tim (NT-proBNP tăng)")
-    if crp_val is not None and crp_val > 50:
-        picture.append("phản ứng viêm mạnh")
-    if len(picture) >= 2:
-        phase_lbl = {1: "trước can thiệp", 2: "hậu phẫu nội trú", 3: "theo dõi ngoại trú"}.get(cphase, "")
-        muc = "critical" if len(picture) >= 3 else "warning"
-        add(muc, "Bệnh cảnh lâm sàng phối hợp",
-            f"Cùng thời điểm ({phase_lbl}) ghi nhận: {', '.join(picture)}. "
-            f"Cần xử trí theo bệnh cảnh tổng thể thay vì từng chỉ số riêng lẻ, đối chiếu lâm sàng.",
-            "Tổng hợp đa chỉ số")
-
-    return {"findings": findings, "egfr": egfr, "egfr_detail": egfr_info,
-            "context": context, "phase_info": phase_info}
+    return {"findings": findings, "egfr": egfr, "context": context}
 
 
 # ─── DỮ LIỆU CHO BƯỚC 3 (LLM diễn đạt diễn tiến) ──────────────────────────────
@@ -421,58 +374,523 @@ def build_trend_facts(report: dict) -> dict:
     return {"trend_facts": facts}
 
 
-# ─── HÀM TỔNG: chạy toàn bộ rule engine ───────────────────────────────────────
-def normalize_clinical_labels(report: dict) -> dict:
-    """Chuẩn hóa nhãn lâm sàng cứng theo yêu cầu chuyên môn (Tấn):
-    - EF >= 50% luôn là 'normal' (không bao giờ 'high'/cảnh báo).
-    - INR ở bệnh nhân van cơ học: mục tiêu 2.0-3.0, gán status theo mục tiêu này.
-    Sửa trực tiếp trên report['xet_nghiem_key'] và trả lại report.
+# ═══════════════════════════════════════════════════════════════════════════
+# THANG ĐIỂM NGUY CƠ: CHA2DS2-VASc + HAS-BLED
+# ═══════════════════════════════════════════════════════════════════════════
+# NGUYÊN TẮC AN TOÀN (bắt buộc):
+#   - Đây là HỖ TRỢ QUYẾT ĐỊNH, KHÔNG tự kê đơn/chỉnh liều chống đông.
+#   - Mỗi điểm cộng PHẢI kèm "biến đầu vào" + "nguồn" để bác sĩ tự kiểm tra,
+#     và biến KHÔNG xác định được trong hồ sơ phải hiển thị rõ "không xác định"
+#     (không ngầm coi = không có bệnh).
+#   - Input lấy từ text tự do (chan_doan_chinh, tien_su_benh, canh_bao_nguy_co)
+#     vì schema hiện tại chưa có field Có/Không riêng cho từng bệnh kèm theo.
+#     Đây là HẠN CHẾ ĐÃ BIẾT: nếu hồ sơ ghi bệnh kèm theo bằng từ viết tắt lạ
+#     hoặc không nhắc tới, hệ thống sẽ báo "không xác định", không tự suy diễn.
+
+# Từ khóa (đã bỏ dấu, thường) khớp với cách ghi thực tế trong HIS/bệnh án giấy
+# (xem ca mẫu: "ĐTĐ II", "HHoC", "ĐTN", "RLĐM" là viết tắt, không phải Có/Không
+# rạch ròi như form REDCap). Tấn/Ngân rà soát và bổ sung thêm khi gặp ca mới.
+CV_KEYWORDS = {
+    "suy_tim": ["suy tim", "EF giam", "phan suat tong mau giam", "rlcn tam thu"],
+    "tang_huyet_ap": ["tang huyet ap", "THA", "cao huyet ap"],
+    "dtd": ["dai thao duong", "ĐTĐ", "dtd type", "dtd ii", "dtd i", "hba1c"],
+    "dot_quy_tia_huyet_khoi": [
+        "dot quy", "tai bien mach mau nao", "nhoi mau nao", "tia ",
+        "thieu mau nao cuc bo",
+        # LƯU Ý: ĐÃ BỎ "thuyen tac"/"huyet khoi" — 2 từ này quá rộng, thường
+        # xuất hiện trong câu CẢNH BÁO NGUY CƠ DỰ PHÒNG (vd "nguy cơ huyết
+        # khối van do INR thấp" ở bệnh nhân van cơ học), không phải biến cố
+        # ĐÃ XẢY RA thật. Giữ chúng gây false positive S2 (+2 điểm) sai cho
+        # mọi bệnh nhân van cơ học có INR dao động — tức gần như toàn bộ ca
+        # demo chính. Nếu cần bắt "tiền sử thuyên tắc/huyết khối THẬT", nên
+        # ghép với cụm "tiền sử" đứng trước (vd "tiền sử huyết khối tĩnh
+        # mạch") thay vì khớp từ đơn lẻ — để Tấn/Ngân quyết định cụm ghép cụ
+        # thể khi gặp ca thật.
+    ],
+    "benh_mach_mau": [
+        "nhoi mau co tim", "nmct", "benh dong mach ngoai bien", "hep dong mach canh",
+        "mang xo vua dmc", "xo vua dong mach", "benh mach mau",
+        # Bổ sung sau khi phát hiện bỏ sót thật qua test với dữ liệu demo có sẵn
+        # (PATIENT_B trong App.jsx): "Bệnh mạch vành đã đặt 2 stent ĐMV" KHÔNG
+        # khớp bộ keyword cũ dù đây là cách ghi rất phổ biến trong bệnh án.
+        "benh mach vanh", "dat stent", "stent dmv", "stent mach vanh",
+        "can thiep mach vanh", "dat gia do mach vanh", "bac cau mach vanh",
+        "cabg", "pci",
+    ],
+}
+
+# Từ khóa riêng cho HAS-BLED (một số trùng CV_KEYWORDS, tách để rõ nghĩa)
+HB_KEYWORDS = {
+    "benh_gan": ["xo gan", "viem gan", "suy gan", "benh gan man"],
+    "tien_su_chay_mau": [
+        "xuat huyet", "tien su chay mau", "loet da day xuat huyet",
+        # LƯU Ý: ĐÃ BỎ "chay mau" đơn lẻ — quá rộng, thường khớp nhầm câu
+        # CẢNH BÁO NGUY CƠ DỰ PHÒNG (vd "nguy cơ chảy máu" khi INR cao ở
+        # bệnh nhân van cơ học), không phải tiền sử chảy máu THẬT đã xảy ra.
+        # Cùng nguyên nhân với việc đã bỏ "huyet khoi"/"thuyen tac" khỏi
+        # CV_KEYWORDS["dot_quy_tia_huyet_khoi"]. Nếu cần bắt rộng hơn, ghép
+        # với cụm "tiền sử" đứng trước, để Tấn/Ngân quyết định cụm cụ thể.
+    ],
+    "thuoc_tang_chay_mau": ["nsaid", "aspirin", "khang ket tap tieu cau", "ibuprofen", "diclofenac"],
+    "ruou": ["nghien ruou", "uong ruou nhieu", "lam dung ruou", "ruou bia"],
+}
+
+
+def _text_has_any(haystack_stripped: str, keywords: list) -> bool:
+    """Khớp keyword thô, KHÔNG xét phủ định. Dùng cho trường hợp phủ định
+    không có ý nghĩa (vd dò tên thuốc trong danh sách thuốc — không ai viết
+    "không dùng metformin" trong danh sách thuốc đang dùng)."""
+    return any(_strip_accents(kw) in haystack_stripped for kw in keywords)
+
+
+# Cụm phủ định tiếng Việt thường gặp trong bệnh án khi mô tả KHÔNG có bệnh/
+# biến cố. Đặt NGAY TRƯỚC từ khóa bệnh trong câu, ví dụ "không ghi nhận đái
+# tháo đường", "chưa từng đột quỵ". Đã bỏ dấu để khớp cùng cách với keyword.
+NEGATION_PHRASES = [
+    "khong ghi nhan", "khong co", "khong bi", "chua tung", "chua co",
+    "khong phat hien", "phu nhan", "loai tru",
+]
+# Khoảng cách tối đa (số ký tự) cho phép giữa cụm phủ định và từ khóa bệnh để
+# vẫn coi là phủ định "của" từ khóa đó — tránh bắt nhầm phủ định ở câu khác
+# cách xa trong đoạn văn dài.
+NEGATION_WINDOW_CHARS = 35
+
+
+def _text_has_any_positive(haystack_stripped: str, keywords: list) -> bool:
     """
-    diag = (str(report.get("chan_doan_chinh", "")) + " "
-            + str(report.get("phau_thuat", {}).get("phuong_phap", "")) + " "
-            + str(report.get("tien_su_benh", ""))).lower()
-    mechanical_valve = any(k in diag for k in
-                           ["van cơ học", "van co hoc", "on-x", "onx", "st jude", "thay van"])
-
-    for lab in report.get("xet_nghiem_key", []):
-        key = str(lab.get("key", "")).upper().strip()
-        raw = lab.get("rawVal")
-        try:
-            raw = float(raw) if raw is not None else None
-        except (TypeError, ValueError):
-            raw = None
-
-        # EF: >= 50 luôn bình thường
-        if key in ("EF", "PHÂN SUẤT TỐNG MÁU", "LVEF") and raw is not None:
-            lab["status"] = "normal" if raw >= 50 else "low"
-
-        # INR van cơ học: mục tiêu 2.0-3.0
-        if key == "INR" and mechanical_valve and raw is not None:
-            lab["normal"] = "2.0-3.0"
-            lab["muc_tieu_van_co_hoc"] = True
-            if raw < 2.0:
-                lab["status"] = "low"
-            elif raw > 3.0:
-                lab["status"] = "high"
-            else:
-                lab["status"] = "normal"
-
-    report["_benh_nhan_van_co_hoc"] = mechanical_valve
-    return report
+    Giống _text_has_any, nhưng loại trừ trường hợp keyword nằm ngay sau một
+    cụm phủ định gần đó (vd "không ghi nhận đái tháo đường" -> KHÔNG tính là
+    có ĐTĐ). Đây là rule TẤT ĐỊNH đơn giản (tìm cụm phủ định trong khoảng
+    NEGATION_WINDOW_CHARS ký tự trước vị trí khớp) — KHÔNG phải xử lý ngôn
+    ngữ tự nhiên đầy đủ, vẫn có thể bỏ sót phủ định viết khác cách hoặc bắt
+    nhầm phủ định ở câu trước không liên quan. Dùng cho mọi chỗ dò BỆNH KÈM
+    THEO/TIỀN SỬ (CHA2DS2-VASc, HAS-BLED) — nơi câu phủ định thực sự xuất
+    hiện phổ biến trong bệnh án ("không ghi nhận đái tháo đường").
+    """
+    for kw in keywords:
+        kw_stripped = _strip_accents(kw)
+        start = 0
+        while True:
+            idx = haystack_stripped.find(kw_stripped, start)
+            if idx == -1:
+                break
+            window_start = max(0, idx - NEGATION_WINDOW_CHARS)
+            window = haystack_stripped[window_start:idx]
+            if not any(neg in window for neg in NEGATION_PHRASES):
+                return True  # tìm được 1 lần khớp KHÔNG bị phủ định -> đủ để tính "có"
+            start = idx + len(kw_stripped)  # khớp này bị phủ định, tìm lần khớp tiếp theo
+    return False
 
 
+def _gather_text(report: dict) -> str:
+    """Gộp các trường text tự do hay chứa bệnh kèm theo, đã bỏ dấu."""
+    parts = [
+        report.get("chan_doan_chinh", "") or "",
+        report.get("tien_su_benh", "") or "",
+    ]
+    for c in (report.get("canh_bao_nguy_co") or []):
+        parts.append(c.get("mo_ta", "") or "")
+        parts.append(c.get("can_cu", "") or "")
+    return _strip_accents(" ".join(parts))
+
+
+def _is_mechanical_valve(report: dict) -> bool:
+    """Nhận biết van cơ học qua chẩn đoán/phẫu thuật (cùng cách main.py LUẬT 17 dùng)."""
+    txt = _gather_text(report)
+    pt = _strip_accents((report.get("phau_thuat", {}) or {}).get("phuong_phap", "") or "")
+    combined = txt + " " + pt
+    markers = ["van co hoc", "on-x", "on x", "st jude", "thay van"]
+    return any(m in combined for m in markers)
+
+
+def compute_cha2ds2_vasc(report: dict) -> dict:
+    """
+    CHA2DS2-VASc: nguy cơ đột quỵ/huyết khối ở rung nhĩ KHÔNG do van (0-9 điểm).
+    Trả về breakdown từng mục: co_mat (đã xác định có) / khong_xac_dinh.
+    """
+    info = report.get("thong_tin_benh_nhan", {}) or {}
+    tuoi = info.get("tuoi")
+    gioi_tinh_nu = "nam" not in _strip_accents(info.get("gioi_tinh", "") or "") and \
+                   "nu" in _strip_accents(info.get("gioi_tinh", "") or "")
+    txt = _gather_text(report)
+
+    items = []
+    total = 0
+
+    def item(ten, diem, co, ghi_chu):
+        nonlocal total
+        if co:
+            total += diem
+        items.append({"ten": ten, "diem_neu_co": diem, "co": co, "ghi_chu": ghi_chu})
+
+    item("C - Suy tim / rối loạn chức năng thất trái", 1,
+         _text_has_any_positive(txt, CV_KEYWORDS["suy_tim"]),
+         "Dò từ khóa suy tim/EF giảm trong chẩn đoán-tiền sử")
+    item("H - Tăng huyết áp", 1,
+         _text_has_any_positive(txt, CV_KEYWORDS["tang_huyet_ap"]),
+         "Dò từ khóa tăng huyết áp/THA")
+
+    if tuoi is not None:
+        if tuoi >= 75:
+            item("A2 - Tuổi ≥ 75", 2, True, f"Tuổi {tuoi}")
+        elif tuoi >= 65:
+            item("A - Tuổi 65-74", 1, True, f"Tuổi {tuoi}")
+        else:
+            item("A/A2 - Nhóm tuổi nguy cơ (65-74 hoặc ≥75)", 0, False, f"Tuổi {tuoi} (dưới 65)")
+    else:
+        item("A/A2 - Nhóm tuổi nguy cơ (65-74 hoặc ≥75)", 0, False, "Không xác định: thiếu tuổi")
+
+    item("D - Đái tháo đường", 1,
+         _text_has_any_positive(txt, CV_KEYWORDS["dtd"]),
+         "Dò từ khóa đái tháo đường/ĐTĐ/HbA1C")
+    item("S2 - Tiền sử đột quỵ/TIA/thuyên tắc", 2,
+         _text_has_any_positive(txt, CV_KEYWORDS["dot_quy_tia_huyet_khoi"]),
+         "Dò từ khóa đột quỵ/TIA/thuyên tắc/huyết khối")
+    item("V - Bệnh mạch máu (NMCT cũ, bệnh ĐM ngoại biên, mảng xơ vữa ĐMC)", 1,
+         _text_has_any_positive(txt, CV_KEYWORDS["benh_mach_mau"]),
+         "Dò từ khóa NMCT/bệnh động mạch ngoại biên/xơ vữa ĐMC")
+
+    if info.get("gioi_tinh"):
+        item("Sc - Giới nữ", 1, gioi_tinh_nu, f"Giới tính ghi nhận: {info.get('gioi_tinh')}")
+    else:
+        item("Sc - Giới nữ", 0, False, "Không xác định: thiếu giới tính")
+
+    mechanical_valve = _is_mechanical_valve(report)
+
+    return {
+        "ten_thang_diem": "CHA2DS2-VASc",
+        "tong_diem": total,
+        "thang_diem_toi_da": 9,
+        "chi_tiet": items,
+        "nguon_guideline": "ESC/AHA Atrial Fibrillation Guideline",
+        "canh_bao_boi_canh": (
+            "Bệnh nhân có VAN CƠ HỌC: CHA2DS2-VASc được xây dựng cho rung nhĩ KHÔNG "
+            "do van — với van cơ học, chỉ định chống đông (warfarin/kháng vitamin K) "
+            "là BẮT BUỘC bất kể điểm số này. Điểm số ở đây chỉ mang tính minh họa thêm "
+            "bối cảnh nguy cơ tổng quát, KHÔNG dùng để quyết định có chống đông hay không."
+            if mechanical_valve else
+            "Thang điểm áp dụng cho rung nhĩ không do bệnh van tim. Cần bác sĩ xác nhận "
+            "trước khi dùng để ra quyết định chống đông."
+        ),
+        "mechanical_valve": mechanical_valve,
+        "nhan": "Hỗ trợ quyết định — cần bác sĩ xác nhận",
+    }
+
+
+def compute_has_bled(report: dict, egfr: Optional[int], inr_trend: Optional[list] = None) -> dict:
+    """
+    HAS-BLED: nguy cơ chảy máu khi dùng chống đông (0-9 điểm).
+    inr_trend: mảng giá trị INR theo thời gian (nếu có) để đánh giá "labile" (dao động).
+    """
+    info = report.get("thong_tin_benh_nhan", {}) or {}
+    tuoi = info.get("tuoi")
+    txt = _gather_text(report)
+    v = report.get("dau_hieu_sinh_ton", {}) or {}
+    sbp = v.get("ha_tt")
+
+    items = []
+    total = 0
+
+    def item(ten, diem, co, ghi_chu):
+        nonlocal total
+        if co:
+            total += diem
+        items.append({"ten": ten, "diem_neu_co": diem, "co": co, "ghi_chu": ghi_chu})
+
+    if sbp is not None:
+        item("H - Tăng huyết áp không kiểm soát (HATT > 160)", 1, sbp > 160,
+             f"Huyết áp tâm thu ghi nhận gần nhất: {sbp} mmHg")
+    else:
+        item("H - Tăng huyết áp không kiểm soát (HATT > 160)", 0, False,
+             "Không xác định: thiếu huyết áp tâm thu")
+
+    # A - bất thường thận và/hoặc gan, tối đa +2 (tách 2 thành phần để minh bạch)
+    than_bat_thuong = egfr is not None and egfr < 60
+    if egfr is not None:
+        item("A - Bất thường chức năng thận (eGFR < 60)", 1, than_bat_thuong,
+             f"eGFR {egfr} mL/phút/1.73m2 (CKD-EPI 2021)")
+    else:
+        item("A - Bất thường chức năng thận (eGFR < 60)", 0, False,
+             "Không xác định: thiếu eGFR (cần Creatinin + tuổi + giới)")
+
+    gan_bat_thuong = _text_has_any_positive(txt, HB_KEYWORDS["benh_gan"])
+    item("A - Bất thường chức năng gan", 1, gan_bat_thuong,
+         "Dò từ khóa xơ gan/viêm gan/suy gan trong chẩn đoán-tiền sử")
+
+    item("S - Tiền sử đột quỵ", 1,
+         _text_has_any_positive(txt, CV_KEYWORDS["dot_quy_tia_huyet_khoi"]),
+         "Dò từ khóa đột quỵ/tai biến mạch máu não")
+    item("B - Tiền sử/cơ địa chảy máu", 1,
+         _text_has_any_positive(txt, HB_KEYWORDS["tien_su_chay_mau"]),
+         "Dò từ khóa xuất huyết/chảy máu trong tiền sử")
+
+    # L - INR dao động (labile): cần ít nhất 3 điểm đo để đánh giá biến thiên thật
+    labile = False
+    labile_note = "Không xác định: chưa đủ dữ liệu INR (cần ≥ 3 lần đo)"
+    if inr_trend and len(inr_trend) >= 3:
+        lo, hi = min(inr_trend), max(inr_trend)
+        labile = (hi - lo) >= 1.5  # dao động rộng quanh đích 2.0-3.0
+        labile_note = f"Dải INR ghi nhận: {lo} đến {hi} (chênh {round(hi-lo,2)})"
+    item("L - INR dao động (labile / TTR thấp)", 1, labile, labile_note)
+
+    if tuoi is not None:
+        item("E - Tuổi > 65", 1, tuoi > 65, f"Tuổi {tuoi}")
+    else:
+        item("E - Tuổi > 65", 0, False, "Không xác định: thiếu tuổi")
+
+    # D - thuốc tăng chảy máu và/hoặc rượu, tối đa +2
+    thuoc_nguy_co = False
+    for d in (report.get("thuoc_cuoi_ky") or []):
+        name = _strip_accents(d.get("ten_thuoc", "") or "")
+        if _text_has_any(name, HB_KEYWORDS["thuoc_tang_chay_mau"]):
+            thuoc_nguy_co = True
+            break
+    item("D - Thuốc tăng nguy cơ chảy máu (kháng tiểu cầu/NSAID)", 1, thuoc_nguy_co,
+         "Dò trong danh sách thuốc hiện dùng")
+    item("D - Lạm dụng rượu", 1, _text_has_any_positive(txt, HB_KEYWORDS["ruou"]),
+         "Dò từ khóa lạm dụng rượu trong tiền sử")
+
+    return {
+        "ten_thang_diem": "HAS-BLED",
+        "tong_diem": total,
+        "thang_diem_toi_da": 9,
+        "chi_tiet": items,
+        "nguon_guideline": "ESC Guideline on Atrial Fibrillation (HAS-BLED)",
+        "muc_nguy_co": "cao" if total >= 3 else "thap_trung_binh",
+        "dien_giai_muc_nguy_co": (
+            "Điểm ≥ 3: nguy cơ chảy máu cao — cần theo dõi sát hơn khi dùng chống đông, "
+            "KHÔNG đồng nghĩa với việc ngừng chống đông (vẫn cần cân nhắc lợi ích/nguy cơ)."
+            if total >= 3 else
+            "Điểm dưới 3: nguy cơ chảy máu thấp đến trung bình theo thang điểm này."
+        ),
+        "nhan": "Hỗ trợ quyết định — cần bác sĩ xác nhận",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CARE-GAP DETECTOR (mục 9-B3): quét khoảng trống theo guideline
+# ═══════════════════════════════════════════════════════════════════════════
+# Tất định 100%, không qua LLM — chỉ kiểm tra "có/thiếu dữ liệu" theo quy tắc
+# cứng, không suy luận lâm sàng phức tạp. Mỗi care-gap có "muc_do" (cao/trung
+# binh/thap) tự chọn theo mức ảnh hưởng nếu bị bỏ sót, và "ly_do" giải thích
+# ngắn để bác sĩ hiểu vì sao hệ thống nêu ra.
+
+import datetime as _dt
+
+
+def _parse_vn_date(s: Optional[str]) -> Optional[_dt.date]:
+    """Parse ngày dạng dd/mm/yyyy (BẮT BUỘC đủ năm — khớp đúng hành vi
+    parseVNDate() ở App.jsx, không suy diễn năm khi thiếu)."""
+    if not s or not isinstance(s, str):
+        return None
+    m = re.match(r"^\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*$", s)
+    if not m:
+        return None
+    d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        return _dt.date(y, mo, d)
+    except ValueError:
+        return None
+
+
+def _days_since(date_str: Optional[str], reference: Optional[_dt.date] = None) -> Optional[int]:
+    """Số ngày từ date_str tới reference (mặc định: hôm nay). None nếu không parse được."""
+    d = _parse_vn_date(date_str)
+    if d is None:
+        return None
+    ref = reference or _dt.date.today()
+    return (ref - d).days
+
+
+def detect_care_gaps(report: dict, egfr: Optional[int] = None) -> list:
+    """
+    Quét report tìm các khoảng trống dữ liệu theo guideline cơ bản. Trả về
+    list các dict {muc_do, tieu_de, ly_do}. KHÔNG quyết định lâm sàng — chỉ
+    nêu "thiếu gì", để bác sĩ tự quyết định có cần bổ sung hay không.
+
+    Danh sách kiểm tra hiện tại (Tấn/Ngân rà soát + bổ sung khi cần):
+      1. Suy tim/NT-proBNP cao nhưng không có lần đo NT-proBNP nào sau ra viện
+      2. Có Creatinin nhưng thiếu tuổi/giới -> không tính được eGFR
+      3. Van cơ học nhưng không đủ số lần đo INR để đánh giá ổn định/TTR
+      4. Có chỉ định phẫu thuật/can thiệp nhưng không có lần siêu âm tim nào
+         SAU mổ để xác nhận kết quả
+      5. Đã ra viện quá 30 ngày nhưng lần xét nghiệm/siêu âm gần nhất còn
+         trước đó quá lâu (gợi ý: nên tái khám)
+    """
+    gaps = []
+    labs = report.get("xet_nghiem_key") or report.get("xet_nghiem_meta") or []
+    txt = _gather_text(report)
+    info = report.get("thong_tin_benh_nhan") or {}
+    discharge_date = info.get("ngay_ra_vien")
+
+    def lab_dates(key: str):
+        item = next((l for l in labs if (l.get("key") or "").strip().upper() == key.upper()), None)
+        return item, (item.get("trendDates") if item else None)
+
+    # 1. Suy tim / NT-proBNP cao nhưng chưa đo lại sau ra viện
+    nt_item, nt_dates = lab_dates("NT-proBNP")
+    suy_tim_nghi_ngo = _text_has_any_positive(txt, CV_KEYWORDS["suy_tim"]) or (
+        nt_item is not None and (nt_item.get("rawVal") or 0) > 900
+    )
+    if suy_tim_nghi_ngo:
+        has_post_discharge_nt = False
+        if nt_dates and discharge_date:
+            discharge_d = _parse_vn_date(discharge_date)
+            for ds in nt_dates:
+                d = _parse_vn_date(ds)
+                if d and discharge_d and d > discharge_d:
+                    has_post_discharge_nt = True
+                    break
+        if not has_post_discharge_nt:
+            gaps.append({
+                "muc_do": "trung_binh",
+                "tieu_de": "Chưa đo lại NT-proBNP sau ra viện",
+                "ly_do": "Hồ sơ có dấu hiệu nghi ngờ suy tim nhưng không thấy lần đo "
+                         "NT-proBNP nào SAU ngày ra viện để xác nhận xu hướng hồi phục.",
+            })
+
+    # 2. Có Creatinin nhưng thiếu tuổi/giới -> không tính được eGFR
+    creat_item, _ = lab_dates("Creatinin")
+    if creat_item is not None and egfr is None:
+        gaps.append({
+            "muc_do": "trung_binh",
+            "tieu_de": "Có Creatinin nhưng chưa tính được eGFR",
+            "ly_do": "Thiếu tuổi hoặc giới tính trong hồ sơ — cần đủ cả 2 cùng "
+                     "Creatinin để áp dụng công thức CKD-EPI 2021.",
+        })
+
+    # 3. Van cơ học nhưng không đủ số lần đo INR
+    if _is_mechanical_valve(report):
+        inr_item, inr_dates = lab_dates("INR")
+        n_inr = len(inr_item.get("trend") or []) if inr_item else 0
+        if n_inr < 3:
+            gaps.append({
+                "muc_do": "cao",
+                "tieu_de": "Chưa đủ số lần đo INR để đánh giá TTR (% thời gian trong đích)",
+                "ly_do": f"Van cơ học cần theo dõi INR định kỳ; hồ sơ hiện chỉ có "
+                         f"{n_inr} lần đo, cần tối thiểu 3 lần để ước tính độ ổn định.",
+            })
+
+    # 4. Có phẫu thuật/can thiệp nhưng không có siêu âm SAU mổ
+    surgery_date = (report.get("phau_thuat") or {}).get("ngay")
+    if surgery_date:
+        echo_list = (report.get("sieu_am_tim") or {}).get("lan_kham") or []
+        surgery_d = _parse_vn_date(surgery_date)
+        has_post_op_echo = False
+        if surgery_d:
+            for e in echo_list:
+                ed = _parse_vn_date(e.get("ngay"))
+                if ed and ed >= surgery_d:
+                    has_post_op_echo = True
+                    break
+        if not has_post_op_echo:
+            gaps.append({
+                "muc_do": "cao",
+                "tieu_de": "Chưa có siêu âm tim sau phẫu thuật để xác nhận kết quả",
+                "ly_do": "Hồ sơ có ghi nhận phẫu thuật/can thiệp nhưng không thấy lần "
+                         "siêu âm tim nào từ ngày mổ trở đi.",
+            })
+
+    # 5. Ra viện đã lâu nhưng lần xét nghiệm gần nhất quá xa
+    discharge_days_ago = _days_since(discharge_date)
+    if discharge_days_ago is not None and discharge_days_ago > 30:
+        all_dates = []
+        for l in labs:
+            for d in (l.get("trendDates") or []):
+                pd = _parse_vn_date(d)
+                if pd:
+                    all_dates.append(pd)
+        if all_dates:
+            most_recent = max(all_dates)
+            discharge_d = _parse_vn_date(discharge_date)
+            if discharge_d and most_recent <= discharge_d:
+                gaps.append({
+                    "muc_do": "thap",
+                    "tieu_de": "Đã ra viện hơn 30 ngày, chưa có xét nghiệm tái khám mới",
+                    "ly_do": f"Ra viện {discharge_days_ago} ngày trước, nhưng xét nghiệm "
+                             f"gần nhất trong hồ sơ vẫn từ trước/đúng ngày ra viện.",
+                })
+
+    return gaps
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TTR — TIME IN THERAPEUTIC RANGE (mục 9-B4): % thời gian INR trong đích
+# ═══════════════════════════════════════════════════════════════════════════
+# Phương pháp: % ĐƠN GIẢN (số lần đo trong đích / tổng số lần đo) — KHÔNG dùng
+# Rosendaal (nội suy tuyến tính theo thời gian thực) ở bản này, vì cần
+# trendDates đủ chính xác (ngày cụ thể, không phải nhãn như "ra viện") để nội
+# suy đúng khoảng cách thời gian giữa 2 lần đo. Đã quan sát trong dữ liệu thật
+# (MOCK_REPORT ở App.jsx) trendDates của INR có giá trị "ra viện" lẫn ngày cụ
+# thể — không đồng nhất để làm Rosendaal tin cậy. Ghi rõ phương pháp trong
+# output để không gây hiểu lầm là TTR chuẩn quốc tế đầy đủ.
+TTR_TARGET_MIN = 2.0
+TTR_TARGET_MAX = 3.0
+TTR_LOW_THRESHOLD_PERCENT = 65  # ngưỡng kinh điển trong y văn — Tấn/Ngân xác nhận lại
+
+
+def compute_ttr(inr_values: list, target_min: float = TTR_TARGET_MIN,
+                 target_max: float = TTR_TARGET_MAX) -> Optional[dict]:
+    """
+    Tính TTR bằng phương pháp % đơn giản. Trả None nếu không đủ dữ liệu (cần
+    tối thiểu 2 lần đo — 1 lần đo không phản ánh được "thời gian trong đích").
+    """
+    if not inr_values or len(inr_values) < 2:
+        return None
+    in_range = [v for v in inr_values if target_min <= v <= target_max]
+    pct = round(len(in_range) / len(inr_values) * 100, 1)
+    out_of_range = [
+        {"gia_tri": v, "huong": "duoi_dich" if v < target_min else "tren_dich"}
+        for v in inr_values if not (target_min <= v <= target_max)
+    ]
+    return {
+        "phuong_phap": "Tỷ lệ % đơn giản (số lần đo trong đích / tổng số lần đo). "
+                        "KHÔNG phải phương pháp Rosendaal (nội suy thời gian thực), "
+                        "vì cần ngày đo chính xác đồng nhất cho mọi điểm.",
+        "ttr_percent": pct,
+        "so_lan_do": len(inr_values),
+        "so_lan_trong_dich": len(in_range),
+        "dich_dieu_tri": f"{target_min}-{target_max}",
+        "cac_lan_ngoai_dich": out_of_range,
+        "canh_bao_thap": pct < TTR_LOW_THRESHOLD_PERCENT,
+        "dien_giai": (
+            f"TTR {pct}% dưới ngưỡng {TTR_LOW_THRESHOLD_PERCENT}% — chống đông chưa ổn "
+            f"định, cần xem lại liều/tuân thủ điều trị."
+            if pct < TTR_LOW_THRESHOLD_PERCENT else
+            f"TTR {pct}% đạt ngưỡng ổn định tham khảo ({TTR_LOW_THRESHOLD_PERCENT}%)."
+        ),
+        "nhan": "Hỗ trợ quyết định — cần bác sĩ xác nhận",
+    }
+
+
+# ─── HÀM TỔNG: chạy toàn bộ rule engine ───────────────────────────────────────
 def evaluate(report: dict) -> dict:
     """Điểm vào duy nhất. main.py gọi hàm này sau Bước 1 (LLM extraction)."""
-    normalize_clinical_labels(report)
     screens = run_priority_screens(report)
     safety = check_drug_safety(report.get("thuoc_cuoi_ky", []), screens["egfr"], screens["context"])
     trends = build_trend_facts(report)
+
+    # Thang điểm nguy cơ (CHA2DS2-VASc + HAS-BLED) — tất định, không qua LLM.
+    labs = report.get("xet_nghiem_key") or []
+    inr_item = next((l for l in labs if (l.get("key") or "").strip().upper() == "INR"), None)
+    inr_trend = inr_item.get("trend") if inr_item else None
+
+    risk_scores = {
+        "cha2ds2_vasc": compute_cha2ds2_vasc(report),
+        "has_bled": compute_has_bled(report, screens["egfr"], inr_trend),
+    }
+
+    ttr = compute_ttr(inr_trend) if inr_trend else None
+    care_gaps = detect_care_gaps(report, screens["egfr"])
+
     return {
         "egfr": screens["egfr"],
-        "egfr_detail": screens.get("egfr_detail"),
         "priority_findings": screens["findings"],
         "drug_safety": safety,
         "trend_facts": trends["trend_facts"],
+        "risk_scores": risk_scores,
+        "ttr": ttr,
+        "care_gaps": care_gaps,
     }
 
 

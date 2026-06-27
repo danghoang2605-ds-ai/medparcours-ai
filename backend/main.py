@@ -21,6 +21,8 @@ from pydantic import BaseModel
 from pypdf import PdfReader
 import anthropic
 import clinical_rules
+import ecg_engine
+import document_extract
 
 app = FastAPI(title="MediFlow AI", version="1.0.0")
 
@@ -295,17 +297,37 @@ def extract_text_from_pdf(pdf_path: str) -> dict:
     }
 
 
-def call_claude(system: str, user_message: str, max_tokens: int = 4000) -> str:
-    """Call Claude API"""
+def call_claude(system: str, user_message: str, max_tokens: int = 4000,
+                 cache_system: bool = False) -> str:
+    """Call Claude API.
+
+    cache_system=True: đánh dấu block `system` để Anthropic cache lại (ephemeral,
+    TTL ~5 phút). REPORT_SYSTEM dài và LẶP LẠI Y NGUYÊN ở mọi lần phân tích hồ sơ
+    -> ứng viên đúng cho caching. Lần đầu trong 5 phút tốn phí ghi cache (đắt hơn
+    input thường một chút), các lần sau trong cùng cửa sổ chỉ tốn phí đọc cache
+    (giảm ~90% so với input thường). Nếu traffic quá thưa (>5 phút/lần phân tích)
+    thì cache hết hạn trước khi dùng lại -> không có lợi, nhưng cũng không lỗ vì
+    Anthropic tự fallback xử lý như bình thường.
+    """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY chưa được cấu hình")
-    
+
     client = anthropic.Anthropic(api_key=api_key)
+
+    if cache_system:
+        system_param = [{
+            "type": "text",
+            "text": system,
+            "cache_control": {"type": "ephemeral"},
+        }]
+    else:
+        system_param = system
+
     response = client.messages.create(
         model="claude-haiku-4-5",
         max_tokens=max_tokens,
-        system=system,
+        system=system_param,
         messages=[{"role": "user", "content": user_message}]
     )
     return response.content[0].text
@@ -332,7 +354,7 @@ def _strip_accents(s: str) -> str:
     ).lower()
 
 # Từ khóa tín hiệu lâm sàng (đã bỏ dấu, chữ thường). Mỗi từ khóa khác nhau trên
-# một trang cộng 1 điểm. Tấn và Ngân có thể bổ sung danh sách này.
+# một trang cộng 1 điểm MẬT ĐỘ (xem _page_score). Tấn và Ngân có thể bổ sung.
 STRONG_KEYWORDS = [
     # tóm tắt / chẩn đoán / diễn biến / ra vào viện
     "chan doan", "tom tat", "benh su", "tien su", "dien bien", "qua trinh benh",
@@ -351,6 +373,23 @@ STRONG_KEYWORDS = [
     "van dong mach", "van hai la", "van dmc", "tran dich", "mang ngoai tim",
     "suy tim", "hep van", "ho van", "ep tim",
 ]
+
+# Từ khóa BIẾN CỐ CẤP TÍNH: trọng số RẤT CAO, cộng thẳng (không chuẩn hóa theo
+# độ dài trang) — để 1 trang NGẮN ghi nhận biến cố cấp vẫn luôn được giữ, dù
+# các trang "phiếu chăm sóc" lặp lại dài hơn và có nhiều STRONG_KEYWORDS hơn
+# về số lượng thô. ĐÃ PHÁT HIỆN qua test mô phỏng 500 trang: nếu không có cơ
+# chế này, 1 trang ghi "đột ngột tụt huyết áp, gọi cấp cứu" (ngắn, ít từ khóa)
+# bị loại khỏi 120k budget vì thua điểm các trang dài lặp lại sinh hiệu bình
+# thường. Đây là RỦI RO AN TOÀN THẬT, không phải lý thuyết. Tấn/Ngân rà soát
+# và bổ sung thêm từ khóa biến cố cấp khác khi gặp ca thật.
+CRITICAL_EVENT_KEYWORDS = [
+    "dot ngot", "cap cuu", "soc", "ngung tim", "ngung tho", "hon me",
+    "suy ho hap cap", "tut huyet ap", "ngat", "co giat", "xuat huyet cap",
+    "phu phoi cap", "roi loan nhip nguy hiem", "rung that", "vo tam thu",
+    "tu vong", "bao dong", "khan cap", "nguy kich", "chuyen ho suc cap cuu",
+]
+CRITICAL_EVENT_WEIGHT = 50  # đủ lớn để luôn vượt điểm mật độ của trang dài thường
+
 
 def _split_pages(text: str):
     """Tách hồ sơ thành danh sách trang dựa trên marker 'TRANG <số>'.
@@ -371,9 +410,33 @@ def _split_pages(text: str):
         pages.append("\n".join(cur).strip())
     return [p for p in pages if p.strip()]
 
-def _page_score(page_text: str) -> int:
+
+def _page_score(page_text: str) -> float:
+    """
+    Điểm ưu tiên của 1 trang khi cần cắt hồ sơ quá dài (xem select_relevant_text).
+
+    THIẾT KẾ (đã sửa sau khi phát hiện lỗ hổng an toàn qua test mô phỏng 500
+    trang): điểm thô đếm số từ khóa khớp (cách CŨ) khiến trang DÀI LẶP LẠI
+    (vd phiếu chăm sóc hàng ngày, nhiều câu khuôn mẫu chứa "mạch", "huyết áp"…)
+    luôn thắng trang NGẮN nhưng quan trọng (vd 1 dòng ghi nhận biến cố cấp cứu)
+    — vì trang dài tự nhiên chứa nhiều từ khóa hơn về số lượng thô, dù tỷ lệ
+    tín hiệu/nội dung thực ra thấp hơn.
+
+    Sửa bằng 2 thành phần cộng lại:
+      1. Mật độ = (số từ khóa khớp trong STRONG_KEYWORDS) / (số từ trong trang),
+         nhân hệ số 100 để có thang số dễ đọc. Trang ngắn, súc tích, đúng trọng
+         tâm sẽ có mật độ cao hơn trang dài lan man dù số khớp thô ít hơn.
+      2. Cộng thẳng CRITICAL_EVENT_WEIGHT cho MỖI từ khóa biến cố cấp tính khớp
+         được — KHÔNG chia theo độ dài, để đảm bảo các trang này luôn nổi lên
+         đầu danh sách ưu tiên bất kể trang dài hay ngắn.
+    """
     t = _strip_accents(page_text)
-    return sum(1 for kw in STRONG_KEYWORDS if kw in t)
+    n_words = max(1, len(t.split()))
+    strong_hits = sum(1 for kw in STRONG_KEYWORDS if kw in t)
+    density_score = (strong_hits / n_words) * 100
+    critical_hits = sum(1 for kw in CRITICAL_EVENT_KEYWORDS if kw in t)
+    critical_score = critical_hits * CRITICAL_EVENT_WEIGHT
+    return density_score + critical_score
 
 def select_relevant_text(full_text: str, budget: int):
     """
@@ -439,7 +502,8 @@ def run_analysis_pipeline(ho_so_text: str, pages: int = 0,
         raw = call_claude(
             system=REPORT_SYSTEM,
             user_message=f"Hồ sơ bệnh nhân:\n\n{ho_so_text}",
-            max_tokens=16000
+            max_tokens=16000,
+            cache_system=True,
         )
 
         # Bóc JSON chắc chắn: bỏ code fence, lấy từ '{' đầu tiên đến '}' cuối cùng
@@ -488,6 +552,9 @@ def run_analysis_pipeline(ho_so_text: str, pages: int = 0,
                 "priority_findings": engine["priority_findings"],
                 "drug_safety": engine["drug_safety"],
                 "trend_summary": trend_summary,
+                "risk_scores": engine.get("risk_scores"),
+                "ttr": engine.get("ttr"),
+                "care_gaps": engine.get("care_gaps"),
             },
             "meta": {"pages": pages, "method": method, "ocr_pages": ocr_pages,
                      "filtered": filter_meta.get("filtered", False),
@@ -510,27 +577,66 @@ def run_analysis_pipeline(ho_so_text: str, pages: int = 0,
 @app.post("/analyze")
 async def analyze_record(file: UploadFile = File(...)):
     """
-    Upload PDF hồ sơ → bóc text ở server (pypdf) → phân tích.
-    Phù hợp file nhỏ. File lớn nên dùng /analyze_text (bóc chữ ở trình duyệt).
+    Upload hồ sơ → bóc text → phân tích.
+    Hỗ trợ: PDF (pypdf), Word .docx, Excel .xlsx, PowerPoint .pptx
+    (python-docx/openpyxl/python-pptx — text trích trực tiếp, không qua OCR).
+
+    CHƯA hỗ trợ: ảnh (.png/.jpg — cần OCR thật, để dành giai đoạn 2 theo đúng
+    định hướng ban đầu của REPORT_SYSTEM), và .doc/.xls/.ppt định dạng cũ
+    (không phải Open XML, cần thư viện khác). Các loại này trả lỗi 400 RÕ
+    NGHĨA "chưa hỗ trợ định dạng X" — không phải lỗi server chung, để FE hiển
+    thị đúng nguyên nhân cho người dùng.
+
+    File lớn (PDF) nên dùng /analyze_text (bóc chữ ở trình duyệt qua pdf.js).
     """
-    if not file.filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Chỉ chấp nhận file PDF")
+    filename_lower = file.filename.lower()
+    ext = "." + filename_lower.rsplit(".", 1)[-1] if "." in filename_lower else ""
 
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+    if ext == ".pdf":
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            extracted = extract_text_from_pdf(tmp_path)
+            return run_analysis_pipeline(
+                extracted["text"],
+                pages=extracted["pages"],
+                method=extracted["method"],
+                ocr_pages=extracted["ocr_pages"],
+            )
+        finally:
+            os.unlink(tmp_path)
+
+    if ext in document_extract.EXTRACTORS:
         content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+        text, warning, _ = document_extract.extract_from_filename(file.filename, content)
+        if not text.strip():
+            raise HTTPException(
+                status_code=400,
+                detail=warning or f"Không trích được nội dung từ file {ext}.",
+            )
+        return run_analysis_pipeline(text, pages=0, method=f"doc-extract{ext}", ocr_pages=[])
 
-    try:
-        extracted = extract_text_from_pdf(tmp_path)
-        return run_analysis_pipeline(
-            extracted["text"],
-            pages=extracted["pages"],
-            method=extracted["method"],
-            ocr_pages=extracted["ocr_pages"],
+    if ext in document_extract.UNSUPPORTED_BUT_LISTED_IN_UI:
+        if ext in (".png", ".jpg", ".jpeg"):
+            raise HTTPException(
+                status_code=400,
+                detail="Ảnh chụp/scan cần OCR — tính năng này đang phát triển "
+                       "(giai đoạn 2). Hiện tại hệ thống đọc được PDF, Word "
+                       "(.docx), Excel (.xlsx) và PowerPoint (.pptx).",
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Định dạng {ext} (phiên bản cũ) chưa được hỗ trợ. "
+                   f"Vui lòng lưu lại dưới định dạng mới (.docx/.xlsx/.pptx) rồi tải lên.",
         )
-    finally:
-        os.unlink(tmp_path)
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"Không nhận diện được định dạng file {ext or '(không có đuôi)'}. "
+               f"Hỗ trợ: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx).",
+    )
 
 
 class AnalyzeTextRequest(BaseModel):
@@ -557,37 +663,129 @@ class ChatRequest(BaseModel):
 @app.post("/chat")
 async def chat(request: ChatRequest):
     """
-    Chat với AI về hồ sơ bệnh nhân
+    Chat với AI về hồ sơ bệnh nhân.
+
+    THIẾT KẾ CACHE: ho_so_text (~7.000 token, theo ước tính chi phí) được đưa vào
+    block `system` thay vì nối vào nội dung câu hỏi như trước, vì Prompt Caching
+    của Anthropic chỉ cache được phần đặt trong `system` (hoặc đầu `messages`),
+    không cache được text nối tay vào giữa 1 message. Đưa ho_so_text vào system
+    cũng hợp lý hơn về ngữ nghĩa: đây là CONTEXT CỐ ĐỊNH cho cả cuộc hội thoại,
+    không phải nội dung bác sĩ gõ ra mỗi lượt.
+    Hệ quả: nếu bác sĩ hỏi nhiều câu liên tiếp về CÙNG một bệnh nhân trong vòng
+    ~5 phút (TTL cache), từ câu hỏi thứ 2 trở đi chỉ tốn phí đọc cache (~giảm 90%)
+    cho phần hồ sơ, đúng với giả lập "Dung lượng ngữ cảnh tái sử dụng" đã nêu
+    trong proposal GTM.
     """
-    # Build messages with history
+    # messages chỉ chứa câu hỏi + lịch sử hội thoại (KHÔNG nhúng hồ sơ vào đây
+    # nữa, để giữ system ổn định -> cache mới khớp được giữa các lượt).
     messages = []
     for msg in request.chat_history[-6:]:  # Giữ 3 turns gần nhất
         messages.append(msg)
-    
-    # Add current question with context
-    user_msg = f"""Hồ sơ bệnh nhân:
-{request.ho_so_text}
+    messages.append({"role": "user", "content": request.question})
 
----
-Câu hỏi của bác sĩ: {request.question}"""
-    
-    messages.append({"role": "user", "content": user_msg})
-    
+    system_with_context = (
+        f"{CHAT_SYSTEM}\n\n---\nHồ sơ bệnh nhân (dùng để trả lời các câu hỏi "
+        f"tiếp theo):\n{request.ho_so_text}"
+    )
+
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY chưa được cấu hình")
-    
+
     client = anthropic.Anthropic(api_key=api_key)
     response = client.messages.create(
         model="claude-haiku-4-5",
         max_tokens=1000,
-        system=CHAT_SYSTEM,
+        system=[{
+            "type": "text",
+            "text": system_with_context,
+            "cache_control": {"type": "ephemeral"},
+        }],
         messages=messages
     )
-    
+
     answer = response.content[0].text
     
     return {
         "answer": answer,
         "tokens_used": response.usage.input_tokens + response.usage.output_tokens
+    }
+
+
+# ─── ECG (Mức 1: số hóa + vẽ lại) ────────────────────────────────────────────
+# ĐỊNH VỊ AN TOÀN: chỉ trực quan hóa hỗ trợ, KHÔNG chẩn đoán. Không trả bất kỳ
+# nhãn lâm sàng nào (không "AFib", không "nhịp chậm"...). FE hiển thị PHẢI kèm
+# nhãn "cần bác sĩ xác nhận" cho mọi nội dung từ endpoint này.
+
+class EcgDigitizeRequest(BaseModel):
+    image_base64: str  # Ảnh ECG (PNG/JPG) đã encode base64, có hoặc không kèm data URI prefix
+
+
+@app.post("/ecg")
+async def ecg_digitize(request: EcgDigitizeRequest):
+    """
+    Nhận ảnh ECG (base64) -> số hóa Mức 1 (signal[]) + Mức 2 (ước lượng nhịp
+    tim qua khoảng R-R) -> trả cho FE vẽ lại bằng SVG.
+    KHÔNG xử lý ảnh ở client (OpenCV.js quá nặng, phá kiến trúc single-file FE) -
+    mọi xử lý ảnh đều ở backend.
+
+    MỨC 2 LUÔN LÀ ƯỚC LƯỢNG (uoc_luong=True trong heart_rate): tỉ lệ pixel/mm
+    được tự suy ra từ lưới ảnh (estimate_px_per_mm), không phải đo trực tiếp.
+    Nếu không tìm được lưới rõ, bpm_avg sẽ là None kèm warning rõ — KHÔNG bao
+    giờ tự đoán đại 1 số để có vẻ "có kết quả".
+    """
+    img = ecg_engine.decode_base64_image(request.image_base64)
+    if img is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Không đọc được ảnh. Kiểm tra lại định dạng base64 (PNG/JPG)."
+        )
+    result = ecg_engine.digitize_ecg_image(img)
+    calib = ecg_engine.estimate_px_per_mm(img)
+    r_peaks = ecg_engine.detect_r_peaks(result["signal"])
+    heart_rate = ecg_engine.compute_heart_rate(r_peaks["rr_intervals_px"], calib["px_per_mm"])
+    return {
+        "success": True,
+        **result,
+        "calibration": calib,
+        "r_peaks": r_peaks,
+        "heart_rate": heart_rate,
+        "disclaimer": "Kết quả số hóa và ước tính nhịp tim chỉ mang tính trực quan "
+                       "hóa hỗ trợ, cần bác sĩ xác nhận. Không phải kết luận chẩn đoán. "
+                       "Tỉ lệ pixel/mm được tự suy ra từ lưới ảnh — luôn là ƯỚC LƯỢNG, "
+                       "không phải đo trực tiếp từ thước chuẩn.",
+    }
+
+
+@app.get("/ecg/synthetic")
+async def ecg_synthetic_test(heart_rate_bpm: float = 75.0):
+    """
+    Sinh 1 ảnh ECG TỔNG HỢP (giả, không phải dữ liệu bệnh nhân thật) + số hóa
+    + ước tính nhịp tim, để FE/Postman test pipeline /ecg trong lúc CHƯA CÓ
+    ảnh thật từ anh Tấn. Trả cả ảnh (base64, để FE hiển thị "ảnh gốc") và kết
+    quả số hóa + nhịp tim.
+
+    heart_rate_bpm: nhịp tim mong muốn mô phỏng (mặc định 75 — nhịp xoang
+    bình thường). Dùng để test xem pipeline Mức 2 có tính ra đúng số không
+    (vd ?heart_rate_bpm=100 để test nhịp nhanh).
+    """
+    img = ecg_engine.generate_synthetic_ecg(heart_rate_bpm=heart_rate_bpm)
+    img_b64 = ecg_engine.encode_image_to_base64_png(img)
+    if img_b64 is None:
+        raise HTTPException(status_code=500, detail="Không tạo được ảnh test.")
+    result = ecg_engine.digitize_ecg_image(img)
+    calib = ecg_engine.estimate_px_per_mm(img)
+    r_peaks = ecg_engine.detect_r_peaks(result["signal"])
+    heart_rate = ecg_engine.compute_heart_rate(r_peaks["rr_intervals_px"], calib["px_per_mm"])
+    return {
+        "success": True,
+        "is_synthetic": True,
+        "synthetic_target_bpm": heart_rate_bpm,
+        "image_base64": img_b64,
+        **result,
+        "calibration": calib,
+        "r_peaks": r_peaks,
+        "heart_rate": heart_rate,
+        "disclaimer": "Đây là ảnh ECG TỔNG HỢP (giả) dùng để test pipeline, "
+                       "không phải dữ liệu bệnh nhân thật.",
     }
