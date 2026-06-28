@@ -26,26 +26,27 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install esbuild + React (đóng gói trực tiếp vào bundle, không CDN)
+      - name: Install dependencies
         run: npm install esbuild@0.27.7 react@19.2.6 react-dom@19.2.6
 
-      - name: Chuẩn bị thư mục build
+      - name: Prepare build folder
         run: |
           mkdir -p build
           cp App.jsx build/App.jsx
           cp docker_setup/mount.jsx build/mount.jsx
 
-      - name: Build bundle.js từ mount.jsx
+      - name: Build bundle
         run: |
-          npx esbuild build/mount.jsx --bundle --loader:.jsx=jsx \
-            --jsx=automatic --format=esm --outfile=dist/mount.js --minify
+          mkdir -p dist
+          npx esbuild build/mount.jsx --bundle --loader:.jsx=jsx --jsx=automatic --format=esm --outfile=dist/mount.js --minify
 
-      - name: Copy index.html vào dist/
+      - name: Copy index.html
         run: cp index.html dist/index.html
 
-      - name: Copy logos/ vào dist/
+      - name: Copy logos folder
         run: |
-          if [ -d logos ]; then cp -r logos dist/logos; fi
+          mkdir -p dist/logos
+          cp -r logos/. dist/logos/ || true
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -55,4 +56,6 @@ jobs:
         with:
           path: dist
 
-      -
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
