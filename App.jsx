@@ -645,10 +645,17 @@ const CSS = `
   .prob-tag{font-size:10px;font-weight:700;padding:1px 8px;border-radius:999px;background:#fff;border:1px solid}
   .prob-tag.resolved{color:#059669;border-color:#A7F3D0;background:#ECFDF5}
   .prob-desc{font-size:11.5px;color:var(--navy2);line-height:1.5;margin-top:2px}
-  .next-hd{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#B45309;margin-bottom:12px}
+  .next-hd{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#B45309;margin-bottom:10px}
+  .next-prog-txt{font-size:11.5px;font-weight:700;color:#B45309;white-space:nowrap}
+  .next-bar{height:7px;background:#F4E3C8;border-radius:999px;overflow:hidden;margin-bottom:12px}
+  .next-bar-fill{height:100%;background:linear-gradient(90deg,#F59E0B,#FBBF24);border-radius:999px;transition:width .5s cubic-bezier(.22,1,.36,1)}
   .next-list{display:flex;flex-direction:column;gap:9px}
-  .next-item{display:flex;gap:11px;align-items:flex-start}
-  .next-num{flex-shrink:0;width:22px;height:22px;border-radius:50%;background:#1D6FE8;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .next-item{display:flex;gap:11px;align-items:flex-start;cursor:pointer;padding:9px 11px;border-radius:10px;border:1px solid transparent;transition:all .15s}
+  .next-item:hover{border-color:#F0DEC2;background:rgba(255,255,255,0.5);transform:translateX(2px)}
+  .next-box{flex-shrink:0;width:20px;height:20px;border-radius:6px;border:2px solid #D6A85C;display:inline-flex;align-items:center;justify-content:center;margin-top:1px;transition:all .15s;background:#fff}
+  .next-item.done .next-box{background:#B45309;border-color:#B45309}
+  .next-item.done .next-viec{text-decoration:line-through;color:var(--muted)}
+  .next-item.done{opacity:.7}
   .next-viec{font-size:13.5px;font-weight:600;color:var(--navy);line-height:1.4}
   .next-lydo{font-size:12px;color:var(--navy2);line-height:1.5;margin-top:2px}
   .lab-clarify{font-size:12px;color:#92400E;background:rgba(255,251,235,0.7);border:1px solid #FDE68A;border-radius:9px;padding:8px 11px;margin-bottom:11px;line-height:1.5}
@@ -2522,7 +2529,11 @@ async function countPdfPages(file) {
 }
 
 // ─── LOGO ĐỐI TÁC / ĐƠN VỊ ─────────────────────────────────────────────────────
-// Đặt file ảnh vào thư mục public/logos/ với đúng tên bên dưới (khớp tên file thật).
+// Đặt file ảnh vào thư mục logos/ Ở GỐC REPO (KHÔNG phải public/logos/ —
+// đó là quy ước cũ của Vite, không áp dụng cho cấu trúc hiện tại) với đúng
+// tên bên dưới. GitHub Actions (.github/workflows/deploy-pages.yml) và
+// Dockerfile.frontend đều có bước copy logos/ vào bản deploy — nếu thiếu
+// logo, kiểm tra file ảnh có đúng tên VÀ đúng ở logos/ (gốc) chưa.
 const PARTNER_GROUPS = [
   { label:"Cuộc thi",            logos:[{ file:"hackaithon.png", alt:"HackAIthon 2026" }] },
   { label:"Đơn vị tổ chức",      logos:[{ file:"hoi-sinh-vien.png", alt:"Hội Sinh viên Việt Nam" }, { file:"vietcombank.png", alt:"Vietcombank" }] },
@@ -2766,7 +2777,6 @@ const NAV_GROUPS = [
     {id:"sec-takeaway", label:"Kết luận nhanh",     icon:<Icon.ShieldCheck d={11}/>},
     {id:"sec-problems", label:"Trạng thái vấn đề",  icon:<Icon.Octagon d={11}/>},
     {id:"sec-actions",  label:"Hành động ưu tiên",  icon:<Icon.Layers d={11}/>},
-    {id:"sec-checklist", label:"Việc cần làm",       icon:<Icon.ShieldCheck d={11}/>},
   ]},
   { group:"3 giai đoạn", items:[
     {id:"sec-phase1", label:"Giai đoạn 1: Tiền phẫu", icon:<Icon.Dot color="#8B5CF6"/>},
@@ -3449,28 +3459,54 @@ function ClinicalTakeaway({ items, pkey }) {
 }
 
 // ─── HÀNH ĐỘNG ƯU TIÊN (Next Actions) ─────────────────────────────────────────
-function NextActions({ items }) {
+// GỘP với checklist (trước đây "Việc cần làm" / FollowupChecklist là 1 card riêng
+// hiển thị TRÙNG y hệt dữ liệu hanh_dong_uu_tien — đã gộp thành 1 card duy nhất
+// theo feedback: vẫn giữ khung amber nổi bật ("ưu tiên"), nhưng items giờ là
+// checkbox tương tác + progress bar (giá trị thực hơn số thứ tự tĩnh cũ).
+// Trạng thái tick vẫn lưu sessionStorage theo bệnh nhân (pkey), giữ đúng hành vi
+// cũ của FollowupChecklist.
+function NextActions({ items, pkey }) {
   const [collapsed, setCollapsed] = useGlobalCollapse(false)
+  const skey = "mp_chk_" + (pkey || "x")
+  const [done, setDone] = useState(() => { try { return JSON.parse(sessionStorage.getItem(skey) || "[]") } catch { return [] } })
   if (!items || !items.length) return null
+  const toggle = (i) => setDone(prev => {
+    const next = prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]
+    try { sessionStorage.setItem(skey, JSON.stringify(next)) } catch {}
+    return next
+  })
+  const total = items.length
+  const completed = done.filter(i => i < total).length
+  const pct = total ? Math.round(completed / total * 100) : 0
+  const detail = items.map((a, i) => `[${done.includes(i) ? "x" : " "}] ${a.viec || ""}${a.ly_do ? " - " + a.ly_do : ""}`).join("\n")
   return (
     <div id="sec-actions" className="next-actions">
-      <div className="next-hd"><Icon.ShieldCheck d={16} color="#B45309"/><span>Hành động ưu tiên ở lần tái khám tới</span>
-        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><FlagBtn pkey={CURRENT_PKEY} label="Hành động ưu tiên ở lần tái khám tới" sub="Mục báo cáo" detail={()=>items.map((a,i)=>`${i+1}. ${a.viec||""}${a.ly_do?" - "+a.ly_do:""}`).join("\n")}/><CopyBtn text={()=>items.map((a,i)=>`${i+1}. ${a.viec||""}${a.ly_do?" - "+a.ly_do:""}`).join("\n")} label=""/></span>
+      <div className="next-hd">
+        <Icon.ShieldCheck d={16} color="#B45309"/><span>Hành động ưu tiên ở lần tái khám tới</span>
+        <span className="next-prog-txt">{completed}/{total} xong</span>
+        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><FlagBtn pkey={pkey || CURRENT_PKEY} label="Hành động ưu tiên ở lần tái khám tới" sub="Mục báo cáo" detail={detail}/><CopyBtn text={detail} label=""/></span>
         <button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"6px" }}>
           {collapsed ? <Icon.ChevDown d={14} color="#B45309"/> : <Icon.ChevUp d={14} color="#B45309"/>}
         </button>
       </div>
+      <div className="next-bar"><div className="next-bar-fill" style={{ width: pct + "%" }}/></div>
       {!collapsed && (
         <div className="next-list">
-          {items.map((a,i) => (
-            <div key={i} className="next-item">
-              <span className="next-num">{a.uu_tien}</span>
-              <div className="next-body">
-                <div className="next-viec">{a.viec}</div>
-                {a.ly_do && <div className="next-lydo">{a.ly_do}</div>}
+          {items.map((a,i) => {
+            const checked = done.includes(i)
+            return (
+              <div key={i} className={"next-item" + (checked ? " done" : "")} onClick={() => toggle(i)} role="button" tabIndex={0}
+                onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(i) } }}>
+                <span className="next-box" aria-hidden="true">
+                  {checked && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>}
+                </span>
+                <div className="next-body">
+                  <div className="next-viec">{a.viec}</div>
+                  {a.ly_do && <div className="next-lydo">{a.ly_do}</div>}
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>
@@ -4247,52 +4283,6 @@ function VisitCompare({ report: r }) {
   )
 }
 
-// ─── CHECKLIST VIỆC CẦN LÀM (tương tác, lưu trạng thái theo bệnh nhân) ─────────
-function FollowupChecklist({ items, pkey }) {
-  const skey = "mp_chk_" + (pkey || "x")
-  const [done, setDone] = useState(() => { try { return JSON.parse(sessionStorage.getItem(skey) || "[]") } catch { return [] } })
-  if (!items || !items.length) return null
-  const toggle = (i) => setDone(prev => {
-    const next = prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]
-    try { sessionStorage.setItem(skey, JSON.stringify(next)) } catch {}
-    return next
-  })
-  const total = items.length
-  const completed = done.filter(i => i < total).length
-  const pct = total ? Math.round(completed / total * 100) : 0
-  const detail = items.map((a, i) => `[${done.includes(i) ? "x" : " "}] ${a.viec || ""}${a.ly_do ? " - " + a.ly_do : ""}`).join("\n")
-  return (
-    <section id="sec-checklist" className="ckl-wrap">
-      <div className="ckl-head">
-        <span className="ckl-title"><Icon.Layers d={15} color="#1D6FE8"/> VIỆC CẦN LÀM</span>
-        <span className="ckl-prog-txt">{completed}/{total} xong</span>
-        <div className="ckl-bar"><div className="ckl-bar-fill" style={{ width: pct + "%" }}/></div>
-        <span className="sec-tools" onClick={e => e.stopPropagation()}>
-          <FlagBtn pkey={pkey} label="Việc cần làm" sub="Theo dõi tiến độ" detail={detail}/>
-          <CopyBtn text={detail}/>
-        </span>
-      </div>
-      <ul className="ckl-list">
-        {items.map((a, i) => {
-          const checked = done.includes(i)
-          return (
-            <li key={i} className={"ckl-item" + (checked ? " done" : "")} onClick={() => toggle(i)} role="button" tabIndex={0}
-              onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(i) } }}>
-              <span className="ckl-box" aria-hidden="true">
-                {checked && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>}
-              </span>
-              <div className="ckl-body">
-                <div className="ckl-viec">{a.viec}</div>
-                {a.ly_do && <div className="ckl-ly">{a.ly_do}</div>}
-              </div>
-            </li>
-          )
-        })}
-      </ul>
-    </section>
-  )
-}
-
 // ─── BIỂU ĐỒ XU HƯỚNG TỔNG HỢP (% so với lần đo đầu, đa chỉ số) ────────────────
 const MT_COLORS = ["#1D6FE8","#EF4444","#F59E0B","#0E9488","#8B5CF6","#EC4899","#0EA5E9","#65A30D"]
 function MultiTrend({ report: r }) {
@@ -4482,8 +4472,7 @@ function ReportTab({ report: r, analysis }) {
       {r.clinical_takeaway && <ClinicalTakeaway items={r.clinical_takeaway} pkey={r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an}/>}
 
       {r.problem_status && <ProblemStatus data={r.problem_status} pkey={r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an}/>}
-      {r.hanh_dong_uu_tien && r.hanh_dong_uu_tien.length > 0 && <NextActions items={r.hanh_dong_uu_tien}/>}
-      {r.hanh_dong_uu_tien && r.hanh_dong_uu_tien.length > 0 && <FollowupChecklist items={r.hanh_dong_uu_tien} pkey={r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an}/>}
+      {r.hanh_dong_uu_tien && r.hanh_dong_uu_tien.length > 0 && <NextActions items={r.hanh_dong_uu_tien} pkey={r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an}/>}
 
       {/* BA GIAI ĐOẠN (chỉ khi xác định được mốc phẫu thuật) */}
       {phaseInfo.surg ? (
@@ -6028,6 +6017,10 @@ body.theme-dark .reason-phase{background:#1B2536;border-color:var(--border)}
 body.theme-dark .echo-bar-title{color:#EAF1FB}
 body.theme-dark .next-actions{background:#231D11;border-color:#473a20;border-left-color:#FBBF24}
 body.theme-dark .next-actions,body.theme-dark .next-actions .na-viec,body.theme-dark .next-actions .na-ly,body.theme-dark .next-actions li,body.theme-dark .next-actions p,body.theme-dark .next-actions span{color:#E7DCC8}
+body.theme-dark .next-bar{background:#3A2E14}
+body.theme-dark .next-box{background:#231D11;border-color:#6B5A2E}
+body.theme-dark .next-item:hover{background:rgba(255,255,255,0.04);border-color:#473a20}
+body.theme-dark .next-item.done .next-viec{color:#9C8B6A}
 body.theme-dark .medio{background:#201A0C;border-color:#3a3119}
 /* ===== DARK MODE v3: toi hoa cac the translucent bi nhat ===== */
 body.theme-dark .lab-cell{background:#141E2C;border-color:#2A3A52}
@@ -6139,25 +6132,6 @@ body.theme-dark .tls-nav-btn:hover{background:#1E2A40}
 body.theme-dark .lab-sys-chip{background:#141E2C;border-color:#2A3A52;color:#C6D5E8}
 body.theme-dark .lab-sys-chip:hover{border-color:#3B82F6;color:#7FB0FF}
 body.theme-dark .lab-sys-chip.on{background:#1D6FE8;border-color:#1D6FE8;color:#fff}
-/* ===== CHECKLIST viec can lam ===== */
-.ckl-wrap{max-width:1100px;margin:0 auto 20px;background:#fff;border:1px solid var(--border);border-radius:16px;padding:16px 18px;box-shadow:var(--shadow-sm)}
-.ckl-head{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
-.ckl-title{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:800;letter-spacing:.06em;color:var(--navy);text-transform:uppercase}
-.ckl-prog-txt{font-size:11.5px;font-weight:700;color:var(--blue);white-space:nowrap}
-.ckl-bar{flex:1;min-width:120px;height:7px;background:var(--page-bg);border-radius:999px;overflow:hidden}
-.ckl-bar-fill{height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan));border-radius:999px;transition:width .5s cubic-bezier(.22,1,.36,1)}
-.ckl-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
-.ckl-item{display:flex;align-items:flex-start;gap:11px;padding:11px 13px;border:1px solid var(--border);border-radius:11px;cursor:pointer;transition:all .15s;background:var(--page-bg)}
-.ckl-item:hover{border-color:var(--blue);transform:translateX(2px)}
-.ckl-box{flex-shrink:0;width:20px;height:20px;border-radius:6px;border:2px solid var(--muted2);display:inline-flex;align-items:center;justify-content:center;margin-top:1px;transition:all .15s}
-.ckl-item.done .ckl-box{background:var(--blue);border-color:var(--blue)}
-.ckl-viec{font-size:13.5px;font-weight:600;color:var(--navy);line-height:1.45}
-.ckl-ly{font-size:12px;color:var(--muted);line-height:1.5;margin-top:2px}
-.ckl-item.done .ckl-viec{text-decoration:line-through;color:var(--muted)}
-.ckl-item.done{opacity:.72}
-body.theme-dark .ckl-wrap{background:#0F1A2A;border-color:#2A3A52}
-body.theme-dark .ckl-item{background:#141E2C;border-color:#2A3A52}
-body.theme-dark .ckl-bar{background:#1A2536}
 /* ===== XU HUONG TONG HOP (MultiTrend) ===== */
 .mt-chips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px}
 .mt-chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--muted);background:#fff;border:1px solid var(--border);border-radius:999px;padding:5px 12px;cursor:pointer;transition:all .15s}
