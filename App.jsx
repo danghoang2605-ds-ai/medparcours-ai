@@ -136,36 +136,38 @@ const CSS = `
   .collapse-btn{width:24px;height:24px;border-radius:7px;border:none;background:rgba(29,111,232,0.07);cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--muted);transition:all .15s;flex-shrink:0;font-size:11px}
   .collapse-btn:hover{background:rgba(29,111,232,0.14);color:var(--blue)}
   .card-tool-btn{width:24px;height:24px;border-radius:7px;border:none;background:transparent;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;color:#B6C2D4;transition:all .15s;flex-shrink:0}
+  .prio-tools-light .card-tool-btn{color:rgba(255,255,255,0.65)}
+  .prio-tools-light .card-tool-btn:hover{background:rgba(255,255,255,0.15);color:#fff}
+  .prio-tools-light .card-tool-btn.has-content{background:rgba(255,255,255,0.2);color:#fff}
   .card-tool-btn:hover{background:rgba(29,111,232,0.1);color:var(--blue)}
   .card-tool-btn.has-content{background:rgba(29,111,232,0.08)}
-  .card-edit-display{margin-top:14px;padding:11px 13px;background:#EFF6FF;border:1px solid #BFDBFE;border-left:3px solid #1D6FE8;border-radius:10px}
-  .card-edit-display-hd{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:#1D6FE8;text-transform:uppercase;letter-spacing:.03em;margin-bottom:5px}
-  .card-edit-display-txt{font-size:13px;color:var(--navy);line-height:1.55;white-space:pre-wrap}
-  .card-edit-box{padding:13px 18px;border-top:1px solid var(--border);background:#F8FAFC}
-  .card-edit-ta{width:100%;min-height:80px;border:1px solid #BFDBFE;border-radius:10px;padding:10px 12px;font-size:13px;font-family:inherit;color:var(--navy);resize:vertical;box-sizing:border-box}
-  .card-edit-ta:focus{outline:none;border-color:#1D6FE8;box-shadow:0 0 0 3px rgba(29,111,232,.12)}
+  .card-edit-live{padding:11px 13px;border:2px dashed #BFDBFE;border-radius:10px;font-size:13px;color:var(--navy);line-height:1.6;min-height:40px;outline:none}
+  .card-edit-live:focus{border-color:#1D6FE8;box-shadow:0 0 0 3px rgba(29,111,232,.12)}
   .card-edit-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:9px}
   .card-edit-cancel{padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:#fff;color:var(--muted2);font-size:12.5px;font-weight:600;cursor:pointer}
   .card-edit-cancel:hover{background:#F1F5F9}
   .card-edit-save{padding:6px 16px;border-radius:8px;border:none;background:#1D6FE8;color:#fff;font-size:12.5px;font-weight:600;cursor:pointer}
   .card-edit-save:hover{background:#1A5FCC}
-  .card-note-box{display:flex;align-items:center;gap:9px;padding:10px 18px;border-top:1px dashed #FBBF24;background:#FFFBEB}
-  .card-note-input{flex:1;border:none;background:transparent;font-size:13px;color:#92400E;font-family:inherit;outline:none}
-  .card-note-input::placeholder{color:#D6A85C}
-  .card-note-saved{cursor:pointer}
-  .card-note-saved-txt{flex:1;font-size:13px;color:#92400E;white-space:pre-wrap;line-height:1.5}
+  .wnote-panel{margin:0 18px 14px;border:1px solid #FBBF24;border-radius:12px;background:#FFFBEB;overflow:hidden}
+  .wnote-head{display:flex;align-items:center;gap:8px;padding:9px 13px;font-size:12px;font-weight:700;color:#92400E;text-transform:uppercase;letter-spacing:.03em;border-bottom:1px solid #FDE68A}
+  .wnote-close{margin-left:auto;border:none;background:transparent;cursor:pointer;display:inline-flex;padding:2px}
+  .wnote-ta{width:100%;min-height:70px;border:none;background:transparent;padding:11px 13px;font-size:13px;font-family:inherit;color:#78350F;resize:vertical;box-sizing:border-box;outline:none}
+  .wnote-ta::placeholder{color:#D6A85C}
+  .wnote-bar{display:flex;align-items:center;gap:8px;padding:7px 13px 11px}
+  .wnote-mic{display:inline-flex;align-items:center;gap:6px;border:1px solid #FBBF24;background:#fff;color:#92400E;border-radius:999px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer}
+  .wnote-mic.on{background:#DC2626;color:#fff;border-color:#DC2626}
+  .wnote-mic:disabled{opacity:.5;cursor:not-allowed}
+  .wnote-save{border:none;background:#D97706;color:#fff;border-radius:999px;padding:5px 16px;font-size:12px;font-weight:600;cursor:pointer}
+  .wnote-save:hover{background:#B45309}
   body.theme-dark .card-tool-btn{color:#5A6B85}
   body.theme-dark .card-tool-btn:hover{background:rgba(127,176,255,.12);color:#7FB0FF}
   body.theme-dark .card-tool-btn.has-content{background:rgba(127,176,255,.1)}
-  body.theme-dark .card-edit-display{background:#0F1A2C;border-color:#28364E;border-left-color:#5FA8FF}
-  body.theme-dark .card-edit-display-hd{color:#7FB0FF}
-  body.theme-dark .card-edit-display-txt{color:#EAF1FB}
-  body.theme-dark .card-edit-box{background:#0F1A2C;border-color:#28364E}
-  body.theme-dark .card-edit-ta{background:#141E2C;border-color:#2A3A52;color:#EAF1FB}
+  body.theme-dark .card-edit-live{background:#141E2C;border-color:#2A3A52;color:#EAF1FB}
   body.theme-dark .card-edit-cancel{background:#1B2536;border-color:#2F4368;color:#9FB3CC}
-  body.theme-dark .card-note-box{background:#241E10;border-top-color:#5c4a1a}
-  body.theme-dark .card-note-input,body.theme-dark .card-note-saved-txt{color:#FCD34D}
-  body.theme-dark .card-note-input::placeholder{color:#8A6F2E}
+  body.theme-dark .wnote-panel{background:#241E10;border-color:#5c4a1a}
+  body.theme-dark .wnote-head{color:#FCD34D;border-bottom-color:#5c4a1a}
+  body.theme-dark .wnote-ta{color:#FCD34D}
+  body.theme-dark .wnote-mic{background:#1B1408;border-color:#5c4a1a;color:#FCD34D}
 
   .badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:4px 10px;border-radius:8px;border:1px solid;white-space:nowrap}
   .badge-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
@@ -189,7 +191,7 @@ const CSS = `
   .bullet-list li::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--blue);flex-shrink:0;margin-top:6px}
 
   /* UPLOAD */
-  .upload-page{min-height:100vh;position:relative;overflow:hidden;background:var(--page-bg)}
+  .upload-page{min-height:100vh;position:relative;overflow-x:hidden;background:var(--page-bg)}
   .upload-bg-circle1{position:absolute;top:-80px;right:-80px;width:400px;height:400px;border-radius:50%;background:radial-gradient(circle,rgba(29,111,232,0.07) 0%,transparent 70%);pointer-events:none}
   .upload-bg-circle2{position:absolute;bottom:0;left:-60px;width:320px;height:320px;border-radius:50%;background:radial-gradient(circle,rgba(6,182,212,0.06) 0%,transparent 70%);pointer-events:none}
   .top-nav{position:relative;z-index:10;padding:16px 40px;background:rgba(255,255,255,0.7);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-bottom:1px solid rgba(200,220,255,0.4);display:flex;align-items:center;justify-content:space-between}
@@ -201,7 +203,8 @@ const CSS = `
   .status-pill{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:6px 14px;border-radius:999px;background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.2);color:#0E7490}
   .status-dot{width:7px;height:7px;border-radius:50%;background:#2DD4BF;animation:blink 2s infinite}
   @keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
-  .hero-wrap{position:relative;z-index:10;max-width:1180px;margin:0 auto;padding:52px 44px 32px;display:grid;grid-template-columns:3fr 2fr;gap:72px;align-items:center}
+  .hero-wrap{position:relative;z-index:10;max-width:1280px;margin:0 auto;padding:52px 32px 32px;display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center}
+  @media(max-width:900px){.hero-wrap{grid-template-columns:1fr;padding:32px 20px 24px;gap:28px}}
   .hero-tag{display:inline-flex;align-items:center;gap:9px;background:rgba(29,111,232,0.08);border:1px solid rgba(29,111,232,0.18);color:var(--blue);padding:10px 16px;border-radius:14px;margin-bottom:18px}
   .hero-tag-lines{display:flex;flex-direction:column;gap:1px;line-height:1.34}
   .hero-tag-lines span{font-size:12px;font-weight:600}
@@ -220,12 +223,11 @@ const CSS = `
   .upload-zone{border-radius:28px;padding:44px 36px;text-align:center;cursor:pointer;transition:all .2s;border:2px dashed rgba(29,111,232,0.3);background:rgba(255,255,255,0.82);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);box-shadow:0 8px 40px rgba(30,80,200,0.1)}
   .upload-zone:hover{border-color:var(--blue);background:rgba(235,244,255,0.6)}
   .upload-zone.drag{border-color:var(--blue);background:rgba(235,244,255,0.7);transform:scale(1.012);box-shadow:0 0 0 6px rgba(29,111,232,0.08),0 12px 40px rgba(29,111,232,0.12)}
-  .upload-choice-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  @media(max-width:760px){.upload-choice-row{grid-template-columns:1fr}}
-  .upload-choice{padding:32px 22px}
-  .upload-choice-ecg{border-color:rgba(220,38,38,0.28)}
-  .upload-choice-ecg:hover{border-color:#DC2626;background:rgba(254,242,242,0.6)}
-  .upload-icon-ecg{background:linear-gradient(135deg,rgba(220,38,38,0.1),rgba(251,146,60,0.1))}
+  .upload-merged{padding:36px 26px;min-height:340px;display:flex;align-items:center;justify-content:center}
+  .upload-merged-inner{width:100%;text-align:center}
+  .upload-merged-actions{display:flex;gap:12px;justify-content:center;margin:18px 0 20px;flex-wrap:wrap}
+  .upload-merged-actions .btn-primary{flex:1;min-width:170px;justify-content:center}
+  @media(max-width:480px){.upload-merged-actions{flex-direction:column}.upload-merged-actions .btn-primary{min-width:0}}
   .upload-icon{width:70px;height:70px;margin:0 auto 18px;border-radius:20px;background:linear-gradient(135deg,rgba(29,111,232,0.1),rgba(6,182,212,0.1));display:flex;align-items:center;justify-content:center}
   .upload-title{font-size:17.5px;font-weight:600;color:var(--navy);margin-bottom:6px}
   .upload-sub{font-size:14px;color:var(--muted);margin-bottom:22px}
@@ -294,13 +296,15 @@ const CSS = `
 
   /* REPORT NAV */
   .report-nav{position:sticky;top:0;z-index:50;background:rgba(255,255,255,0.92);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom:1px solid var(--border);box-shadow:0 1px 0 rgba(16,41,66,0.04),0 4px 16px rgba(16,41,66,0.04)}
-  .report-nav-inner{max-width:1120px;margin:0 auto;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between}
+  .report-nav-inner{max-width:1120px;margin:0 auto;padding:10px 24px 8px;display:flex;flex-direction:column;gap:9px}
+  .nav-row1{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .nav-row2{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
   .nav-left{display:flex;align-items:center;gap:14px}
   .nav-sep{color:rgba(200,220,255,0.5);font-size:10px}
-  .nav-patient{display:flex;align-items:center;gap:8px}
+  .nav-patient{display:flex;align-items:center;gap:8px;min-width:0}
   .patient-avatar{width:28px;height:28px;flex:0 0 28px;flex-shrink:0;border-radius:50%;background:linear-gradient(135deg,#DBEAFE,#BFDBFE);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--blue)}
-  .patient-name{font-size:13px;font-weight:600;color:var(--navy2)}
-  .patient-meta{font-size:11px;background:rgba(29,111,232,0.08);color:var(--navy3);padding:3px 8px;border-radius:6px}
+  .patient-name{font-size:13.5px;font-weight:600;color:var(--navy2);white-space:nowrap}
+  .patient-meta{font-size:11px;background:rgba(29,111,232,0.08);color:var(--navy3);padding:3px 9px;border-radius:6px;white-space:nowrap;flex-shrink:0}
   .nav-right{display:flex;align-items:center;gap:8px}
   .tab-group{display:flex;background:rgba(235,244,255,0.8);border:1px solid var(--border);border-radius:12px;padding:3px;gap:2px}
   .tab-btn{display:flex;align-items:center;gap:6px;padding:5px 14px;border-radius:9px;font-size:12px;font-weight:600;cursor:pointer;border:none;background:transparent;color:var(--muted);transition:all .15s;font-family:inherit}
@@ -1807,6 +1811,64 @@ function useGlobalCollapse(initial){
   }, [])
   return [c, setC]
 }
+
+// ─── Ghi âm giọng nói (Web Speech API vi-VN) — TÁCH RIÊNG từ AudioRecorder
+// để tái dùng cho ghi chú per-widget (mỗi widget có nút ghi âm riêng trong
+// panel "Ghi chú của bác sĩ"), không chỉ dùng cho "lời dặn tổng" ở UploadPage.
+function useSpeechToText(onTranscript) {
+  const [supported] = useState(() => typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition))
+  const [rec, setRec] = useState(false)
+  const [err, setErr] = useState("")
+  const ref = useRef(null)
+  const finalRef = useRef("")
+  const wantRef = useRef(false)
+  const ERR = {
+    "not-allowed": "Trang web chưa được cấp quyền micro. Bấm biểu tượng khóa trên thanh địa chỉ, cho phép Micro rồi thử lại.",
+    "service-not-allowed": "Trình duyệt chặn dịch vụ nhận dạng giọng nói. Hãy dùng Chrome hoặc Edge mới nhất.",
+    "no-speech": "Chưa nghe thấy giọng nói. Hãy nói gần micro hơn rồi thử lại.",
+    "audio-capture": "Không tìm thấy micro. Kiểm tra thiết bị micro của máy.",
+    "network": "Lỗi mạng: nhận dạng giọng nói cần kết nối Internet.",
+  }
+  useEffect(() => () => { wantRef.current = false; try { ref.current && ref.current.stop() } catch {} }, [])
+  const start = async (currentValue) => {
+    setErr("")
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SR) { setErr("Trình duyệt chưa hỗ trợ nhận dạng giọng nói. Hãy dùng Chrome/Edge mới nhất."); return }
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        const s = await navigator.mediaDevices.getUserMedia({ audio: true })
+        s.getTracks().forEach(t => t.stop())
+      }
+    } catch { setErr("Không truy cập được micro. Hãy cho phép quyền micro cho trang web rồi thử lại."); return }
+    const r = new SR()
+    r.lang = "vi-VN"; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1
+    finalRef.current = currentValue ? (currentValue.replace(/\s+$/, "") + " ") : ""
+    r.onresult = (e) => {
+      let interim = ""
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const seg = e.results[i][0].transcript
+        if (e.results[i].isFinal) finalRef.current += seg + " "
+        else interim += seg
+      }
+      onTranscript && onTranscript(finalRef.current + interim)
+    }
+    r.onerror = (e) => {
+      if (e.error === "no-speech") return
+      wantRef.current = false
+      if (e.error !== "aborted") setErr(ERR[e.error] || ("Lỗi ghi âm: " + e.error))
+      setRec(false)
+    }
+    r.onend = () => {
+      if (wantRef.current) { try { r.start() } catch { setRec(false); wantRef.current = false } }
+      else setRec(false)
+    }
+    ref.current = r
+    wantRef.current = true
+    try { r.start(); setRec(true) } catch { setErr("Không khởi động được ghi âm. Hãy thử lại sau giây lát."); wantRef.current = false }
+  }
+  const stop = () => { wantRef.current = false; try { ref.current && ref.current.stop() } catch {} setRec(false) }
+  return { supported, rec, err, start, stop, clearErr: () => setErr("") }
+}
 function reportToText(r){
   if(!r) return ""
   const p = r.thong_tin_benh_nhan || {}
@@ -2006,35 +2068,7 @@ function Card({ id, title, icon, children, headRight, defaultCollapsed = false }
   const [collapsed, setCollapsed] = useGlobalCollapse(defaultCollapsed)
   const bodyRef = useRef(null)
   const widgetId = id || (typeof title === "string" ? title : "card")
-
-  // ─── Chỉnh sửa: bác sĩ bổ sung/ghi đè phần diễn giải hiển thị ngay trong
-  // card (KHÔNG sửa số liệu thô đã tính từ rule engine — tránh phá vỡ "1
-  // nguồn sự thật" của hệ thống). Lưu sessionStorage theo bệnh nhân+widget.
-  const [editing, setEditing] = useState(false)
-  const [editText, setEditText] = useState(() => noteGet(CURRENT_PKEY, widgetId + "_edit"))
-  const startEdit = () => { setEditText(noteGet(CURRENT_PKEY, widgetId + "_edit")); setEditing(true) }
-  const saveEdit = () => { noteSet(CURRENT_PKEY, widgetId + "_edit", editText); setEditing(false); mpToast(editText.trim() ? "Đã lưu chỉnh sửa" : "Đã xóa nội dung chỉnh sửa") }
-  const cancelEdit = () => { setEditing(false) }
-  const savedEdit = noteGet(CURRENT_PKEY, widgetId + "_edit")
-
-  // ─── Ghi chú: chỉ hiện ô nhập khi bác sĩ bấm vào, KHÔNG hiện chữ "Ghi chú"
-  // nếu chưa bấm. Nếu bấm vào mà không gõ gì rồi rời đi (blur) -> tự ẩn lại,
-  // tránh rườm rà theo đúng yêu cầu.
-  const [noteOpen, setNoteOpen] = useState(false)
-  const [noteText, setNoteText] = useState(() => noteGet(CURRENT_PKEY, widgetId))
-  const savedNote = noteGet(CURRENT_PKEY, widgetId)
-  const noteRef = useRef(null)
-  const openNote = () => { setNoteText(noteGet(CURRENT_PKEY, widgetId)); setNoteOpen(true); setTimeout(()=>noteRef.current?.focus(), 30) }
-  const blurNote = () => {
-    const had = !!savedNote
-    noteSet(CURRENT_PKEY, widgetId, noteText)
-    if (!noteText.trim()) {
-      setNoteOpen(false)
-      if (had) mpToast("Đã xóa ghi chú")
-    } else if (noteText !== savedNote) {
-      mpToast("Đã lưu ghi chú")
-    }
-  }
+  const tools = useWidgetTools(widgetId)
 
   return (
     <div id={id} className={`card${collapsed ? " collapsed" : ""}`}>
@@ -2043,12 +2077,7 @@ function Card({ id, title, icon, children, headRight, defaultCollapsed = false }
         <span className="card-head-title">{title}</span>
         <div className="card-head-right">
           {headRight}
-          <button className={`card-tool-btn${savedEdit?" has-content":""}`} onClick={startEdit} title="Chỉnh sửa / bổ sung thông tin" aria-label="Chỉnh sửa">
-            <Icon.Pencil d={13} color={savedEdit?"#1D6FE8":"currentColor"}/>
-          </button>
-          <button className={`card-tool-btn${savedNote?" has-content":""}`} onClick={openNote} title="Ghi chú" aria-label="Ghi chú">
-            <Icon.Note d={13} color={savedNote?"#D97706":"currentColor"}/>
-          </button>
+          <WidgetToolButtons tools={tools}/>
           {title ? <FlagBtn pkey={CURRENT_PKEY} label={typeof title === "string" ? title : "Mục báo cáo"} sub="Mục trong báo cáo" detail={()=>elText(bodyRef.current)}/> : null}
           {title ? <CopyBtn text={()=>elText(bodyRef.current)} label=""/> : null}
           <button className="collapse-btn" onClick={() => setCollapsed(c => !c)} title={collapsed ? "Mở rộng" : "Thu gọn"}>
@@ -2056,39 +2085,10 @@ function Card({ id, title, icon, children, headRight, defaultCollapsed = false }
           </button>
         </div>
       </div>
-      <div className="card-body" ref={bodyRef}>
-        {children}
-        {savedEdit && !editing && (
-          <div className="card-edit-display">
-            <div className="card-edit-display-hd"><Icon.Pencil d={11} color="#1D6FE8"/>Bác sĩ bổ sung</div>
-            <div className="card-edit-display-txt">{savedEdit}</div>
-          </div>
-        )}
+      <div className="card-body">
+        <WidgetEditableBody tools={tools} bodyRef={bodyRef}>{children}</WidgetEditableBody>
       </div>
-      {editing && (
-        <div className="card-edit-box">
-          <textarea className="card-edit-ta" autoFocus value={editText} onChange={e=>setEditText(e.target.value)}
-            placeholder="Bổ sung hoặc ghi đè thông tin hiển thị cho mục này..."/>
-          <div className="card-edit-actions">
-            <button className="card-edit-cancel" onClick={cancelEdit}>Hủy</button>
-            <button className="card-edit-save" onClick={saveEdit}>Lưu</button>
-          </div>
-        </div>
-      )}
-      {noteOpen && (
-        <div className="card-note-box">
-          <Icon.Note d={13} color="#D97706"/>
-          <input ref={noteRef} className="card-note-input" value={noteText} onChange={e=>setNoteText(e.target.value)}
-            onBlur={blurNote} onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); blurNote() } }}
-            placeholder="Ghi chú riêng cho mục này..."/>
-        </div>
-      )}
-      {!noteOpen && savedNote && (
-        <div className="card-note-box card-note-saved" onClick={openNote}>
-          <Icon.Note d={13} color="#D97706"/>
-          <span className="card-note-saved-txt">{savedNote}</span>
-        </div>
-      )}
+      <WidgetNotePanel tools={tools}/>
     </div>
   )
 }
@@ -2796,42 +2796,33 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
               </div>
             </div>
           ) : staged.length === 0 ? (
-            <div className="upload-choice-row">
-              <div className={`upload-zone upload-choice${dragging?" drag":""}`}
-                onDragOver={e=>{e.preventDefault();setDragging(true)}}
-                onDragLeave={()=>setDragging(false)}
-                onDrop={e=>{e.preventDefault();setDragging(false);addFiles(e.dataTransfer.files)}}
-                onClick={()=>inputRef.current.click()}>
-                <div style={{padding:"16px 0"}}>
-                  <div className="upload-icon"><Icon.Upload d={26} color="#1D6FE8"/></div>
-                  <p className="upload-title">Bệnh án</p>
-                  <p className="upload-sub">Kéo thả hoặc nhấn để chọn — PDF, Word, Excel, PowerPoint, ảnh chụp/scan</p>
-                  <button className="btn-primary" onClick={e=>{e.stopPropagation();inputRef.current.click()}}><Icon.Upload d={15} color="white"/>Chọn tài liệu</button>
-                  <div className="fmt-row">
-                    <span className="fmt-lbl">Định dạng hỗ trợ</span>
-                    <div className="fmt-chips">
-                      {["PDF","DOCX","XLSX","PPTX","PNG","JPG"].map(t=>{
-                        const k = FILE_KINDS[t.toLowerCase()] || kindOf("x."+t.toLowerCase())
-                        return <span key={t} className="fmt-chip" style={{color:k.color,background:k.bg}}>{t}</span>
-                      })}
-                    </div>
+            <div className={`upload-zone upload-merged${dragging?" drag":""}`}
+              onDragOver={e=>{e.preventDefault();setDragging(true)}}
+              onDragLeave={()=>setDragging(false)}
+              onDrop={e=>{e.preventDefault();setDragging(false);addFiles(e.dataTransfer.files)}}>
+              <div className="upload-merged-inner">
+                <div className="upload-icon"><Icon.Upload d={28} color="#1D6FE8"/></div>
+                <p className="upload-title">Bệnh án &amp; điện tâm đồ</p>
+                <p className="upload-sub">Kéo thả tài liệu vào đây, hoặc chọn 1 trong 2 cách bên dưới</p>
+                <div className="upload-merged-actions">
+                  <button className="btn-primary" onClick={()=>inputRef.current.click()}><Icon.Upload d={15} color="white"/>Chọn bệnh án</button>
+                  <button className="btn-primary btn-primary-ecg" onClick={onOpenEcg}><Icon.Pulse d={15} color="white"/>Quét điện tâm đồ</button>
+                </div>
+                <div className="fmt-row">
+                  <span className="fmt-lbl">Bệnh án</span>
+                  <div className="fmt-chips">
+                    {["PDF","DOCX","XLSX","PPTX","PNG","JPG"].map(t=>{
+                      const k = FILE_KINDS[t.toLowerCase()] || kindOf("x."+t.toLowerCase())
+                      return <span key={t} className="fmt-chip" style={{color:k.color,background:k.bg}}>{t}</span>
+                    })}
                   </div>
                 </div>
-              </div>
-
-              <div className="upload-zone upload-choice upload-choice-ecg" onClick={onOpenEcg}>
-                <div style={{padding:"16px 0"}}>
-                  <div className="upload-icon upload-icon-ecg"><Icon.Pulse d={26} color="#DC2626"/></div>
-                  <p className="upload-title">Quét điện tâm đồ</p>
-                  <p className="upload-sub">Số hóa ảnh ECG và đọc điện tim — không cần đã có hồ sơ</p>
-                  <button className="btn-primary btn-primary-ecg" onClick={e=>{e.stopPropagation();onOpenEcg()}}><Icon.Pulse d={15} color="white"/>Quét ECG</button>
-                  <div className="fmt-row">
-                    <span className="fmt-lbl">Định dạng hỗ trợ</span>
-                    <div className="fmt-chips">
-                      {["PNG","JPG"].map(t=>(
-                        <span key={t} className="fmt-chip" style={{color:"#DC2626",background:"#FEF2F2"}}>{t}</span>
-                      ))}
-                    </div>
+                <div className="fmt-row">
+                  <span className="fmt-lbl">Điện tâm đồ</span>
+                  <div className="fmt-chips">
+                    {["PNG","JPG"].map(t=>(
+                      <span key={t} className="fmt-chip" style={{color:"#DC2626",background:"#FEF2F2"}}>{t}</span>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -2957,15 +2948,21 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
   useEffect(() => { try { setDocNote(sessionStorage.getItem(noteKey) || "") } catch {} }, [noteKey])
   const saveNote = (v) => { setDocNote(v); try { sessionStorage.setItem(noteKey, v) } catch {} }
   const [zoom, setZoom] = useState(1)
+  const [focusMode, setFocusMode] = useState(false)
+  const toggleFocusMode = () => {
+    const v = !focusMode
+    setFocusMode(v)
+    document.body.classList.toggle("focus-mode", v)
+    mpToast(v ? "Đã bật chế độ trình chiếu" : "Đã tắt chế độ trình chiếu")
+  }
   const pkey = (report && report.thong_tin_benh_nhan && report.thong_tin_benh_nhan.so_benh_an) || "x"
   CURRENT_PKEY = pkey
-  const [bmOpen, setBmOpen] = useState(false)
   const [bmList, setBmList] = useState([])
   useEffect(() => { const h=()=>setBmList(bmGet(pkey)); h(); window.addEventListener("mp-bm",h); return ()=>window.removeEventListener("mp-bm",h) }, [pkey])
   const goToBookmark = (it) => {
     const sub = (it && it.sub) || ""
     const mode = /h.?i ch.?n/i.test(sub) ? "hoi_chan" : /gi.?ng d.?y/i.test(sub) ? "teaching" : "clinical"
-    setViewMode(mode); setBmOpen(false)
+    setViewMode(mode); setTab("report")
     const tryScroll = (tries) => {
       let el = it.anchor ? document.getElementById(it.anchor) : null
       if(!el && it.label){
@@ -3064,49 +3061,40 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
     <div>
       <header className="report-nav">
         <div className="report-nav-inner">
-          <div className="nav-left">
+          <div className="nav-row1">
             <div className="logo">
               <BrandMark size={30} radius={9}/>
               <span className="logo-text" style={{fontSize:14}}>Med<em>Parcours</em></span>
               <span className="logo-sub" style={{fontSize:12}}>AI</span>
             </div>
-            <span className="nav-sep">▶</span>
-            <div className="nav-patient">
-              <div className="patient-avatar">{r.thong_tin_benh_nhan.ho_ten.charAt(0)}</div>
-              <span className="patient-name">{r.thong_tin_benh_nhan.ho_ten}</span>
-              <span className="patient-meta">{r.thong_tin_benh_nhan.tuoi} tuổi, {r.thong_tin_benh_nhan.gioi_tinh}</span>
-            </div>
-          </div>
-          <div className="nav-right">
-            <ModeDropdown mode={viewMode} onChange={setViewMode}/>
-            <div className="tab-group">
-              {[["report",<Icon.FileText d={13}/>,"Báo cáo"],["chat",<Icon.Chat d={13}/>,"Chatbot"]].map(([key,ic,label])=>(
-                <button key={key} className={`tab-btn${tab===key?" active":""}`} onClick={()=>setTab(key)}>{ic} {label}</button>
-              ))}
-            </div>
-            <FocusToggle/>
-            <ThemeToggle/>
-            <button className="nav-bm-btn" onClick={()=>setBmOpen(true)} title="Mục đã đánh dấu" aria-label="Mục đã đánh dấu">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill={bmList.length>0?"currentColor":"none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
-              {bmList.length>0 && <span className="nav-bm-badge">{bmList.length}</span>}
-            </button>
-            <button className="nav-export" onClick={()=>triggerPrint(report, viewMode, docNote, bmList, analysis)} title="Xuất báo cáo"><Icon.Print d={14} color="#fff"/>Xuất báo cáo</button>
-            <div className="nav-menu-wrap">
-              <button className="nav-burger" onClick={()=>setMenuOpen(o=>!o)} title="Menu" aria-label="Menu">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            <div className="nav-right">
+              <button className="nav-bm-btn" onClick={()=>setTab("bookmarks")} title="Mục đã đánh dấu" aria-label="Mục đã đánh dấu">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill={bmList.length>0?"currentColor":"none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+                {bmList.length>0 && <span className="nav-bm-badge">{bmList.length}</span>}
               </button>
-              {menuOpen && <>
-                <div className="nav-menu-ov" onClick={()=>setMenuOpen(false)}/>
-                <div className="nav-menu">
-                  <div className="nav-menu-sec">Xuất & chia sẻ</div>
-                  <button onClick={()=>{setMenuOpen(false);triggerPrint(report,"full",docNote,bmList,analysis)}}><Icon.FileText d={14} color="#475569"/>Xuất bản đầy đủ (3 chế độ)</button>
-                  <button onClick={()=>{setMenuOpen(false);triggerHandoff(report,docNote,bmList)}}><Icon.FileText d={14} color="#475569"/>Tóm tắt 1 trang (bàn giao)</button>
-                  <button onClick={()=>{setMenuOpen(false);exportLabsCSV(report)}}><Icon.Flask d={14} color="#475569"/>Xuất xét nghiệm (CSV)</button>
-                  <button onClick={()=>{setMenuOpen(false); (async()=>{ try{ await navigator.clipboard.writeText(reportToText(report)); mpToast("Đã sao chép toàn bộ báo cáo") }catch{ mpToast("Không sao chép được","err") } })()}}><Icon.FileText d={14} color="#475569"/>Sao chép toàn bộ báo cáo</button>
-                  <div className="nav-menu-sec">Công cụ</div>
-                  <button onClick={()=>{setMenuOpen(false);setBmOpen(true)}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>Mục đã đánh dấu{bmList.length>0?` (${bmList.length})`:""}</button>
-                  <button onClick={()=>{setMenuOpen(false);mpCards(true)}}><Icon.ChevUp d={14} color="#475569"/>Thu gọn tất cả thẻ</button>
-                  <button onClick={()=>{setMenuOpen(false);mpCards(false)}}><Icon.ChevDown d={14} color="#475569"/>Mở rộng tất cả thẻ</button>
+              <button className="nav-export" onClick={()=>triggerPrint(report, viewMode, docNote, bmList, analysis)} title="Xuất báo cáo"><Icon.Print d={14} color="#fff"/><span className="nav-export-txt">Xuất báo cáo</span></button>
+              <div className="nav-menu-wrap">
+                <button className="nav-burger" onClick={()=>setMenuOpen(o=>!o)} title="Menu" aria-label="Menu">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                </button>
+                {menuOpen && <>
+                  <div className="nav-menu-ov" onClick={()=>setMenuOpen(false)}/>
+                  <div className="nav-menu">
+                    <div className="nav-menu-sec">Xuất & chia sẻ</div>
+                    <button onClick={()=>{setMenuOpen(false);triggerPrint(report,"full",docNote,bmList,analysis)}}><Icon.FileText d={14} color="#475569"/>Xuất bản đầy đủ (3 chế độ)</button>
+                    <button onClick={()=>{setMenuOpen(false);triggerHandoff(report,docNote,bmList)}}><Icon.FileText d={14} color="#475569"/>Tóm tắt 1 trang (bàn giao)</button>
+                    <button onClick={()=>{setMenuOpen(false);exportLabsCSV(report)}}><Icon.Flask d={14} color="#475569"/>Xuất xét nghiệm (CSV)</button>
+                    <button onClick={()=>{setMenuOpen(false); (async()=>{ try{ await navigator.clipboard.writeText(reportToText(report)); mpToast("Đã sao chép toàn bộ báo cáo") }catch{ mpToast("Không sao chép được","err") } })()}}><Icon.FileText d={14} color="#475569"/>Sao chép toàn bộ báo cáo</button>
+                    <div className="nav-menu-sec">Công cụ</div>
+                    <button onClick={()=>{setMenuOpen(false);toggleFocusMode()}}>
+                      {focusMode
+                        ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+                        : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>}
+                    {focusMode ? "Tắt chế độ trình chiếu" : "Chế độ trình chiếu"}
+                  </button>
+                  <button onClick={()=>{setMenuOpen(false);setTab("bookmarks")}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>Mục đã đánh dấu{bmList.length>0?` (${bmList.length})`:""}</button>
+                  <button onClick={()=>{setMenuOpen(false);mpCards(true);mpToast("Đã thu gọn tất cả thẻ")}}><Icon.ChevUp d={14} color="#475569"/>Thu gọn tất cả thẻ</button>
+                  <button onClick={()=>{setMenuOpen(false);mpCards(false);mpToast("Đã mở rộng tất cả thẻ")}}><Icon.ChevDown d={14} color="#475569"/>Mở rộng tất cả thẻ</button>
                   <button onClick={()=>{setMenuOpen(false);mpHelp()}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 20h8M7 8h.01M11 8h.01M15 8h.01M7 12h.01M17 12h.01M11 12h2"/></svg>Phím tắt</button>
                   <div className="nav-menu-font" onClick={e=>e.stopPropagation()}>
                     <span>Cỡ chữ</span>
@@ -3120,6 +3108,23 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
                   <button className="danger" onClick={async()=>{setMenuOpen(false); if(await mpConfirm({title:"Đăng xuất khỏi MedParcours AI?",message:"Bạn sẽ quay lại màn hình đăng nhập.",okText:"Đăng xuất",danger:true})) onLogout()}}><Icon.Close d={13} color="#DC2626"/>Đăng xuất</button>
                 </div>
               </>}
+            </div>
+          </div>
+          </div>
+          <div className="nav-row2">
+            <div className="nav-patient">
+              <div className="patient-avatar">{r.thong_tin_benh_nhan.ho_ten.charAt(0)}</div>
+              <span className="patient-name">{r.thong_tin_benh_nhan.ho_ten}</span>
+              <span className="patient-meta">{r.thong_tin_benh_nhan.tuoi} tuổi, {r.thong_tin_benh_nhan.gioi_tinh}</span>
+            </div>
+            <div className="nav-right">
+              <ModeDropdown mode={viewMode} onChange={setViewMode}/>
+              <div className="tab-group">
+                {[["report",<Icon.FileText d={13}/>,"Báo cáo"],["chat",<Icon.Chat d={13}/>,"Chatbot"]].map(([key,ic,label])=>(
+                  <button key={key} className={`tab-btn${tab===key?" active":""}`} onClick={()=>setTab(key)}>{ic} {label}</button>
+                ))}
+              </div>
+              <ThemeToggle/>
             </div>
           </div>
         </div>
@@ -3138,7 +3143,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
         </div>
       </div>
 
-      {tab === "report" ? (
+      {tab === "report" && (
         viewMode === "clinical" ? (
           <div className="report-outer">
             <SidebarMinimap activeId={activeSection} onNavigate={navigateTo}/>
@@ -3151,10 +3156,14 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
             </div>
           </div>
         )
-      ) : (
+      )}
+      {tab === "chat" && (
         <div className="chat-page">
           <ChatTab report={report} hoSoText={hoSoText} messages={chatMessages} setMessages={setChatMessages} mode={viewMode}/>
         </div>
+      )}
+      {tab === "bookmarks" && (
+        <BookmarkPage pkey={pkey} items={bmList} onGo={(it)=>{goToBookmark(it)}} onBack={()=>setTab("report")}/>
       )}
       {tab === "report" && (
         <FloatingChat report={report} hoSoText={hoSoText} messages={chatMessages} setMessages={setChatMessages} mode={viewMode}
@@ -3162,7 +3171,6 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
       )}
       <PatientSnapshot report={report}/>
       <DoctorNote value={docNote} onChange={saveNote}/>
-      {bmOpen && <BookmarkPanel pkey={pkey} items={bmList} onClose={()=>setBmOpen(false)} onGo={goToBookmark}/>}
       <ReadProgress/>
       <ScrollToTop/>
     </div>
@@ -3173,6 +3181,8 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
 // ─── TRAJECTORY (đánh giá tiến triển tổng thể) ─────────────────────────────────
 function TrajectoryCard({ assessment }) {
   const [collapsed, setCollapsed] = useGlobalCollapse(false)
+  const bodyRef = useRef(null)
+  const tools = useWidgetTools("sec-trajectory")
   const { verdict, evidence } = assessment
   const tm = TRAJECTORY_META[verdict]
   const TrendIcon = () => tm.icon === "up"
@@ -3188,11 +3198,12 @@ function TrajectoryCard({ assessment }) {
           <div className="traj-lbl">Đánh giá tiến triển</div>
           <div className="traj-verdict" style={{ color:tm.color }}>{tm.label}</div>
         </div>
-        <span style={{marginLeft:"auto"}}><CopyBtn text={safe} label=""/></span><button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"8px" }}>
+        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><WidgetToolButtons tools={tools}/><CopyBtn text={()=>evidence.map(e=>e.txt).join("\n")} label=""/></span><button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"8px" }}>
           {collapsed ? <Icon.ChevDown d={14} color={tm.color}/> : <Icon.ChevUp d={14} color={tm.color}/>}
         </button>
       </div>
       {!collapsed && (
+      <WidgetEditableBody tools={tools} bodyRef={bodyRef}>
       <ul className="traj-list">
         {evidence.map((e,i) => (
           <li key={i} className={e.good ? "good" : "bad"}>
@@ -3201,7 +3212,9 @@ function TrajectoryCard({ assessment }) {
           </li>
         ))}
       </ul>
+      </WidgetEditableBody>
       )}
+      <WidgetNotePanel tools={tools}/>
     </div>
   )
 }
@@ -3259,6 +3272,8 @@ const SUMMARY_PHASE_META = {
 }
 function SummaryCard({ text }) {
   const [collapsed, setCollapsed] = useGlobalCollapse(false)
+  const bodyRef = useRef(null)
+  const tools = useWidgetTools("sec-summary")
   const safe = typeof text === "string" ? text : (text == null ? "" : String(text))
   const toBullets = (body) => String(body || "").split(/(?<=\.)\s+/).map(s=>s.replace(/\.$/,"").trim()).filter(Boolean)
   if (!safe.trim()) return null
@@ -3279,12 +3294,14 @@ function SummaryCard({ text }) {
       <div className="summary-hd">
         <Icon.FileText d={15} color="#1D6FE8"/>
         <span className="summary-hd-title">Tóm tắt toàn cảnh</span>
-        <button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"auto" }}>
+        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><WidgetToolButtons tools={tools}/></span>
+        <button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"6px" }}>
           {collapsed ? <Icon.ChevDown d={14} color="#1D6FE8"/> : <Icon.ChevUp d={14} color="#1D6FE8"/>}
         </button>
       </div>
       {!collapsed && (
-        blocks.length ? (
+        <WidgetEditableBody tools={tools} bodyRef={bodyRef}>
+        {blocks.length ? (
           <div className="summary-phases">
             {blocks.map(b => {
               const pm = SUMMARY_PHASE_META[b.phase] || SUMMARY_PHASE_META[3]
@@ -3305,8 +3322,10 @@ function SummaryCard({ text }) {
           <ul className="bullet-list">
             {toBullets(safe).map((s,i)=><li key={i}>{expandAbbr(s)}</li>)}
           </ul>
-        )
+        )}
+        </WidgetEditableBody>
       )}
+      <WidgetNotePanel tools={tools}/>
     </div>
   )
 }
@@ -3375,6 +3394,7 @@ const fmtShort = (d) => d ? `${String(d.getDate()).padStart(2,"0")}/${String(d.g
 function PhaseSection({ phase, events, info, ketLuan }) {
   const [collapsed, setCollapsed] = useGlobalCollapse(false)
   const bodyRef = useRef(null)
+  const tools = useWidgetTools("sec-phase" + phase)
   const m = PHASE_SECTION_META[phase]
   const fmt = (d) => d ? `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}` : ""
   let rangeTxt = ""
@@ -3391,6 +3411,7 @@ function PhaseSection({ phase, events, info, ketLuan }) {
         <span className="phase-sec-tag" style={{ background:m.color }}><i/>{m.name}</span>
         {rangeTxt && <span className="phase-sec-range">{rangeTxt}</span>}
         <span className="sec-tools" onClick={e=>e.stopPropagation()}>
+          <WidgetNoteOnlyButton tools={tools}/>
           <FlagBtn pkey={CURRENT_PKEY} label={m.name} sub="Giai đoạn lâm sàng" detail={()=>elText(bodyRef.current)}/>
           <CopyBtn text={()=>elText(bodyRef.current)}/>
         </span>
@@ -3437,6 +3458,7 @@ function PhaseSection({ phase, events, info, ketLuan }) {
           )}
         </>
       )}
+      <WidgetNotePanel tools={tools}/>
     </div>
   )
 }
@@ -3480,17 +3502,20 @@ const PROB_META = {
 }
 function ProblemStatus({ data, pkey }) {
   const [collapsed, setCollapsed] = useGlobalCollapse(false)
+  const bodyRef = useRef(null)
+  const tools = useWidgetTools("sec-problems", pkey)
   if (!data) return null
   return (
     <div id="sec-problems" className="ov-card">
       <div className="ov-head">
         <Icon.Octagon d={16} color="#1D6FE8"/><span>Trạng thái vấn đề lâm sàng</span>
-        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><FlagBtn pkey={CURRENT_PKEY} label="Trạng thái vấn đề lâm sàng" sub="Mục báo cáo" detail={()=>((data.hien_tai)||[]).map(p=>`${p.ten}: ${p.mo_ta||""}`).join("\n")}/><CopyBtn text={()=>((data.hien_tai)||[]).map(p=>`${p.ten}: ${p.mo_ta||""}`).join("\n")} label=""/></span>
+        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><WidgetToolButtons tools={tools}/><FlagBtn pkey={CURRENT_PKEY} label="Trạng thái vấn đề lâm sàng" sub="Mục báo cáo" detail={()=>((data.hien_tai)||[]).map(p=>`${p.ten}: ${p.mo_ta||""}`).join("\n")}/><CopyBtn text={()=>((data.hien_tai)||[]).map(p=>`${p.ten}: ${p.mo_ta||""}`).join("\n")} label=""/></span>
         <button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"6px" }}>
           {collapsed ? <Icon.ChevDown d={14} color="#1D6FE8"/> : <Icon.ChevUp d={14} color="#1D6FE8"/>}
         </button>
       </div>
       {!collapsed && (
+        <WidgetEditableBody tools={tools} bodyRef={bodyRef}>
         <div className="prob-wrap">
           <div className="prob-col">
             <div className="prob-col-hd">Vấn đề đang theo dõi</div>
@@ -3524,7 +3549,9 @@ function ProblemStatus({ data, pkey }) {
             </div>
           </div>
         </div>
+        </WidgetEditableBody>
       )}
+      <WidgetNotePanel tools={tools}/>
     </div>
   )
 }
@@ -3549,6 +3576,125 @@ function noteSet(pkey, widgetId, text){
   }catch{}
 }
 
+// ─── Hook chung cho MỌI widget (Card chuẩn HOẶC widget tự code riêng) ────────
+// Gộp state Chỉnh sửa (sửa trực tiếp nội dung hiển thị, contentEditable) +
+// Ghi chú (block mở rộng riêng, có ghi âm, đóng lại khi rỗng) — dùng 1 hook
+// để mọi nơi trong App.jsx có hành vi NHẤT QUÁN, không viết lại từng chỗ.
+function useWidgetTools(widgetId, pkey) {
+  const key = pkey || CURRENT_PKEY
+  const [editing, setEditing] = useState(false)
+  const [editText, setEditText] = useState(() => noteGet(key, widgetId + "_edit"))
+  const savedEdit = noteGet(key, widgetId + "_edit")
+  const startEdit = () => { setEditText(noteGet(key, widgetId + "_edit")); setEditing(true) }
+  const saveEdit = () => { noteSet(key, widgetId + "_edit", editText); setEditing(false); mpToast(editText.trim() ? "Đã lưu chỉnh sửa" : "Đã xóa nội dung chỉnh sửa") }
+  const cancelEdit = () => setEditing(false)
+
+  const [noteOpen, setNoteOpen] = useState(false)
+  const [noteText, setNoteText] = useState(() => noteGet(key, widgetId))
+  const savedNote = noteGet(key, widgetId)
+  const openNote = () => { setNoteText(noteGet(key, widgetId)); setNoteOpen(o => !o) }
+  const closeNoteIfEmpty = () => {
+    const had = !!savedNote
+    noteSet(key, widgetId, noteText)
+    if (!noteText.trim()) { setNoteOpen(false); if (had) mpToast("Đã xóa ghi chú") }
+  }
+  const saveNote = () => {
+    const had = !!savedNote
+    noteSet(key, widgetId, noteText)
+    if (!noteText.trim()) { if (had) mpToast("Đã xóa ghi chú") }
+    else mpToast("Đã lưu ghi chú")
+  }
+
+  return {
+    editing, editText, setEditText, savedEdit, startEdit, saveEdit, cancelEdit,
+    noteOpen, noteText, setNoteText, savedNote, openNote, closeNoteIfEmpty, saveNote, setNoteOpen,
+  }
+}
+
+// ─── Nút Chỉnh sửa + Ghi chú dùng chung — gắn vào header của BẤT KỲ widget ───
+// (Card chuẩn hoặc banner tự code riêng). Đặt cạnh các nút có sẵn (cờ/copy).
+function WidgetToolButtons({ tools }) {
+  return (
+    <>
+      <button className={`card-tool-btn${tools.savedEdit ? " has-content" : ""}`} onClick={tools.startEdit} title="Chỉnh sửa trực tiếp" aria-label="Chỉnh sửa">
+        <Icon.Pencil d={13} color={tools.savedEdit ? "#1D6FE8" : "currentColor"}/>
+      </button>
+      <button className={`card-tool-btn${tools.savedNote ? " has-content" : ""}`} onClick={tools.openNote} title="Ghi chú của bác sĩ" aria-label="Ghi chú">
+        <Icon.Note d={13} color={tools.savedNote ? "#D97706" : "currentColor"}/>
+      </button>
+    </>
+  )
+}
+
+// Biến thể CHỈ có nút Ghi chú, KHÔNG có Chỉnh sửa trực tiếp — dùng cho widget
+// có dữ liệu cấu trúc phức tạp (timeline nhiều cấp...) mà sửa trực tiếp bằng
+// contentEditable dễ vỡ HTML khi áp lại bản đã sửa.
+function WidgetNoteOnlyButton({ tools }) {
+  return (
+    <button className={`card-tool-btn${tools.savedNote ? " has-content" : ""}`} onClick={tools.openNote} title="Ghi chú của bác sĩ" aria-label="Ghi chú">
+      <Icon.Note d={13} color={tools.savedNote ? "#D97706" : "currentColor"}/>
+    </button>
+  )
+}
+
+// ─── Panel "Ghi chú của bác sĩ" — block mở rộng riêng (KHÔNG phải input 1
+// dòng), có tiêu đề + nút ghi âm, đóng lại hoàn toàn nếu rỗng khi đóng ────────
+function WidgetNotePanel({ tools }) {
+  const stt = useSpeechToText(tools.setNoteText)
+  if (!tools.noteOpen) return null
+  return (
+    <div className="wnote-panel">
+      <div className="wnote-head">
+        <Icon.Note d={14} color="#D97706"/><span>Ghi chú của bác sĩ</span>
+        <button className="wnote-close" onClick={() => { tools.closeNoteIfEmpty(); if (stt.rec) stt.stop() }} title="Đóng" aria-label="Đóng"><Icon.Close d={13} color="#92400E"/></button>
+      </div>
+      <textarea className="wnote-ta" autoFocus value={tools.noteText} onChange={e => tools.setNoteText(e.target.value)}
+        placeholder="Nhập ghi chú riêng cho mục này, hoặc bấm micro để đọc..."/>
+      <div className="wnote-bar">
+        <button type="button" className={`wnote-mic${stt.rec ? " on" : ""}`} onClick={() => stt.rec ? stt.stop() : stt.start(tools.noteText)} disabled={!stt.supported} title={stt.rec ? "Dừng ghi" : "Ghi âm bằng giọng nói"}>
+          {stt.rec ? <><span className="rec-dot pulse"/>Đang nghe...</> : <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>Ghi âm</>}
+        </button>
+        <span style={{ flex: 1 }}/>
+        <button type="button" className="wnote-save" onClick={() => { tools.saveNote(); if (stt.rec) stt.stop() }}>Lưu</button>
+      </div>
+      {stt.err && <div className="rec-note err"><Icon.Alert d={12} color="#B91C1C"/>{stt.err}</div>}
+    </div>
+  )
+}
+
+// ─── Nội dung widget có thể CHỈNH SỬA TRỰC TIẾP (khác Ghi chú — đây là sửa
+// ngay nội dung hiển thị, không phải 1 mục riêng). Khi bác sĩ bật "Chỉnh
+// sửa", nội dung gốc (children) được snapshot thành HTML tĩnh, đưa vào 1
+// vùng contentEditable. Sau khi Lưu, bản đã sửa THAY THẾ nội dung gốc khi
+// hiển thị bình thường (không hiện song song cả 2, tránh rối) — nhưng nội
+// dung gốc do rule engine tính vẫn giữ nguyên trong dữ liệu, bác sĩ chỉ sửa
+// PHẦN HIỂN THỊ cho riêng phiên xem của mình (lưu sessionStorage).
+function WidgetEditableBody({ tools, bodyRef, children }) {
+  const editRef = useRef(null)
+  useEffect(() => {
+    if (tools.editing && editRef.current && bodyRef.current) {
+      editRef.current.innerHTML = tools.savedEdit || bodyRef.current.innerHTML
+    }
+  }, [tools.editing])
+
+  if (tools.editing) {
+    return (
+      <div>
+        <div ref={editRef} className="card-edit-live" contentEditable suppressContentEditableWarning
+          onInput={e => tools.setEditText(e.currentTarget.innerHTML)}/>
+        <div className="card-edit-actions">
+          <button className="card-edit-cancel" onClick={tools.cancelEdit}>Hủy</button>
+          <button className="card-edit-save" onClick={tools.saveEdit}>Lưu</button>
+        </div>
+      </div>
+    )
+  }
+  if (tools.savedEdit) {
+    return <div ref={bodyRef} dangerouslySetInnerHTML={{ __html: tools.savedEdit }}/>
+  }
+  return <div ref={bodyRef}>{children}</div>
+}
+
 function FlagBtn({ pkey, label, sub, detail }){
   const [on,setOn]=useState(()=>bmHas(pkey,label))
   useEffect(()=>{ const h=()=>setOn(bmHas(pkey,label)); window.addEventListener("mp-bm",h); return ()=>window.removeEventListener("mp-bm",h) },[pkey,label])
@@ -3571,65 +3717,67 @@ function bmIconFor(sub) {
   if (s.includes("diễn biến") || s.includes("tổng quan")) return <Icon.Clock d={15} color="#1D6FE8"/>
   return <Icon.Alert d={15} color="#DC2626"/>
 }
-function BookmarkPanel({ pkey, items, onClose, onGo }){
+function BookmarkPage({ pkey, items, onGo, onBack }){
   const [openI, setOpenI] = useState(-1)
   return (
-    <div className="bm-ov" onClick={onClose}>
-      <div className="bm-panel" onClick={e=>e.stopPropagation()}>
-        <div className="bm-head">
-          <span className="bm-head-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/></svg></span>
+    <div className="bm-page">
+      <div className="bm-page-head">
+        <button className="bm-back" onClick={onBack} title="Quay lại báo cáo"><Icon.Back d={16} color="#1D6FE8"/>Quay lại báo cáo</button>
+        <div className="bm-page-title"><span className="bm-head-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/></svg></span>
           <span>Mục đã đánh dấu theo dõi</span>
           {items && items.length>0 && <span className="bm-count-chip">{items.length}</span>}
-          <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}>
-            {items && items.length>0 && <CopyBtn text={()=>items.map(it=>"## "+it.label+"\n"+(it.detail||it.sub||"")).join("\n\n")} label=""/>}
-            <button className="fp-close" onClick={onClose} title="Đóng" aria-label="Đóng"><Icon.Close d={15} color="#475569"/></button>
-          </span>
         </div>
-        <div className="bm-body">
-          {(!items || items.length===0) && (
-            <div className="bm-empty">
-              <span className="bm-empty-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></span>
-              Chưa có mục nào được đánh dấu.<br/>Bấm biểu tượng cờ ở mỗi phần trong báo cáo (mọi chế độ) để thêm vào đây theo dõi.
+        {items && items.length>0 && <CopyBtn text={()=>items.map(it=>"## "+it.label+"\n"+(it.detail||it.sub||"")).join("\n\n")} label="Sao chép tất cả"/>}
+      </div>
+      <div className="bm-page-body">
+        {(!items || items.length===0) && (
+          <div className="bm-empty">
+            <span className="bm-empty-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></span>
+            Chưa có mục nào được đánh dấu.<br/>Bấm biểu tượng cờ ở mỗi phần trong báo cáo (mọi chế độ) để thêm vào đây theo dõi.
+          </div>
+        )}
+        {items.map((it,i)=>(
+          <div key={i} className={`bm-item${openI===i?" open":""}`}>
+            <div className="bm-item-top" onClick={()=>setOpenI(openI===i?-1:i)}>
+              <span className="bm-icon-badge">{bmIconFor(it.sub)}</span>
+              <div className="bm-main"><div className="bm-label">{it.label}</div><div className="bm-sub">{it.sub||"Mục báo cáo"}</div></div>
+              <button className="bm-go" onClick={(e)=>{e.stopPropagation(); onGo && onGo(it)}} title="Đi tới phần này trong báo cáo"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+              <span className="bm-chev">{openI===i ? <Icon.ChevUp d={14} color="#94A3B8"/> : <Icon.ChevDown d={14} color="#94A3B8"/>}</span>
+              <button className="bm-x" onClick={(e)=>{e.stopPropagation(); bmToggle(pkey,{label:it.label})}} title="Bỏ đánh dấu"><Icon.Close d={13} color="#94A3B8"/></button>
             </div>
-          )}
-          {items.map((it,i)=>(
-            <div key={i} className={`bm-item${openI===i?" open":""}`}>
-              <div className="bm-item-top" onClick={()=>setOpenI(openI===i?-1:i)}>
-                <span className="bm-icon-badge">{bmIconFor(it.sub)}</span>
-                <div className="bm-main"><div className="bm-label">{it.label}</div><div className="bm-sub">{it.sub||"Mục báo cáo"}</div></div>
-                <button className="bm-go" onClick={(e)=>{e.stopPropagation(); onGo && onGo(it)}} title="Đi tới phần này trong báo cáo"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
-                <span className="bm-chev">{openI===i ? <Icon.ChevUp d={14} color="#94A3B8"/> : <Icon.ChevDown d={14} color="#94A3B8"/>}</span>
-                <button className="bm-x" onClick={(e)=>{e.stopPropagation(); bmToggle(pkey,{label:it.label})}} title="Bỏ đánh dấu"><Icon.Close d={13} color="#94A3B8"/></button>
-              </div>
-              {openI===i && <div className="bm-detail">{it.detail ? it.detail : "Chưa lưu nội dung chi tiết cho mục này (đánh dấu từ bản cũ). Hãy bỏ đánh dấu rồi đánh dấu lại để lưu kèm nội dung."}</div>}
-            </div>
-          ))}
-        </div>
+            {openI===i && <div className="bm-detail">{it.detail ? it.detail : "Chưa lưu nội dung chi tiết cho mục này (đánh dấu từ bản cũ). Hãy bỏ đánh dấu rồi đánh dấu lại để lưu kèm nội dung."}</div>}
+          </div>
+        ))}
       </div>
     </div>
   )
 }
 function ClinicalTakeaway({ items, pkey }) {
   const [collapsed, setCollapsed] = useGlobalCollapse(false)
+  const bodyRef = useRef(null)
+  const tools = useWidgetTools("sec-takeaway", pkey)
   if (!items || !items.length) return null
   return (
     <div id="sec-takeaway" className="takeaway-card">
       <div className="takeaway-hd"><Icon.Stethoscope d={15} color="#1D6FE8"/><span>Kết luận lâm sàng nhanh</span>
-        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><FlagBtn pkey={CURRENT_PKEY} label="Kết luận lâm sàng nhanh" sub="Mục báo cáo" detail={()=>items.map(i=>i.txt).join("\n")}/><CopyBtn text={()=>items.map(i=>i.txt).join("\n")} label=""/></span>
+        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><WidgetToolButtons tools={tools}/><FlagBtn pkey={CURRENT_PKEY} label="Kết luận lâm sàng nhanh" sub="Mục báo cáo" detail={()=>items.map(i=>i.txt).join("\n")}/><CopyBtn text={()=>items.map(i=>i.txt).join("\n")} label=""/></span>
         <button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"6px" }}>
           {collapsed ? <Icon.ChevDown d={14} color="#1D6FE8"/> : <Icon.ChevUp d={14} color="#1D6FE8"/>}
         </button>
       </div>
       {!collapsed && (
-        <ul className="takeaway-list">
-          {items.map((t,i)=>(
-            <li key={i} className={t.loai}>
-              <span className="takeaway-mark" style={{ color:t.loai==="good"?"#059669":"#D97706" }}>{t.loai==="good"?"✓":"!"}</span>
-              {t.txt}
-            </li>
-          ))}
-        </ul>
+        <WidgetEditableBody tools={tools} bodyRef={bodyRef}>
+          <ul className="takeaway-list">
+            {items.map((t,i)=>(
+              <li key={i} className={t.loai}>
+                <span className="takeaway-mark" style={{ color:t.loai==="good"?"#059669":"#D97706" }}>{t.loai==="good"?"✓":"!"}</span>
+                {t.txt}
+              </li>
+            ))}
+          </ul>
+        </WidgetEditableBody>
       )}
+      <WidgetNotePanel tools={tools}/>
     </div>
   )
 }
@@ -3881,6 +4029,8 @@ function LabPanel({ labs, note }) {
 function PriorityBanner({ findings, onSource, pkey }) {
   const [collapsed, setCollapsed] = useGlobalCollapse(false)
   const [tierFilter, setTierFilter] = useState(null)
+  const bodyRef = useRef(null)
+  const tools = useWidgetTools("sec-priority", pkey)
   const byTier = { critical:[], warning:[], stable:[] }
   findings.forEach(f => byTier[f.muc].push(f))
 
@@ -3897,12 +4047,14 @@ function PriorityBanner({ findings, onSource, pkey }) {
             ))}
             {tierFilter && <button className="prio-count clear" onClick={()=>setTierFilter(null)} title="Xem tất cả">Tất cả</button>}
           </div>
+          <span className="prio-tools-light"><WidgetToolButtons tools={tools}/></span>
           <button className="banner-collapse" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"}>
             {collapsed ? <Icon.ChevDown d={14} color="#fff"/> : <Icon.ChevUp d={14} color="#fff"/>}
           </button>
         </div>
       </div>
       {!collapsed && (
+      <WidgetEditableBody tools={tools} bodyRef={bodyRef}>
       <div className={`prio-board${tierFilter?" one":""}`}>
         {["critical","warning","stable"].filter(t=>!tierFilter||t===tierFilter).map(tier => {
           const tm = TIER_META[tier]
@@ -3927,7 +4079,9 @@ function PriorityBanner({ findings, onSource, pkey }) {
           )
         })}
       </div>
+      </WidgetEditableBody>
       )}
+      <WidgetNotePanel tools={tools}/>
     </div>
   )
 }
@@ -4314,6 +4468,7 @@ function ReadProgress(){
 function TimelineStrip({ events }){
   const scrollRef = useRef(null)
   const [focus, setFocus] = useState(-1)
+  const tools = useWidgetTools("sec-timeline")
   if(!events || events.length < 2) return null
   const tone = (l) => l==="canh_bao" ? {c:"#DC2626",bg:"#FEE2E2",t:"Cảnh báo"} : l==="bat_thuong" ? {c:"#D97706",bg:"#FEF3C7",t:"Theo dõi"} : {c:"#0E9488",bg:"#D1FAE5",t:"Ổn định"}
   const flags = events.map((e,i)=>({i,f:(e.loai==="canh_bao"||e.loai==="bat_thuong")})).filter(x=>x.f).map(x=>x.i)
@@ -4329,7 +4484,7 @@ function TimelineStrip({ events }){
   }
   return (
     <div className="tls-card" id="sec-timeline">
-      <div className="tls-head"><Icon.Clock d={15} color="#1D6FE8"/><span>Dòng thời gian diễn biến</span><span className="tls-hint">cuộn ngang để xem</span>{flags.length>0 && <span className="tls-nav" onClick={e=>e.stopPropagation()}><button className="tls-nav-btn" onClick={()=>jump(-1)} title="Biến cố trước"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button><span className="tls-nav-lbl">{flags.length} biến cố</span><button className="tls-nav-btn" onClick={()=>jump(1)} title="Biến cố tiếp"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg></button></span>}<span className="sec-tools" onClick={e=>e.stopPropagation()}><FlagBtn pkey={CURRENT_PKEY} label="Dòng thời gian diễn biến" sub="Tổng quan diễn biến" detail={()=>(events||[]).map(e=>(e.ngay||"")+": "+(e.mo_ta||"")).join("\n")}/><CopyBtn text={()=>(events||[]).map(e=>(e.ngay||"")+": "+(e.mo_ta||"")).join("\n")}/></span></div>
+      <div className="tls-head"><Icon.Clock d={15} color="#1D6FE8"/><span>Dòng thời gian diễn biến</span><span className="tls-hint">cuộn ngang để xem</span>{flags.length>0 && <span className="tls-nav" onClick={e=>e.stopPropagation()}><button className="tls-nav-btn" onClick={()=>jump(-1)} title="Biến cố trước"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button><span className="tls-nav-lbl">{flags.length} biến cố</span><button className="tls-nav-btn" onClick={()=>jump(1)} title="Biến cố tiếp"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg></button></span>}<span className="sec-tools" onClick={e=>e.stopPropagation()}><WidgetNoteOnlyButton tools={tools}/><FlagBtn pkey={CURRENT_PKEY} label="Dòng thời gian diễn biến" sub="Tổng quan diễn biến" detail={()=>(events||[]).map(e=>(e.ngay||"")+": "+(e.mo_ta||"")).join("\n")}/><CopyBtn text={()=>(events||[]).map(e=>(e.ngay||"")+": "+(e.mo_ta||"")).join("\n")}/></span></div>
       <div className="tls-scroll" ref={scrollRef}>
         <div className="tls-track">
           {events.map((e,i)=>{ const tn=tone(e.loai); return (
@@ -4344,6 +4499,7 @@ function TimelineStrip({ events }){
           )})}
         </div>
       </div>
+      <WidgetNotePanel tools={tools}/>
     </div>
   )
 }
@@ -4373,6 +4529,8 @@ function CoStat({ m }) {
   )
 }
 function CaseOverview({ report: r, findings, phaseInfo, pkey }) {
+  const tools = useWidgetTools("sec-overview", pkey)
+  const bodyRef = useRef(null)
   const labs = r.xet_nghiem_meta || r.xet_nghiem_key || []
   const markers = CO_KEYS.map(k => labs.find(l => l && l.key === k)).filter(Boolean)
   const crit = (findings || []).filter(f => f.muc === "critical").length
@@ -4394,17 +4552,21 @@ function CaseOverview({ report: r, findings, phaseInfo, pkey }) {
           </span>
         )}
         <div className="co-head-r">
+          <WidgetToolButtons tools={tools}/>
           <FlagBtn pkey={pkey} label="Tổng quan nhanh" sub="" detail={detail}/>
           <CopyBtn text={detail}/>
         </div>
       </div>
       {markers.length > 0 && <div className="co-grid">{markers.map((m, i) => <CoStat key={i} m={m}/>)}</div>}
       {prios.length > 0 && (
+        <WidgetEditableBody tools={tools} bodyRef={bodyRef}>
         <div className="co-prios">
           <span className="co-prios-lbl">Ưu tiên xử lý</span>
           <ol className="co-prio-list">{prios.map((p, i) => <li key={i}>{p.viec}</li>)}</ol>
         </div>
+        </WidgetEditableBody>
       )}
+      <WidgetNotePanel tools={tools}/>
     </section>
   )
 }
@@ -4774,6 +4936,7 @@ function renderMd(text) {
 // ─── FLOATING CHAT (kiểu Messenger) ───────────────────────────────────────────
 function DoctorNote({ value, onChange }){
   const [open, setOpen] = useState(false)
+  const stt = useSpeechToText(onChange)
   const pencil = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
   return (
     <>
@@ -4782,9 +4945,15 @@ function DoctorNote({ value, onChange }){
       </button>
       {open && (
         <div className="dn-panel">
-          <div className="dn-head">{pencil}<span>Ghi chú của bác sĩ</span><button className="dn-x" onClick={()=>setOpen(false)} aria-label="Đóng"><Icon.Close d={13} color="#64748B"/></button></div>
+          <div className="dn-head">{pencil}<span>Ghi chú của bác sĩ</span><button className="dn-x" onClick={()=>{setOpen(false); if(stt.rec) stt.stop()}} aria-label="Đóng"><Icon.Close d={13} color="#64748B"/></button></div>
           <textarea className="dn-ta" value={value} onChange={e=>onChange(e.target.value)} placeholder="Nhập nhận định, lưu ý, kế hoạch theo dõi cho hồ sơ này. Ghi chú được tự lưu và gộp vào báo cáo khi bạn xuất/in."/>
-          <div className="dn-foot">{(value||"").trim().length} ký tự · tự lưu · in kèm báo cáo</div>
+          <div className="dn-bar">
+            <button type="button" className={`dn-mic${stt.rec?" on":""}`} onClick={()=>stt.rec?stt.stop():stt.start(value)} disabled={!stt.supported} title={stt.rec?"Dừng ghi":"Ghi âm bằng giọng nói"}>
+              {stt.rec ? <><span className="rec-dot pulse"/>Đang nghe...</> : <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>Ghi âm</>}
+            </button>
+            <span className="dn-foot">{(value||"").trim().length} ký tự · tự lưu</span>
+          </div>
+          {stt.err && <div className="rec-note err"><Icon.Alert d={12} color="#B91C1C"/>{stt.err}</div>}
         </div>
       )}
     </>
@@ -5500,6 +5669,8 @@ function DiscBlock({ kind, title, items }){
 }
 function SpecCard({ y }){
   const [more, setMore] = useState(false)
+  const bodyRef = useRef(null)
+  const tools = useWidgetTools("mdt-" + (y.khoa||"spec"))
   return (
     <div className="spec-card">
       <div className="spec-hd">
@@ -5507,7 +5678,9 @@ function SpecCard({ y }){
         <span className="spec-name">{y.khoa}</span>
         {y.muc_cao && <span className="spec-flag">Ưu tiên cao</span>}
         <span className={`conf ${confClass(y.confidence)}`}>Tin cậy {y.confidence}%</span>
+        <span style={{marginLeft:"auto",display:"inline-flex",gap:"4px"}}><WidgetToolButtons tools={tools}/></span>
       </div>
+      <WidgetEditableBody tools={tools} bodyRef={bodyRef}>
       <div className="spec-row"><span className="spec-lbl">Kết luận chính</span><ul className="ul-clean">{y.ket_luan_chinh.map((d,j)=><li key={j}>{d}</li>)}</ul></div>
       {y.de_xuat.length>0 && <div className="spec-row"><span className="spec-lbl teal">Đề xuất</span><ul className="ul-clean teal">{y.de_xuat.map((d,j)=><li key={j}>{d}</li>)}</ul></div>}
       <div className="spec-row"><span className="spec-lbl amber">Dữ liệu còn thiếu</span><span className="spec-gap">{y.con_thieu}</span></div>
@@ -5521,6 +5694,8 @@ function SpecCard({ y }){
           </div>}
         </>
       )}
+      </WidgetEditableBody>
+      <WidgetNotePanel tools={tools}/>
     </div>
   )
 }
@@ -5627,17 +5802,24 @@ function MDTView({ report }){
 function TeachCard({ n, title, children, accent }){
   const [collapsed, setCollapsed] = useGlobalCollapse(false)
   const bodyRef = useRef(null)
+  const tools = useWidgetTools("teach-" + n)
   return (
     <div className={`teach-sec${accent?" "+accent:""}${collapsed?" collapsed":""}`}>
       <div className="teach-sec-t" onClick={()=>setCollapsed(c=>!c)} style={{cursor:"pointer"}} title={collapsed?"Mở rộng":"Thu gọn"}>
         <span className="teach-sec-n">{n}</span>{title}
         <span className="sec-tools" onClick={e=>e.stopPropagation()}>
+          <WidgetToolButtons tools={tools}/>
           <FlagBtn pkey={CURRENT_PKEY} label={typeof title === "string" ? title : "Mục giảng dạy"} sub="Mục giảng dạy" detail={()=>elText(bodyRef.current)}/>
           <CopyBtn text={()=>elText(bodyRef.current)} label=""/>
         </span>
         <span className="teach-sec-chev">{collapsed ? <Icon.ChevDown d={13} color="#94A3B8"/> : <Icon.ChevUp d={13} color="#94A3B8"/>}</span>
       </div>
-      {!collapsed && <div className="teach-sec-b" ref={bodyRef}>{children}</div>}
+      {!collapsed && (
+        <div className="teach-sec-b">
+          <WidgetEditableBody tools={tools} bodyRef={bodyRef}>{children}</WidgetEditableBody>
+        </div>
+      )}
+      <WidgetNotePanel tools={tools}/>
     </div>
   )
 }
@@ -6257,11 +6439,17 @@ body.focus-mode .report-nav{box-shadow:none}
 .dn-head span{flex:1}
 .dn-x{border:none;background:none;cursor:pointer;display:flex;padding:0}
 .dn-ta{display:block;width:100%;box-sizing:border-box;min-height:144px;border:none;outline:none;resize:vertical;padding:12px 14px;font-size:13px;font-family:inherit;color:var(--navy);background:transparent;line-height:1.55}
-.dn-foot{padding:8px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);background:#FAFBFD}
+.dn-bar{display:flex;align-items:center;gap:9px;padding:8px 14px;border-top:1px solid var(--border);background:#FAFBFD}
+.dn-mic{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:#fff;color:var(--navy2);border-radius:999px;padding:5px 12px;font-size:11.5px;font-weight:600;cursor:pointer}
+.dn-mic.on{background:#DC2626;color:#fff;border-color:#DC2626}
+.dn-mic:disabled{opacity:.5;cursor:not-allowed}
+.dn-foot{font-size:11px;color:var(--muted)}
 body.theme-dark .dn-panel{background:#161F33;border-color:#28364E}
 body.theme-dark .dn-head{color:#EAF1FB;border-color:#28364E}
 body.theme-dark .dn-ta{color:#EAF1FB}
-body.theme-dark .dn-foot{background:#10192A;border-color:#28364E;color:#A8BBD6}
+body.theme-dark .dn-bar{background:#10192A;border-color:#28364E}
+body.theme-dark .dn-foot{color:#A8BBD6}
+body.theme-dark .dn-mic{background:#1B2536;border-color:#2F4368;color:#9FB3CC}
 body.theme-dark .dn-dot{border-color:#161F33}
 body.focus-mode .dn-fab{opacity:.35}
 .tls-card{background:var(--glass);border:1px solid var(--border);border-radius:14px;padding:14px 4px 14px 16px;margin:12px 0}
@@ -6295,12 +6483,16 @@ body.theme-dark .nav-menu-font button{background:#1B2536;border-color:#2F4368;co
 .takeaway-card li{position:relative}
 .prob-top{display:flex;align-items:center;gap:6px}
 .prob-top .flag-btn{margin-left:auto}
-.bm-ov{position:fixed;inset:0;z-index:130;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
-.bm-panel{background:var(--glass);border-radius:18px;width:460px;max-width:100%;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(15,39,64,.3);overflow:hidden}
-.bm-head{display:flex;align-items:center;gap:9px;padding:16px 18px;border-bottom:1px solid var(--border);font-size:14.5px;font-weight:700;color:var(--navy)}
+.bm-page{max-width:900px;margin:0 auto;padding:24px 28px 60px;min-height:100vh;box-sizing:border-box}
+.bm-back{display:inline-flex;align-items:center;gap:7px;border:none;background:transparent;color:#1D6FE8;font-size:13.5px;font-weight:600;cursor:pointer;padding:8px 0;margin-bottom:14px}
+.bm-back:hover{text-decoration:underline}
+.bm-page-head{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding-bottom:16px;border-bottom:1px solid var(--border);margin-bottom:18px;width:100%}
+.bm-page-title{display:flex;align-items:center;gap:9px;font-size:19px;font-weight:700;color:var(--navy);flex:1}
 .bm-head-icon{color:#D97706;display:inline-flex}
 .bm-count-chip{font-size:11px;font-weight:700;color:#D97706;background:#FEF3C7;border-radius:999px;padding:2px 9px}
-.bm-body{padding:12px;overflow-y:auto;flex:1}
+.bm-page-body{display:flex;flex-direction:column;gap:0}
+body.theme-dark .bm-page-head{border-color:#28364E}
+body.theme-dark .bm-page-title{color:#EAF1FB}
 .bm-empty{padding:36px 18px;text-align:center;color:var(--muted);font-size:12.5px;line-height:1.65}
 .bm-empty-icon{display:flex;justify-content:center;margin-bottom:12px;color:#CBD5E1}
 .bm-item{background:var(--glass);border:1px solid var(--border);margin-bottom:8px;border-radius:13px;overflow:hidden;transition:border-color .15s,box-shadow .15s}
@@ -6315,8 +6507,6 @@ body.theme-dark .nav-menu-font button{background:#1B2536;border-color:#2F4368;co
 .bm-chev{display:inline-flex;flex-shrink:0;align-items:center}
 .bm-x{border:none;background:none;cursor:pointer;padding:2px;flex-shrink:0;display:inline-flex}
 .bm-detail{font-size:12px;color:var(--muted2);padding:0 13px 13px 56px;line-height:1.6;white-space:pre-wrap;max-height:160px;overflow:auto}
-body.theme-dark .bm-panel{background:#161F33}
-body.theme-dark .bm-head{color:#EAF1FB;border-color:#28364E}
 body.theme-dark .bm-item{background:#141D2F;border-color:#28364E}
 body.theme-dark .bm-item:hover{border-color:#92651F}
 body.theme-dark .bm-icon-badge{background:#241E10}
@@ -6503,10 +6693,15 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 @media(max-width:860px){
   .report-outer{padding:14px 12px 48px;gap:0}
   .sidebar{display:none}
-  .report-nav-inner{padding:6px 12px;height:auto;min-height:52px;flex-wrap:wrap;gap:6px 8px}
+  .report-nav-inner{padding:8px 12px 6px}
+  .nav-row2{gap:6px 8px}
   .nav-right{gap:7px;flex-wrap:wrap;justify-content:flex-end}
-  .patient-meta{display:none}
   .mode-dd-lbl{display:none}
+  .nav-export{padding:8px 12px;font-size:12px}
+}
+@media(max-width:420px){
+  .nav-export-txt{display:none}
+  .nav-export{padding:8px 10px}
 }
 @media(max-width:600px){
   .stats-row{grid-template-columns:1fr}
@@ -7056,23 +7251,6 @@ function ThemeToggle(){
       {dark
         ? <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
         : <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>}
-    </button>
-  )
-}
-
-function FocusToggle(){
-  const [on, setOn] = useState(false)
-  const toggle = () => {
-    const v = !on
-    setOn(v)
-    document.body.classList.toggle("focus-mode", v)
-    mpToast(v ? "Đã bật chế độ trình chiếu" : "Đã tắt chế độ trình chiếu")
-  }
-  return (
-    <button className="theme-toggle" onClick={toggle} title={on?"Thoát trình chiếu":"Chế độ trình chiếu (ẩn bớt khung viền)"} aria-label="Chế độ trình chiếu">
-      {on
-        ? <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
-        : <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>}
     </button>
   )
 }
