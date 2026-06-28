@@ -1,0 +1,56 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install esbuild + React (đóng gói trực tiếp vào bundle, không CDN)
+        run: npm install esbuild@0.27.7 react@19.2.6 react-dom@19.2.6
+
+      - name: Chuẩn bị thư mục build
+        run: |
+          mkdir -p build
+          cp App.jsx build/App.jsx
+          cp docker_setup/mount.jsx build/mount.jsx
+
+      - name: Build bundle.js từ mount.jsx
+        run: |
+          npx esbuild build/mount.jsx --bundle --loader:.jsx=jsx \
+            --jsx=automatic --format=esm --outfile=dist/mount.js --minify
+
+      - name: Copy index.html vào dist/
+        run: cp index.html dist/index.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
