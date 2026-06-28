@@ -1,12 +1,18 @@
 # MedParcours AI — chạy 1 lệnh: docker-compose up --build
-# File này BẮT BUỘC đặt ở thư mục gốc của repository.
+#
+# Chỉ gồm backend + frontend, KHÔNG có service "db" — phù hợp demo/Vòng 2
+# (xem medparcours_roadmap_v2.md mục 3.4 "Kiến trúc 2 giai đoạn"). Giai đoạn
+# thương mại hóa thật (on-premise, có Postgres) sẽ thêm service riêng sau,
+# không phải bây giờ.
+#
+# Yêu cầu trước khi chạy: tạo file .env (copy từ .env.example) với
+# ANTHROPIC_API_KEY thật.
 
-version: '3.8'
 services:
   backend:
     build:
-      context: ./backend      # Trỏ vào thư mục backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: docker/Dockerfile.backend
     ports:
       - "8000:8000"
     env_file:
@@ -20,9 +26,9 @@ services:
 
   frontend:
     build:
-      context: ./frontend     # Trỏ vào thư mục frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: docker/Dockerfile.frontend
     ports:
-      - "8080:80"             # Giám khảo vào localhost:8080 để xem giao diện
+      - "8080:80"
     depends_on:
       - backend

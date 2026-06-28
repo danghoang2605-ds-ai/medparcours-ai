@@ -1,0 +1,37 @@
+# Frontend MedParcours AI — build bằng esbuild, ĐÓNG GÓI React TRỰC TIẾP vào
+# bundle (không dùng CDN import map) để demo chạy chắc chắn, không phụ thuộc
+# mạng ngoài lúc chạy. Khác với cách validate khi DEV (esbuild --external:react,
+# giả định React có sẵn ở môi trường khác) — ở ĐÂY ta cần 1 bundle độc lập
+# chạy được ngay khi mở trình duyệt, nên cài react/react-dom làm devDependency
+# rồi để esbuild tự đóng gói (không thêm --external).
+#
+# LƯU Ý ĐƯỜNG DẪN: build context là GỐC REPO (xem docker-compose.yml dùng
+# context: .), nên mọi đường dẫn COPY ở đây tính từ gốc repo, không phải từ
+# vị trí file Dockerfile này (nằm trong docker/).
+FROM node:20-slim AS build
+
+WORKDIR /app
+RUN npm install esbuild@0.27.7 react@19.2.6 react-dom@19.2.6
+
+COPY frontend/src/App.jsx frontend/src/main.jsx ./
+# --jsx=automatic BẮT BUỘC: App.jsx dùng JSX nhưng KHÔNG import React mặc định
+# (chỉ import named exports như useState). Nếu thiếu cờ này, esbuild dùng JSX
+# "classic" transform (React.createElement) cần biến React global tồn tại ->
+# lỗi runtime "React is not defined" khi mở trong browser (ĐÃ XÁC NHẬN QUA TEST
+# THẬT bằng Puppeteer trước khi viết file này — không phải suy đoán).
+RUN npx esbuild main.jsx --bundle --loader:.jsx=jsx --jsx=automatic --format=esm \
+    --outfile=main.js --minify
+
+# ─── Giai đoạn phục vụ tĩnh ────────────────────────────────────────────────
+FROM nginx:alpine
+
+COPY --from=build /app/main.js /usr/share/nginx/html/main.js
+COPY frontend/index.html /usr/share/nginx/html/index.html
+# Logo nhà tài trợ/đơn vị (HackAIthon, Vietcombank, VNPT AI, VSDS...) — Đăng
+# tự thêm file ảnh vào frontend/public/logos/ (xem PARTNER_GROUPS trong
+# App.jsx để biết đúng tên file cần đặt). Nếu folder rỗng lúc build, COPY vẫn
+# chạy được nhờ .gitkeep, chỉ là chưa có ảnh hiển thị (App.jsx đã tự ẩn ảnh
+# lỗi qua onError, không vỡ giao diện).
+COPY frontend/public/logos/ /usr/share/nginx/html/logos/
+
+EXPOSE 80
