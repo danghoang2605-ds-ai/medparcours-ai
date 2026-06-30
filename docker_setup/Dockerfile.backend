@@ -1,8 +1,6 @@
 # Backend MedParcours AI — FastAPI + rule engine + ECG/document extraction
 FROM python:3.11-slim
 
-# opencv-python-headless cần vài thư viện hệ thống tối thiểu để chạy (libGL...)
-# dù bản headless đã giảm phụ thuộc, ảnh nền tảng slim vẫn thiếu vài lib gốc.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
@@ -11,17 +9,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt .
-# LƯU Ý: python:3.11-slim (Docker Hub chính thức) KHÔNG có PEP 668
-# "externally-managed-environment" marker, nên KHÔNG cần --break-system-packages
-# ở đây (khác với máy dev/sandbox dùng Python hệ thống Ubuntu managed bởi apt,
-# nơi cờ đó là bắt buộc). Thêm nhầm cờ không gây lỗi (pip bỏ qua nếu thừa) nhưng
-# dễ gây hiểu nhầm khi đọc code, nên không thêm.
+
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy các file backend chính
 COPY main.py clinical_rules.py ecg_engine.py document_extract.py ./
+
+# Copy package CDE
+COPY cde ./cde
 
 EXPOSE 8000
 
-# ANTHROPIC_API_KEY truyền qua biến môi trường lúc chạy (docker-compose env_file
-# hoặc -e), KHÔNG hardcode hoặc COPY file .env vào image.
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
