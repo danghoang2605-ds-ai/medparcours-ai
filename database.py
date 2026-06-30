@@ -64,7 +64,23 @@ def get_client():
     """Tạo 1 client mới mỗi lần gọi — đơn giản, an toàn cho FastAPI sync
     handler (không cần quản lý connection pool phức tạp cho quy mô hackathon).
     Trả None nếu thiếu thư viện libsql_client (báo lỗi rõ ràng ở nơi gọi,
-    không silent fail)."""
+    không silent fail).
+
+    BUG NGHIÊM TRỌNG ĐÃ SỬA (xác nhận qua log thật trên Hugging Face Space):
+    libsql_client TỰ ĐỘNG đổi tiền tố "libsql://" thành "wss://" (WebSocket
+    Secure) — xem libsql_client/config.py: `if scheme == "libsql": scheme =
+    "wss"`. Trên môi trường container của Hugging Face Space, kết nối
+    WebSocket ra ngoài bị lỗi handshake ngay từ bước đầu:
+        "400, message='Invalid response status', url='wss://...turso.io'"
+    Đây KHÔNG PHẢI lỗi sai token/URL — nếu token sai, Turso trả lỗi 401 rõ
+    ràng, không phải lỗi 400 ở tầng bắt tay kết nối. Token đúng, chỉ là
+    giao thức WebSocket không hoạt động ổn định trong môi trường này.
+
+    GIẢI PHÁP: Turso hỗ trợ CẢ HAI giao thức cho cùng 1 database — chỉ cần
+    đổi tiền tố URL từ "libsql://" thành "https://" để ép dùng HTTP thay vì
+    WebSocket (xem libsql_client/http.py — class riêng cho giao thức HTTP).
+    HTTP ổn định hơn nhiều trong container có proxy/network sandbox hạn chế.
+    """
     if libsql_client is None:
         raise RuntimeError(
             "Thiếu thư viện libsql_client — chạy: pip install libsql-client --break-system-packages"
@@ -73,6 +89,8 @@ def get_client():
     token = _get_auth_token()
     if url.startswith("file:"):
         return libsql_client.create_client_sync(url)
+    if url.startswith("libsql://"):
+        url = "https://" + url[len("libsql://"):]
     return libsql_client.create_client_sync(url, auth_token=token)
 
 
