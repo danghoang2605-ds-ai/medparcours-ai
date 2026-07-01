@@ -11,6 +11,7 @@ test_database.py đã làm, để CI không cần token Turso/kết nối mạng
 """
 import sys
 import os
+import io
 import json
 import tempfile
 from unittest.mock import patch
@@ -161,6 +162,74 @@ def test_update_patient_loi_json_tra_loi_ro(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["success"] is False
+
+
+# ─── DELETE /patient/{so_benh_an} ─────────────────────────────────────────
+def test_delete_patient_chua_ton_tai_tra_404(client):
+    resp = client.delete("/patient/00.999999")
+    assert resp.status_code == 404
+
+
+def test_delete_patient_thanh_cong(client):
+    client.post("/patient/save", json={"report": _sample_report()})
+    resp = client.delete("/patient/02.000001")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["so_benh_an"] == "02.000001"
+    # Xác nhận đã xóa thật — GET lại phải 404
+    resp2 = client.get("/patient/02.000001")
+    assert resp2.status_code == 404
+
+
+def test_delete_patient_khong_anh_huong_ho_so_khac(client):
+    client.post("/patient/save", json={"report": _sample_report(so_benh_an="02.000001")})
+    client.post("/patient/save", json={"report": _sample_report(so_benh_an="02.000002")})
+    client.delete("/patient/02.000001")
+    resp = client.get("/patient")
+    ids = [p["so_benh_an"] for p in resp.json()["patients"]]
+    assert ids == ["02.000002"]
+
+
+# ─── POST /patient/update_file — cập nhật hồ sơ đa định dạng (multipart) ──
+def test_update_patient_file_chua_co_ho_so_tra_404(client):
+    resp = client.post("/patient/update_file",
+                        data={"so_benh_an": "00.999999"},
+                        files={"file": ("taikham.docx", io.BytesIO(b"noi dung gia"),
+                                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+    assert resp.status_code == 404
+
+
+def test_update_patient_file_docx_thanh_cong(client, mock_anthropic_patient_update):
+    from docx import Document
+    client.post("/patient/save", json={"report": _sample_report()})
+    doc = Document()
+    doc.add_paragraph("Ket qua tai kham moi, INR do lai 2.8, dai it nhat vai chuc ky tu de qua kiem tra.")
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    resp = client.post("/patient/update_file",
+                        data={"so_benh_an": "02.000001", "nguon_tai_lieu": "tai_kham.docx"},
+                        files={"file": ("tai_kham.docx", buf,
+                                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["so_lan_cap_nhat"] == 2
+    inr_values = [x["rawVal"] for x in data["report"]["xet_nghiem_key"] if x["key"] == "INR"]
+    assert 2.4 in inr_values
+    assert 2.8 in inr_values
+
+
+def test_update_patient_file_dinh_dang_khong_ho_tro_tra_loi_ro(client):
+    client.post("/patient/save", json={"report": _sample_report()})
+    resp = client.post("/patient/update_file",
+                        data={"so_benh_an": "02.000001"},
+                        files={"file": ("ghi_am.mp3", io.BytesIO(b"gia lap file am thanh"), "audio/mpeg")})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is False
+    assert "định dạng" in data["error"].lower() or "dinh dang" in data["error"].lower()
 
 
 if __name__ == "__main__":
