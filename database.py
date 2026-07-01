@@ -49,15 +49,26 @@ def _get_db_url() -> str:
     cục bộ trong thư mục hiện tại — để chạy test/dev KHÔNG CẦN tài khoản
     Turso thật, đúng nguyên tắc "test không phụ thuộc dịch vụ ngoài, không
     cần mạng" đã áp dụng xuyên suốt dự án (mock_anthropic, v.v.).
+
+    .strip() BẮT BUỘC — đã xác nhận qua log lỗi thật trên Hugging Face Space:
+    "Forbidden control character detected in headers. Potential header
+    injection attack." Đây xảy ra khi giá trị Secret bị dính ký tự xuống
+    dòng/khoảng trắng ẩn ở đầu/cuối (rất dễ xảy ra khi copy-paste 1 chuỗi
+    JWT dài từ giao diện web Turso vào ô nhập Secret) — thư viện HTTP nội
+    bộ TỪ CHỐI gửi request nếu header chứa ký tự điều khiển, đúng cơ chế an
+    toàn chống header injection của chuẩn HTTP. Không phải lỗi sai giá trị,
+    chỉ là thừa ký tự vô hình không nhìn thấy được trên giao diện Secrets.
     """
     url = os.environ.get("TURSO_DATABASE_URL")
     if url:
-        return url
+        return url.strip()
     return "file:" + os.path.join(os.path.dirname(os.path.abspath(__file__)), "medparcours_dev.db")
 
 
 def _get_auth_token() -> Optional[str]:
-    return os.environ.get("TURSO_AUTH_TOKEN")  # None hợp lệ với file: local (không cần token)
+    """.strip() bắt buộc — xem lý do đầy đủ trong _get_db_url()."""
+    token = os.environ.get("TURSO_AUTH_TOKEN")
+    return token.strip() if token else None  # None hợp lệ với file: local (không cần token)
 
 
 def get_client():
@@ -182,6 +193,31 @@ def get_patient(so_benh_an: str) -> Optional[dict]:
             "tao_luc": row[2],
             "cap_nhat_luc": row[3],
         }
+    finally:
+        client.close()
+
+
+def delete_patient(so_benh_an: str) -> dict:
+    """
+    Xóa VĨNH VIỄN 1 hồ sơ đã lưu (bảng patients) và toàn bộ lịch sử gộp tài
+    liệu của hồ sơ đó (bảng patient_history) — không có "thùng rác"/khôi
+    phục, đúng với việc đây là thao tác bác sĩ chủ động xác nhận (frontend
+    bắt buộc xác nhận qua mpConfirm trước khi gọi endpoint này).
+
+    KHÔNG áp dụng cho 2 hồ sơ demo (Nguyễn Văn A/B) — chúng hard-code trong
+    App.jsx (HISTORY), không đi qua database, nên không có gì để xóa ở đây.
+    """
+    client = get_client()
+    try:
+        existing = client.execute(
+            "SELECT so_benh_an FROM patients WHERE so_benh_an = ?", [so_benh_an]
+        )
+        if not existing.rows:
+            return {"success": False, "error": "khong_ton_tai",
+                    "message": f"Không tìm thấy hồ sơ lưu trữ cho số bệnh án {so_benh_an}."}
+        client.execute("DELETE FROM patient_history WHERE so_benh_an = ?", [so_benh_an])
+        client.execute("DELETE FROM patients WHERE so_benh_an = ?", [so_benh_an])
+        return {"success": True, "so_benh_an": so_benh_an}
     finally:
         client.close()
 

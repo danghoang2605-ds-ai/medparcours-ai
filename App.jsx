@@ -14,7 +14,7 @@ async function mpFetchJSON(path, body, ms=45000, method="POST"){
   const timer = setTimeout(()=>ctrl.abort(), ms)
   try {
     const opts = { method, signal: ctrl.signal }
-    if (method !== "GET") {
+    if (method !== "GET" && method !== "DELETE") {
       opts.headers = { "Content-Type":"application/json" }
       opts.body = JSON.stringify(body)
     }
@@ -41,8 +41,8 @@ const mpApi = {
     if(!res.ok) throw new Error("API "+res.status)
     return res.json()
   },
-  mdt: (report) => mpFetchJSON("/mdt", { report }),
-  teaching: (report) => mpFetchJSON("/teaching", { report }),
+  // mdt/teaching: đã bỏ (xem ghi chú trong MDTView/TeachingView) — endpoint
+  // /mdt và /teaching (phẳng) chưa từng được ghép vào main.py.
   // ─── Lưu trữ hồ sơ lâu dài (tính năng "cập nhật hồ sơ theo thời gian
   // thực") — KHÔNG đụng gì tới các hàm trên, hồ sơ demo/luồng phân tích
   // 1 lần vẫn hoạt động y hệt cũ dù backend chưa cấu hình Turso (4 hàm này
@@ -50,8 +50,28 @@ const mpApi = {
   savePatient: (report) => mpFetchJSON("/patient/save", { report }),
   getPatient: (soBenhAn) => mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}`, null, 45000, "GET"),
   listPatients: () => mpFetchJSON("/patient", null, 45000, "GET"),
+  deletePatient: (soBenhAn) => mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}`, null, 45000, "DELETE"),
   updatePatient: (soBenhAn, hoSoText, pages, nguonTaiLieu) =>
     mpFetchJSON("/patient/update", { so_benh_an: soBenhAn, ho_so_text: hoSoText, pages, nguon_tai_lieu: nguonTaiLieu }, 90000),
+  updatePatientFile: async (soBenhAn, file, nguonTaiLieu) => {
+    const fd = new FormData()
+    fd.append("so_benh_an", soBenhAn)
+    fd.append("nguon_tai_lieu", nguonTaiLieu || file.name || "")
+    fd.append("file", file)
+    const ctrl = new AbortController()
+    const timer = setTimeout(()=>ctrl.abort(), 90000)
+    try {
+      const res = await fetch(`${API_URL}/patient/update_file`, { method:"POST", body: fd, signal: ctrl.signal })
+      if (!res.ok) {
+        let detail = ""
+        try { detail = (await res.json()).detail || "" } catch {}
+        const err = new Error(detail || ("API "+res.status))
+        err.status = res.status
+        throw err
+      }
+      return await res.json()
+    } finally { clearTimeout(timer) }
+  },
 }
 
 // ─── Bóc chữ PDF NGAY TRONG TRÌNH DUYỆT (pdf.js từ CDN) ───────────────────────
@@ -633,7 +653,6 @@ const CSS = `
   .med-item{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;background:rgba(235,244,255,0.5);border:1px solid rgba(200,220,255,0.35);border-radius:14px}
   .med-icon{width:32px;height:32px;border-radius:10px;background:rgba(29,111,232,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0}
   .med-name{font-size:13px;font-weight:600;color:var(--navy);line-height:1.3}
-  .med-nhom{font-size:11px;font-weight:600;color:var(--blue);margin-top:2px}
   .med-dose{font-size:11px;color:var(--muted2);margin-top:2px}
 
   /* MED GANTT */
@@ -1813,7 +1832,7 @@ function buildChips(report) {
     chips.push({ label: model ? `Van cơ học ${model}` : "Van cơ học", cls:"warn" })
   }
   // Chống đông
-  const ac = (report.thuoc_cuoi_ky || []).find(m => /chống đông|acenocoumarol|warfarin|coumarin/i.test(`${m.nhom} ${m.ten_thuoc}`))
+  const ac = (report.thuoc_cuoi_ky || []).find(m => /chống đông|acenocoumarol|warfarin|coumarin/i.test(`${m.ten_thuoc}`))
   if (ac) {
     const name = (ac.ten_thuoc.split(/\d/)[0] || "").trim()
     chips.push({ label:`Chống đông ${name}`, cls:"warn" })
@@ -1958,8 +1977,8 @@ function triggerHandoff(r, docNote, bookmarks) {
     ? findings.map(f=>`<li><b>[${TIER_META[f.muc].label}]</b> ${esc(f.ten)} - ${esc(f.ly_do)}</li>`).join("")
     : "<li>Khong co canh bao can xu tri ngay.</li>"
   const medRows = meds.length
-    ? meds.map(m=>`<tr><td><b>${esc(m.ten_thuoc)}</b></td><td>${esc(m.nhom||"")}</td><td>${esc(m.lieu||"")}</td><td>${esc(m.cach_dung||"")}${m.keo_dai?" (duy tri)":""}</td></tr>`).join("")
-    : `<tr><td colspan="4">Khong co thuoc duy tri.</td></tr>`
+    ? meds.map(m=>`<tr><td><b>${esc(m.ten_thuoc)}</b></td><td>${esc(m.lieu||"")}</td><td>${esc(m.cach_dung||"")}${m.keo_dai?" (duy tri)":""}</td></tr>`).join("")
+    : `<tr><td colspan="3">Khong co thuoc duy tri.</td></tr>`
   const prioRows = prios.length
     ? prios.map(a=>`<li>${esc(a.viec)}${a.ly_do?` <span style="color:#555">- ${esc(a.ly_do)}</span>`:""}</li>`).join("")
     : "<li>Theo y lenh tai kham.</li>"
@@ -1974,7 +1993,7 @@ function triggerHandoff(r, docNote, bookmarks) {
 <div class="hdr"><div><div style="font-size:8.5pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:3pt">MedParcours AI - Tom tat ban giao 1 trang</div><h1>${esc(p.ho_ten)}</h1><div class="sub">So benh an: ${esc(p.so_benh_an)} | ${esc(p.tuoi)} tuoi, ${esc(p.gioi_tinh)}</div><div class="sub">Vao vien: ${esc(p.ngay_vao_vien)} | Ra vien: ${esc(p.ngay_ra_vien)}</div></div><div class="hdr-r">In ngay: ${new Date().toLocaleDateString("vi-VN")}<br>MedParcours AI v1.2<br><span style="color:#c00;font-weight:700">Can bac si xac nhan</span></div></div>
 <h2>Chan doan & trang thai</h2><div class="diag">${esc(r.chan_doan_chinh)}</div><div><span class="pill">${esc(phaseLabel)}</span>${ef?`<span class="pill">EF ${esc(ef.val)}</span>`:""}</div>
 <h2>Canh bao can theo doi</h2><ul>${alertRows}</ul>
-<h2>Thuoc dang dung</h2><table><tr><th>Thuoc</th><th>Nhom</th><th>Lieu</th><th>Cach dung</th></tr>${medRows}</table>
+<h2>Thuoc dang dung</h2><table><tr><th>Thuoc</th><th>Lieu</th><th>Cach dung</th></tr>${medRows}</table>
 <h2>Viec can lam o lan tai kham</h2><ul>${prioRows}</ul>
 ${bmBlk}${noteBlk}
 <div class="footer"><span>Tao tu dong boi MedParcours AI v1.2. Can bac si xem xet truoc khi dung lam sang.</span><span>HackAIthon 2026</span></div>
@@ -2031,7 +2050,7 @@ function triggerPrint(r, mode, docNote, bookmarks, analysis) {
 <h2>III. Xét nghiệm</h2><table><tr><th>Chỉ số</th><th>Kết quả</th><th>BT</th><th>Đánh giá</th></tr>${(r.xet_nghiem_key||r.xet_nghiem_meta||[]).map(m=>`<tr><td>${m.key} (${m.desc})</td><td>${m.val}</td><td>${m.normal}</td><td>${m.status==="high"?"Cao":m.status==="low"?"Thấp":"BT"}</td></tr>`).join("")}</table>
 <h2>IV. Diễn biến</h2><table><tr><th style="width:80pt">Ngày</th><th style="width:70pt">Loại</th><th>Mô tả</th></tr>${r.dien_bien_lam_sang.map(ev=>`<tr><td>${ev.ngay}</td><td>${ev.loai==="canh_bao"?"Cảnh báo":ev.loai==="bat_thuong"?"Bất thường":"BT"}</td><td>${ev.mo_ta}</td></tr>`).join("")}</table>
 <h2>V. Siêu âm tim (${(r.sieu_am_tim?.lan_kham||[]).length} lượt)</h2><table><tr><th>Ngày</th><th>EF</th><th>Chênh áp</th><th>Kết luận</th></tr>${(r.sieu_am_tim?.lan_kham||[]).map(s=>`<tr><td>${s.ngay}${s.latest?" (gần nhất)":""}</td><td>${s.ef!=null?s.ef+"%":"-"}</td><td>${s.grad_max!=null?s.grad_max+(s.grad_tb!=null?"/"+s.grad_tb:"")+" mmHg":"-"}</td><td>${s.ghi_chu||s.chan_doan||""}</td></tr>`).join("")}</table>
-<h2>VI. Thuốc</h2><table><tr><th>Tên thuốc</th><th>Nhóm</th><th>Liều</th><th>Cách dùng</th></tr>${r.thuoc_cuoi_ky.map(t=>`<tr><td>${t.ten_thuoc}</td><td>${t.nhom}</td><td>${t.lieu}</td><td>${t.cach_dung}</td></tr>`).join("")}</table>
+<h2>VI. Thuốc</h2><table><tr><th>Tên thuốc</th><th>Liều</th><th>Cách dùng</th></tr>${r.thuoc_cuoi_ky.map(t=>`<tr><td>${t.ten_thuoc}</td><td>${t.lieu}</td><td>${t.cach_dung}</td></tr>`).join("")}</table>
 <h2>VII. Cảnh báo</h2>${r.canh_bao_nguy_co.map(c=>`<div class="alert"><div class="al">[${c.muc_do==="cao"?"ƯU TIÊN CAO":c.muc_do==="trung_binh"?"Trung bình":"Theo dõi"}] ${c.mo_ta}</div><div class="as">Căn cứ: ${c.can_cu}</div></div>`).join("")}
 ${(()=>{const{findings,egfr,ctx}=runPriorityScreens(r);const s=checkDrugSafety(r.thuoc_cuoi_ky,egfr,ctx);const act=findings.filter(f=>f.muc!=="stable").sort((a,b)=>TIER_ORDER[a.muc]-TIER_ORDER[b.muc]);let h="<h2>VIII. Phân tầng ưu tiên lâm sàng</h2>";h+=act.map(f=>`<div class="alert"><div class="al">[${TIER_META[f.muc].label}] ${f.ten}</div><div class="as">${f.ly_do} — Nguồn: ${f.nguon}</div></div>`).join("")||"<p>Không có cảnh báo cần xử trí ngay.</p>";h+=`<h2>IX. Kiểm tra an toàn đơn thuốc</h2><p>Chức năng thận: eGFR ${egfr} mL/phút/1.73m2 (CKD-EPI 2021).</p>`;if(s.interactions.length)h+="<table><tr><th>Cặp thuốc</th><th>Mức</th><th>Hậu quả</th><th>Đề xuất</th></tr>"+s.interactions.map(it=>`<tr><td>${it.thuoc_a} + ${it.thuoc_b}</td><td>${TIER_META[it.muc].label}</td><td>${it.hau_qua}</td><td>${it.de_xuat}</td></tr>`).join("")+"</table>";if(s.favorable.length)h+="<p>Phù hợp khuyến cáo: "+s.favorable.map(f=>`${f.thuoc} (${f.nguon})`).join("; ")+"</p>";return h})()}
 ${riskScoresPrintBlock}
@@ -2294,7 +2313,7 @@ function MedGantt({ meds }) {
         return (
           <div key={i} className="gantt-row">
             <div className="gantt-label">
-              <div className="gantt-label-name">{m.nhom}</div>
+              <div className="gantt-label-name">{m.ten_thuoc}</div>
               <div className="gantt-label-date">{m.bat_dau} → {ongoing ? "nay" : fmt(eTs)}</div>
             </div>
             <div className="gantt-track">
@@ -2305,7 +2324,7 @@ function MedGantt({ meds }) {
                 {hover===i && (
                   <div className="gantt-tip" style={{ left:`${left>70?"auto":"0"}`, right:`${left>70?"0":"auto"}` }}>
                     <div className="gantt-tip-name">{m.ten_thuoc}</div>
-                    <div className="gantt-tip-row"><span className="gantt-tip-dot" style={{background:m.color}}/>{m.nhom} · {m.lieu}</div>
+                    <div className="gantt-tip-row"><span className="gantt-tip-dot" style={{background:m.color}}/>{m.lieu}</div>
                     <div className="gantt-tip-use">{m.cach_dung}</div>
                     <div className="gantt-tip-date">{m.bat_dau} → {ongoing ? "đang dùng" : fmt(eTs)}</div>
                   </div>
@@ -3127,6 +3146,24 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
               <span className="logo-sub" style={{fontSize:12}}>AI</span>
             </div>
             <div className="nav-right">
+              <button className="nav-hist-btn" onClick={onOpenHistory} title="Lịch sử bệnh án" aria-label="Lịch sử bệnh án">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg>
+              </button>
+              {savedStatus === "chua_luu" && (
+                <button className="nav-save-btn" onClick={handleSavePatient} title="Lưu hồ sơ (để cập nhật lần sau)" aria-label="Lưu hồ sơ">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                </button>
+              )}
+              {savedStatus === "da_luu" && (
+                <button className="nav-save-btn saved" onClick={()=>setUpdatePanelOpen(true)} title={`Cập nhật hồ sơ${savedMeta ? ` (đã lưu, lần ${savedMeta.so_lan_cap_nhat})` : ""}`} aria-label="Cập nhật hồ sơ">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+                </button>
+              )}
+              {savedStatus === "loi_ket_noi" && (
+                <button className="nav-save-btn err" disabled title="Chưa kết nối được hệ thống lưu trữ lâu dài — chỉ xem được báo cáo lần này, không lưu lại được." aria-label="Lỗi kết nối lưu trữ">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><line x1="4" y1="4" x2="20" y2="20"/></svg>
+                </button>
+              )}
               <button className="nav-bm-btn" onClick={()=>setTab("bookmarks")} title="Mục đã đánh dấu" aria-label="Mục đã đánh dấu">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill={bmList.length>0?"currentColor":"none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
                 {bmList.length>0 && <span className="nav-bm-badge">{bmList.length}</span>}
@@ -3139,22 +3176,6 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
                 {menuOpen && <>
                   <div className="nav-menu-ov" onClick={()=>setMenuOpen(false)}/>
                   <div className="nav-menu">
-                    <div className="nav-menu-sec">Lưu trữ hồ sơ</div>
-                    {savedStatus === "chua_luu" && (
-                      <button onClick={()=>{setMenuOpen(false);handleSavePatient()}}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-                        Lưu hồ sơ (để cập nhật lần sau)
-                      </button>
-                    )}
-                    {savedStatus === "da_luu" && (
-                      <button onClick={()=>{setMenuOpen(false);setUpdatePanelOpen(true)}}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
-                        Cập nhật hồ sơ{savedMeta ? ` (đã lưu, lần ${savedMeta.so_lan_cap_nhat})` : ""}
-                      </button>
-                    )}
-                    {savedStatus === "loi_ket_noi" && (
-                      <div className="nav-menu-hint">Chưa kết nối được hệ thống lưu trữ lâu dài — chỉ xem được báo cáo lần này, không lưu lại được.</div>
-                    )}
                     <div className="nav-menu-sec">Xuất & chia sẻ</div>
                     <button onClick={()=>{setMenuOpen(false);triggerPrint(report,"full",docNote,bmList,analysis)}}><Icon.FileText d={14} color="#475569"/>Xuất bản đầy đủ (3 chế độ)</button>
                     <button onClick={()=>{setMenuOpen(false);triggerHandoff(report,docNote,bmList)}}><Icon.FileText d={14} color="#475569"/>Tóm tắt 1 trang (bàn giao)</button>
@@ -3178,7 +3199,6 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
                     <button onClick={()=>setZoom(z=>Math.min(1.4,+(z+0.1).toFixed(2)))} title="Lớn hơn">A+</button>
                   </div>
                   <div className="nav-menu-sec">Hồ sơ</div>
-                  <button onClick={()=>{setMenuOpen(false);onOpenHistory()}}><Icon.Clock d={14} color="#475569"/>Lịch sử bệnh án</button>
                   <button onClick={async()=>{setMenuOpen(false); if(await mpConfirm({title:"Phân tích hồ sơ mới?",message:"Báo cáo đang xem sẽ được đóng lại. Bạn có thể mở lại trong Lịch sử bệnh án.",okText:"Tiếp tục"})) onReset()}}><Icon.Back d={13} color="#475569"/>Hồ sơ mới</button>
                   <button className="danger" onClick={async()=>{setMenuOpen(false); if(await mpConfirm({title:"Đăng xuất khỏi MedParcours AI?",message:"Bạn sẽ quay lại màn hình đăng nhập.",okText:"Đăng xuất",danger:true})) onLogout()}}><Icon.Close d={13} color="#DC2626"/>Đăng xuất</button>
                 </div>
@@ -3838,30 +3858,50 @@ function bmIconFor(sub) {
   return <Icon.Alert d={15} color="#DC2626"/>
 }
 function UpdatePatientPanel({ pkey, onClose, onUpdated }){
-  const [staged, setStaged] = useState(null)
+  const [staged, setStaged] = useState(null) // { file, name, size, pages, url, isImage, isPdf } | null
+  const [note, setNote] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [progress, setProgress] = useState(null)
+  const [dragging, setDragging] = useState(false)
   const inputRef = useRef()
 
-  const onPick = (files) => {
+  const onPick = async (files) => {
     const f = files && files[0]
     if (!f) return
-    if (!f.name.toLowerCase().endsWith(".pdf")) {
-      setError("Hiện chỉ hỗ trợ tài liệu PDF cho tính năng cập nhật hồ sơ. Với định dạng khác, hãy dùng 'Phân tích hồ sơ mới' ở màn hình tải lên thông thường.")
+    const ext = "." + (f.name.split(".").pop() || "").toLowerCase()
+    if (![".pdf",".docx",".xlsx",".pptx",".png",".jpg",".jpeg"].includes(ext)) {
+      setError(`Định dạng ${ext || "?"} chưa được hỗ trợ. Hỗ trợ: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), ảnh (.png/.jpg).`)
       return
     }
     setError(null)
-    setStaged(f)
+    setNote("") // chọn file thì bỏ nội dung lời dặn đang gõ dở, tránh nhầm 2 nguồn cùng lúc
+    setStaged({
+      file: f, name: f.name, size: f.size,
+      pages: ext === ".pdf" ? await countPdfPages(f) : null,
+      url: URL.createObjectURL(f),
+      isImage: /\.(png|jpe?g)$/i.test(f.name),
+      isPdf: ext === ".pdf",
+    })
   }
+  const clearStaged = () => { if (staged?.url) try { URL.revokeObjectURL(staged.url) } catch {}; setStaged(null) }
 
-  const submit = async () => {
-    if (!staged) return
-    setLoading(true); setError(null); setProgress("Đang đọc tài liệu...")
+  const submitFile = async () => {
+    setLoading(true); setError(null)
     try {
-      const text = await extractPdfText(staged, (done, total) => setProgress(`Đang đọc trang ${done}/${total}...`))
-      setProgress("Đang gộp vào hồ sơ đã lưu...")
-      const result = await mpApi.updatePatient(pkey, text, 0, staged.name)
+      let result
+      if (staged.isPdf) {
+        // PDF: bóc chữ ở trình duyệt trước (giống luồng phân tích chính) để
+        // tránh giới hạn dung lượng upload, thay vì gửi cả file PDF thô.
+        setProgress("Đang đọc tài liệu...")
+        const text = await extractPdfText(staged.file, (done, total) => setProgress(`Đang đọc trang ${done}/${total}...`))
+        setProgress("Đang gộp vào hồ sơ đã lưu...")
+        result = await mpApi.updatePatient(pkey, text, 0, staged.name)
+      } else {
+        // Word/Excel/PowerPoint/ảnh: gửi thẳng file, backend tự bóc đúng định dạng.
+        setProgress(staged.isImage ? "Đang đọc ảnh (AI Vision)..." : "Đang đọc tài liệu...")
+        result = await mpApi.updatePatientFile(pkey, staged.file, staged.name)
+      }
       if (!result.success) {
         setError(result.error || "Không đọc được rõ nội dung tài liệu mới.")
         setLoading(false)
@@ -3875,6 +3915,26 @@ function UpdatePatientPanel({ pkey, onClose, onUpdated }){
     }
   }
 
+  const submitNote = async () => {
+    if (!note.trim()) return
+    setLoading(true); setError(null); setProgress("Đang gộp vào hồ sơ đã lưu...")
+    try {
+      const result = await mpApi.updatePatient(pkey, note, 0, "Lời dặn của bác sĩ")
+      if (!result.success) {
+        setError(result.error || "Không đọc được rõ nội dung lời dặn.")
+        setLoading(false)
+        return
+      }
+      mpToast(`Đã cập nhật hồ sơ — lần cập nhật thứ ${result.so_lan_cap_nhat}`)
+      onUpdated(result)
+    } catch (e) {
+      setError(e.message || "Có lỗi khi cập nhật hồ sơ. Hãy thử lại.")
+      setLoading(false)
+    }
+  }
+
+  const canSubmit = staged || note.trim().length > 0
+
   return (
     <div className="upd-ov" onClick={loading ? undefined : onClose}>
       <div className="upd-panel" onClick={e=>e.stopPropagation()}>
@@ -3885,25 +3945,56 @@ function UpdatePatientPanel({ pkey, onClose, onUpdated }){
         </div>
         <div className="upd-body">
           <p className="upd-desc">Tải thêm tài liệu mới cho bệnh nhân này (vd kết quả tái khám, xét nghiệm bổ sung). Hệ thống sẽ <b>gộp</b> vào hồ sơ đã lưu — xét nghiệm/diễn biến cũ vẫn được giữ nguyên, không bị mất.</p>
-          {!staged && !loading && (
-            <div className="upd-drop" onClick={()=>inputRef.current.click()}>
-              <input ref={inputRef} type="file" accept=".pdf" style={{display:"none"}} onChange={e=>onPick(e.target.files)}/>
-              <Icon.Upload d={24} color="#1D6FE8"/>
-              <span>Chọn tài liệu PDF mới</span>
-            </div>
-          )}
-          {staged && !loading && (
-            <div className="upd-staged">
-              <Icon.FileText d={16} color="#1D6FE8"/><span>{staged.name}</span>
-              <button onClick={()=>setStaged(null)} title="Bỏ chọn"><Icon.Close d={13} color="#94A3B8"/></button>
-            </div>
-          )}
+
           {loading && <div className="upd-loading"><span className="spin"/>{progress}</div>}
           {error && <div className="rec-note err"><Icon.Alert d={12} color="#B91C1C"/>{error}</div>}
-          {staged && !loading && (
-            <button className="btn-primary" style={{width:"100%", marginTop:"12px"}} onClick={submit}>
-              <Icon.Upload d={15} color="white"/>Cập nhật hồ sơ
-            </button>
+
+          {!loading && (
+            <>
+              {!staged && (
+                <div className={`upd-drop${dragging?" drag":""}`}
+                  onClick={()=>inputRef.current.click()}
+                  onDragOver={e=>{e.preventDefault();setDragging(true)}}
+                  onDragLeave={()=>setDragging(false)}
+                  onDrop={e=>{e.preventDefault();setDragging(false);onPick(e.dataTransfer.files)}}>
+                  <input ref={inputRef} type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style={{display:"none"}} onChange={e=>{onPick(e.target.files);e.target.value=""}}/>
+                  <Icon.Upload d={24} color="#1D6FE8"/>
+                  <span>Chọn tài liệu mới (VD: kết quả tái khám, xét nghiệm bổ sung)</span>
+                  <div className="fmt-row" style={{justifyContent:"center", marginTop:"8px"}}>
+                    <div className="fmt-chips">
+                      {["PDF","DOCX","XLSX","PPTX","PNG","JPG"].map(t=>{
+                        const k = FILE_KINDS[t.toLowerCase()] || kindOf("x."+t.toLowerCase())
+                        return <span key={t} className="fmt-chip" style={{color:k.color,background:k.bg}}>{t}</span>
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {staged && (
+                <div className="upd-staged">
+                  {staged.isImage
+                    ? <img src={staged.url} alt={staged.name} style={{width:32,height:32,borderRadius:6,objectFit:"cover"}}/>
+                    : <Icon.FileText d={16} color="#1D6FE8"/>}
+                  <span className="upd-staged-name">{staged.name}</span>
+                  <span className="upd-staged-meta">{staged.pages!=null?`${staged.pages} trang · `:""}{fmtSize(staged.size)}</span>
+                  <button onClick={clearStaged} title="Bỏ chọn"><Icon.Close d={13} color="#94A3B8"/></button>
+                </div>
+              )}
+
+              {!staged && (
+                <div className="rec-inline-wrap" style={{marginTop:"12px"}}>
+                  <div className="rec-inline-h"><Icon.Pulse d={13} color="#1D6FE8"/>Hoặc đọc/gõ trực tiếp lời dặn tái khám — không cần file</div>
+                  <AudioRecorder value={note} onChange={setNote}
+                    onAttach={(t)=>{ setNote(t); mpToast("Đã chuyển giọng nói thành chữ, kiểm tra lại rồi bấm Cập nhật hồ sơ") }}/>
+                </div>
+              )}
+
+              {canSubmit && (
+                <button className="btn-primary" style={{width:"100%", marginTop:"12px"}} onClick={staged ? submitFile : submitNote}>
+                  <Icon.Upload d={15} color="white"/>Cập nhật hồ sơ
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -3987,6 +4078,8 @@ function NextActions({ items, pkey }) {
   const [collapsed, setCollapsed] = useGlobalCollapse(false)
   const skey = "mp_chk_" + (pkey || "x")
   const [done, setDone] = useState(() => { try { return JSON.parse(sessionStorage.getItem(skey) || "[]") } catch { return [] } })
+  const bodyRef = useRef(null)
+  const tools = useWidgetTools("sec-actions", pkey)
   if (!items || !items.length) return null
   const toggle = (i) => setDone(prev => {
     const next = prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]
@@ -4002,31 +4095,34 @@ function NextActions({ items, pkey }) {
       <div className="next-hd">
         <Icon.ShieldCheck d={16} color="#B45309"/><span>Hành động ưu tiên ở lần tái khám tới</span>
         <span className="next-prog-txt">{completed}/{total} xong</span>
-        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><FlagBtn pkey={pkey || CURRENT_PKEY} label="Hành động ưu tiên ở lần tái khám tới" sub="Mục báo cáo" detail={detail}/><CopyBtn text={detail} label=""/></span>
+        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><WidgetToolButtons tools={tools}/><FlagBtn pkey={pkey || CURRENT_PKEY} label="Hành động ưu tiên ở lần tái khám tới" sub="Mục báo cáo" detail={detail}/><CopyBtn text={detail} label=""/></span>
         <button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"6px" }}>
           {collapsed ? <Icon.ChevDown d={14} color="#B45309"/> : <Icon.ChevUp d={14} color="#B45309"/>}
         </button>
       </div>
       <div className="next-bar"><div className="next-bar-fill" style={{ width: pct + "%" }}/></div>
       {!collapsed && (
-        <div className="next-list">
-          {items.map((a,i) => {
-            const checked = done.includes(i)
-            return (
-              <div key={i} className={"next-item" + (checked ? " done" : "")} onClick={() => toggle(i)} role="button" tabIndex={0}
-                onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(i) } }}>
-                <span className="next-box" aria-hidden="true">
-                  {checked && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>}
-                </span>
-                <div className="next-body">
-                  <div className="next-viec">{a.viec}</div>
-                  {a.ly_do && <div className="next-lydo">{a.ly_do}</div>}
+        <WidgetEditableBody tools={tools} bodyRef={bodyRef}>
+          <div className="next-list">
+            {items.map((a,i) => {
+              const checked = done.includes(i)
+              return (
+                <div key={i} className={"next-item" + (checked ? " done" : "")} onClick={() => toggle(i)} role="button" tabIndex={0}
+                  onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(i) } }}>
+                  <span className="next-box" aria-hidden="true">
+                    {checked && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>}
+                  </span>
+                  <div className="next-body">
+                    <div className="next-viec">{a.viec}</div>
+                    {a.ly_do && <div className="next-lydo">{a.ly_do}</div>}
+                  </div>
                 </div>
-              </div>
-            )
-          })}
-        </div>
+              )
+            })}
+          </div>
+        </WidgetEditableBody>
       )}
+      <WidgetNotePanel tools={tools}/>
     </div>
   )
 }
@@ -4710,6 +4806,7 @@ function CoStat({ m }) {
     path = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ")
     last = pts[pts.length - 1]
   }
+  const dateLabel = (m.trendDates && m.trendDates.length) ? m.trendDates[m.trendDates.length-1] : (m.ngay || null)
   return (
     <div className="co-stat">
       <div className="co-stat-top"><span className="co-stat-key">{m.key}</span><span className="co-stat-dot" style={{ background: col }}/></div>
@@ -4718,7 +4815,10 @@ function CoStat({ m }) {
         {tr.length > 1 && <path d={path} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>}
         {last && <circle cx={last[0]} cy={last[1]} r="2.6" fill={col}/>}
       </svg>
-      <div className="co-stat-norm">BT {m.normal}</div>
+      <div className="co-stat-foot">
+        <span className="co-stat-norm">BT {m.normal}</span>
+        {dateLabel && <span className="co-stat-date">{dateLabel}</span>}
+      </div>
     </div>
   )
 }
@@ -5062,7 +5162,6 @@ function ReportTab({ report: r, analysis }) {
               <div className="med-icon"><Icon.Pill d={16} color="#1D6FE8"/></div>
               <div style={{flex:1,minWidth:0}}>
                 <div className="med-name">{t.ten_thuoc}</div>
-                <div className="med-nhom">{t.nhom}</div>
                 <div className="med-dose">{t.lieu} • {t.cach_dung}</div>
                 {(st.kind !== "unknown" || t.bat_dau) && (
                   <div className="med-status-row">
@@ -5530,7 +5629,7 @@ function buildThread(r, names){
 }
 function buildAskMDT(r, names){
   const f=(arr)=>arr.filter(a=>names.includes(a.khoa))
-  const text=[r.chan_doan_chinh,...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta),...(r.thuoc_cuoi_ky||[]).map(t=>t.nhom)].join(" ")
+  const text=[r.chan_doan_chinh,...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta),...(r.thuoc_cuoi_ky||[]).map(t=>t.ten_thuoc)].join(" ")
   const has=(...k)=>matchKw(text,k)
   const out=[]
   if(has("kháng sinh","nhiễm","crp","pct")) out.push({ q:"Có nên xuống thang kháng sinh không?",
@@ -5545,7 +5644,7 @@ function buildAskMDT(r, names){
   return out
 }
 function deriveMDT(r){
-  const text=[r.chan_doan_chinh,r.tom_tat_toan_canh,...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta),...(r.thuoc_cuoi_ky||[]).map(t=>t.nhom),r.phau_thuat&&r.phau_thuat.phuong_phap].join(" ")
+  const text=[r.chan_doan_chinh,r.tom_tat_toan_canh,...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta),...(r.thuoc_cuoi_ky||[]).map(t=>t.ten_thuoc),r.phau_thuat&&r.phau_thuat.phuong_phap].join(" ")
   const specialties=SPEC_DEFS.filter(s=>matchKw(text,s.kw)).map(s=>{
     const cbs=pickCanhBao(r,s.kw)
     const fullEval = cbs.length ? cbs.map(c=>c.mo_ta)
@@ -5584,19 +5683,79 @@ function deriveMDT(r){
 }
 
 // ─── Engine Giảng dạy (khung bệnh án ngoại khoa HMU + tutor) ──────────────────
+// Luôn trả về ĐÚNG 5 tình huống MCQ (cho cả demo lẫn hồ sơ quét thật) — trước
+// đây chỉ có 2 pattern cố định (lactate/toan, INR) nên đa số hồ sơ chỉ ra
+// 0-1 câu. Giờ xếp theo thứ tự ưu tiên: pattern lâm sàng cụ thể theo từ khóa
+// (đúng ngữ cảnh nhất) -> từng cảnh báo nguy cơ thật trong hồ sơ (không chỉ
+// lấy 1 cái đầu) -> từng hành động ưu tiên thật -> kịch bản chung an toàn
+// (luôn áp dụng được, đảm bảo đủ 5 câu kể cả hồ sơ dữ liệu rất mỏng).
+const DECISION_TARGET_COUNT = 5
+
 function buildDecisions(r){
   const text=[r.chan_doan_chinh,...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta)].join(" ")
   const has=(...k)=>matchKw(text,k)
   const out=[]
+
   if(has("lactate","toan")) out.push({ tinh_huong:"Hậu phẫu, lactate tăng cao kèm toan chuyển hóa, bệnh nhân còn phụ thuộc thuốc vận mạch.",
     options:[{k:"A",t:"Giảm vận mạch ngay"},{k:"B",t:"Hồi sức tối ưu huyết động, theo dõi lactate clearance"},{k:"C",t:"Cho ăn đường miệng sớm"},{k:"D",t:"Ngừng theo dõi sát"}],
     dung:"B", giai_thich:"Lactate cao phản ánh giảm tưới máu mô; ưu tiên tối ưu cung lượng tim và theo dõi xu hướng lactate. Giảm vận mạch quá sớm có thể làm nặng tụt tưới máu." })
   if(has("inr","chống đông")) out.push({ tinh_huong:"Bệnh nhân vừa mổ tim, INR vọt lên ngưỡng nguy cơ chảy máu.",
     options:[{k:"A",t:"Tăng liều chống đông"},{k:"B",t:"Giữ nguyên liều"},{k:"C",t:"Tạm ngừng/giảm liều và đánh giá nguy cơ chảy máu"},{k:"D",t:"Truyền chế phẩm máu ngay"}],
     dung:"C", giai_thich:"INR vượt mục tiêu trên bệnh nhân vừa phẫu thuật làm tăng nguy cơ chảy máu; cần giảm/tạm ngừng và đánh giá. Đảo ngược bằng chế phẩm chỉ khi có chảy máu hoặc cần can thiệp." })
-  if(out.length===0 && (r.canh_bao_nguy_co||[]).length){ const c=r.canh_bao_nguy_co[0]
-    out.push({ tinh_huong:c.mo_ta, options:[{k:"A",t:"Theo dõi tiếp"},{k:"B",t:"Xử trí theo ưu tiên đã nêu"},{k:"C",t:"Cho xuất viện"},{k:"D",t:"Bỏ qua"}], dung:"B", giai_thich:"Đây là vấn đề ưu tiên cao, cần can thiệp theo hướng đã nêu." }) }
-  return out
+  if(has("kháng sinh","nhiễm","crp","pct")) out.push({ tinh_huong:"CRP/bạch cầu giảm rõ rệt sau vài ngày dùng kháng sinh, lâm sàng cải thiện, hết sốt.",
+    options:[{k:"A",t:"Tiếp tục nguyên phổ kháng sinh đến hết đợt theo kinh nghiệm ban đầu"},{k:"B",t:"Xuống thang kháng sinh dựa trên đáp ứng lâm sàng và marker viêm"},{k:"C",t:"Đổi sang kháng sinh phổ rộng hơn"},{k:"D",t:"Ngừng kháng sinh ngay lập tức"}],
+    dung:"B", giai_thich:"CRP/PCT giảm liên tục kèm cải thiện lâm sàng là chỉ điểm đáp ứng điều trị tốt — nên cân nhắc xuống thang theo nguyên tắc antibiotic stewardship, không kéo dài phổ rộng không cần thiết." })
+  if(has("suy tim","nt-probnp","ef giảm")) out.push({ tinh_huong:"NT-proBNP còn tăng cao, có dấu hiệu ứ dịch (khó thở, phù), EF giảm trên siêu âm gần nhất.",
+    options:[{k:"A",t:"Tăng cường lợi tiểu, tối ưu điều trị suy tim theo guideline (ACEI/ARB/SGLT2i/chẹn beta)"},{k:"B",t:"Ngừng toàn bộ thuốc tim mạch để tránh tụt huyết áp"},{k:"C",t:"Chỉ theo dõi, không can thiệp"},{k:"D",t:"Truyền dịch để cải thiện tưới máu"}],
+    dung:"A", giai_thich:"Dấu hiệu ứ dịch + NT-proBNP cao + EF giảm gợi ý suy tim mất bù — cần tối ưu lợi tiểu và điều trị nền theo khuyến cáo suy tim hiện hành, tránh truyền dịch làm nặng thêm ứ dịch." })
+  if(has("rung nhĩ","af","đột quỵ")) out.push({ tinh_huong:"Bệnh nhân rung nhĩ mới phát hiện, chưa dùng thuốc chống đông, chưa có tiền sử đột quỵ.",
+    options:[{k:"A",t:"Không cần chống đông vì chưa có triệu chứng"},{k:"B",t:"Đánh giá nguy cơ đột quỵ (CHA2DS2-VASc) và nguy cơ chảy máu (HAS-BLED) trước khi quyết định"},{k:"C",t:"Chống đông liều tối đa ngay lập tức không cần đánh giá"},{k:"D",t:"Chuyển thẳng sốc điện chuyển nhịp"}],
+    dung:"B", giai_thich:"Quyết định chống đông ở rung nhĩ luôn dựa trên cân bằng nguy cơ đột quỵ và nguy cơ chảy máu qua thang điểm chuẩn, không quyết định cảm tính theo triệu chứng." })
+  if(has("creatinin","egfr","suy thận","aki")) out.push({ tinh_huong:"Creatinin tăng hơn 50% so với nền trong vòng 48 giờ sau mổ, lượng nước tiểu giảm.",
+    options:[{k:"A",t:"Tiếp tục phác đồ thuốc cũ không đổi liều"},{k:"B",t:"Đánh giá tổn thương thận cấp (AKI), điều chỉnh liều thuốc theo eGFR và rà soát thuốc độc thận"},{k:"C",t:"Tăng liều lợi tiểu để ép tiểu nhiều hơn"},{k:"D",t:"Chỉ cần theo dõi, không cần xét nghiệm lại"}],
+    dung:"B", giai_thich:"Creatinin tăng >50% trong 48 giờ đạt tiêu chuẩn AKI — cần rà soát và chỉnh liều mọi thuốc thải qua thận, tránh thêm thuốc độc thận, không tự ý tăng lợi tiểu khi chưa rõ nguyên nhân." })
+
+  // Cảnh báo nguy cơ THẬT trong hồ sơ chưa dùng ở trên — mỗi cảnh báo còn lại
+  // thành 1 câu MCQ riêng (khác bản cũ: bản cũ chỉ lấy đúng 1 cảnh báo đầu tiên).
+  const usedTexts = new Set(out.map(d=>d.tinh_huong))
+  for(const c of (r.canh_bao_nguy_co||[])){
+    if(out.length>=DECISION_TARGET_COUNT) break
+    if(usedTexts.has(c.mo_ta)) continue
+    usedTexts.add(c.mo_ta)
+    out.push({ tinh_huong:c.mo_ta,
+      options:[{k:"A",t:"Theo dõi tiếp, chưa cần can thiệp"},{k:"B",t:"Xử trí theo hướng ưu tiên đã nêu trong hồ sơ"},{k:"C",t:"Cho xuất viện ngay"},{k:"D",t:"Bỏ qua, không cần đánh giá thêm"}],
+      dung:"B", giai_thich:(c.can_cu ? `Căn cứ: ${c.can_cu}. ` : "")+"Đây là vấn đề đã được hệ thống đánh giá là cần chú ý — nên xử trí theo đúng hướng ưu tiên đã nêu, không trì hoãn hoặc bỏ qua." })
+  }
+
+  // Hành động ưu tiên THẬT trong hồ sơ — dùng làm nguồn bổ sung nếu vẫn thiếu.
+  for(const a of (r.hanh_dong_uu_tien||[])){
+    if(out.length>=DECISION_TARGET_COUNT) break
+    if(!a.viec || usedTexts.has(a.viec)) continue
+    usedTexts.add(a.viec)
+    out.push({ tinh_huong:`Trong kế hoạch tái khám, có đề nghị: "${a.viec}"${a.ly_do?` (lý do: ${a.ly_do})`:""}.`,
+      options:[{k:"A",t:"Thực hiện đúng theo đề nghị và lý do đã nêu"},{k:"B",t:"Bỏ qua vì không quan trọng"},{k:"C",t:"Trì hoãn vô thời hạn"},{k:"D",t:"Chuyển tuyến ngay không cần lý do"}],
+      dung:"A", giai_thich:"Hành động ưu tiên trong hồ sơ được xếp hạng dựa trên mức độ ảnh hưởng tới an toàn bệnh nhân — nên thực hiện đúng theo đề nghị và căn cứ đã nêu." })
+  }
+
+  // Kịch bản chung an toàn — đảm bảo LUÔN đủ 5 câu kể cả hồ sơ demo/dữ liệu
+  // mỏng không có đủ cảnh báo/hành động ưu tiên để sinh đủ 5 câu ở trên.
+  const GENERIC_FALLBACK = [
+    { tinh_huong:"Bệnh nhân xuất viện, hẹn tái khám định kỳ theo kế hoạch điều trị.",
+      options:[{k:"A",t:"Không cần dặn dò gì thêm"},{k:"B",t:"Dặn rõ lịch tái khám, dấu hiệu cần quay lại viện ngay, và mang đủ đơn thuốc/giấy tờ"},{k:"C",t:"Để bệnh nhân tự quyết định khi nào tái khám"},{k:"D",t:"Ngừng toàn bộ thuốc khi ra viện"}],
+      dung:"B", giai_thich:"Dặn dò rõ ràng khi xuất viện (lịch tái khám, dấu hiệu cảnh báo, đơn thuốc) giúp giảm nguy cơ tái nhập viện và biến chứng bị bỏ sót." },
+    { tinh_huong:"Bệnh nhân đang dùng nhiều loại thuốc cùng lúc sau khi ra viện.",
+      options:[{k:"A",t:"Không cần rà soát vì bác sĩ kê đơn đã đúng"},{k:"B",t:"Rà soát tương tác thuốc và trùng nhóm trước khi kê thêm thuốc mới"},{k:"C",t:"Tự ý bớt thuốc để đơn giản hóa"},{k:"D",t:"Kê thêm thuốc mới mà không cần xem đơn cũ"}],
+      dung:"B", giai_thich:"Bệnh nhân đa thuốc có nguy cơ tương tác/trùng nhóm cao — luôn rà soát toàn bộ đơn thuốc hiện tại trước khi kê thêm." },
+    { tinh_huong:"Kết quả cận lâm sàng mới có giá trị bất thường nhẹ, chưa rõ ý nghĩa lâm sàng.",
+      options:[{k:"A",t:"Bỏ qua vì mức độ nhẹ"},{k:"B",t:"Đối chiếu với xu hướng các lần đo trước và bệnh cảnh lâm sàng trước khi kết luận"},{k:"C",t:"Kết luận ngay là bất thường nguy hiểm"},{k:"D",t:"Yêu cầu bệnh nhân tự diễn giải kết quả"}],
+      dung:"B", giai_thich:"Một giá trị bất thường đơn lẻ cần đặt trong bối cảnh xu hướng và lâm sàng tổng thể trước khi đưa ra kết luận hay hành động." },
+  ]
+  let gi = 0
+  while(out.length<DECISION_TARGET_COUNT && gi<GENERIC_FALLBACK.length){
+    out.push(GENERIC_FALLBACK[gi]); gi++
+  }
+
+  return out.slice(0, DECISION_TARGET_COUNT)
 }
 function deriveTeaching(r){
   const p=r.thong_tin_benh_nhan
@@ -5629,7 +5788,7 @@ function deriveTeaching(r){
     bien_luan:(r.ly_luan_lam_sang||[]).map(l=>`${l.tieu_de}: ${l.noi_dung}`),
     can_lam_sang:(r.hanh_dong_uu_tien||[]).map(a=>({viec:a.viec,ly_do:a.ly_do})),
     dieu_tri_ngoai:r.phau_thuat?`Ngoại khoa (${r.phau_thuat.ngay}): ${r.phau_thuat.phuong_phap}`:"",
-    dieu_tri_noi:(r.thuoc_cuoi_ky||[]).map(m=>`${m.nhom}: ${m.ten_thuoc}`),
+    dieu_tri_noi:(r.thuoc_cuoi_ky||[]).map(m=>`${m.ten_thuoc}${m.lieu?" — "+m.lieu:""}`),
     tien_luong:(r.ket_luan_giai_doan&&(r.ket_luan_giai_doan[3]||r.ket_luan_giai_doan[2]))||"",
     red_flags, decisions:buildDecisions(r), reasoning_score,
     muc_tieu:["Khai thác bệnh sử và khám lâm sàng theo khung bệnh án ngoại khoa Đại học Y Hà Nội (HMU).","Tóm tắt thành hội chứng, chẩn đoán sơ bộ và phân biệt.","Biện luận và đề nghị cận lâm sàng hợp lý.","Trình bày điều trị, tiên lượng và dự phòng biến chứng."],
@@ -5639,7 +5798,7 @@ function deriveTeaching(r){
       { q:"Vì sao nghĩ đến chẩn đoán đó? Dấu hiệu nào ủng hộ, dữ kiện nào chống lại?", a:(r.ly_luan_lam_sang&&r.ly_luan_lam_sang[0]?r.ly_luan_lam_sang[0].noi_dung:ddx.join(" ")) },
       { q:"Cần phân biệt với những bệnh nào?", a:ddx.join(" ") },
       { q:"Đề nghị cận lâm sàng nào và kỳ vọng kết quả gì?", a:(r.hanh_dong_uu_tien||[]).map(a=>a.viec).join("; ") },
-      { q:"Trình bày nguyên tắc điều trị và theo dõi hậu phẫu.", a:`${r.phau_thuat?("Ngoại khoa: "+r.phau_thuat.phuong_phap+". "):""}Nội khoa: ${(r.thuoc_cuoi_ky||[]).map(m=>m.nhom).join(", ")}.` },
+      { q:"Trình bày nguyên tắc điều trị và theo dõi hậu phẫu.", a:`${r.phau_thuat?("Ngoại khoa: "+r.phau_thuat.phuong_phap+". "):""}Nội khoa: ${(r.thuoc_cuoi_ky||[]).map(m=>m.ten_thuoc).join(", ")}.` },
     ],
   }
 }
@@ -5899,10 +6058,14 @@ function MDTView({ report }){
   const [shown, setShown] = useState(0)
   const [askI, setAskI] = useState(-1)
   useEffect(() => {
-    let alive = true
     setMdt(deriveMDT(report))
-    mpApi.mdt(report).then(d => { if(alive && d && Array.isArray(d.specialties)) setMdt(d) }).catch(()=>{})
-    return () => { alive = false }
+    // Trước đây gọi POST /mdt để lấy bản AI-narrate phong phú hơn, nhưng
+    // endpoint đó CHƯA TỪNG được ghép vào main.py hiện tại (có 1 module
+    // riêng medparcours_modes_backend.py định nghĩa /mdt/khoa, /mdt/y-kien,
+    // /mdt/ket-luan — khác hẳn đường dẫn /mdt phẳng này — chưa tích hợp).
+    // Gọi liên tục ra 404 vô ích trên mọi lượt xem, không ảnh hưởng chức
+    // năng (đã fallback đúng deriveMDT), nhưng gây nhiễu log server — bỏ
+    // hẳn cho tới khi tích hợp đúng bộ endpoint /mdt/* thật.
   }, [report])
   useEffect(() => {
     setShown(0); setAskI(-1)
@@ -6021,10 +6184,11 @@ function TeachingView({ report }){
   const [t, setT] = useState(() => deriveTeaching(report))
   const [sub, setSub] = useState("guided")
   useEffect(() => {
-    let alive = true
     setT(deriveTeaching(report))
-    mpApi.teaching(report).then(d => { if(alive && d && Array.isArray(d.socratic)) setT(d) }).catch(()=>{})
-    return () => { alive = false }
+    // Tương tự MDTView: /teaching (phẳng) chưa từng được ghép vào main.py —
+    // bộ endpoint thật đã thiết kế là /teaching/bai-giang + /teaching/socratic
+    // trong medparcours_modes_backend.py, chưa tích hợp. Bỏ gọi cho tới khi
+    // tích hợp đúng, tránh 404 vô ích mỗi lần mở Giảng dạy.
   }, [report])
   const [revealAns, setRevealAns] = useState(false)
   const [open, setOpen] = useState(() => ({}))
@@ -6151,6 +6315,27 @@ function HistoryPanel({ onClose, onOpen, onOpenDbPatient, onOpenEcgEntry, curren
       .catch(err => { if (!cancelled) { setDbPatients([]); setDbError(err.message) } })
     return () => { cancelled = true }
   }, [])
+  const [deletingId, setDeletingId] = useState(null)
+  const handleDelete = async (e, p) => {
+    e.stopPropagation()
+    const ok = await mpConfirm({
+      title: "Xóa hồ sơ đã lưu?",
+      message: `Xóa vĩnh viễn hồ sơ của ${p.ho_ten || "bệnh nhân này"} (BA ${p.so_benh_an})? Toàn bộ dữ liệu đã gộp qua ${p.so_lan_cap_nhat} lần cập nhật sẽ mất, không khôi phục được.`,
+      okText: "Xóa vĩnh viễn",
+      danger: true,
+    })
+    if (!ok) return
+    setDeletingId(p.so_benh_an)
+    try {
+      await mpApi.deletePatient(p.so_benh_an)
+      setDbPatients(list => list.filter(x => x.so_benh_an !== p.so_benh_an))
+      mpToast("Đã xóa hồ sơ")
+    } catch (err) {
+      mpToast(err.message || "Không xóa được hồ sơ", "err")
+    } finally {
+      setDeletingId(null)
+    }
+  }
   return (
     <div className="hist-overlay" onClick={onClose}>
       <div className="hist-modal" onClick={e=>e.stopPropagation()}>
@@ -6159,6 +6344,7 @@ function HistoryPanel({ onClose, onOpen, onOpenDbPatient, onOpenEcgEntry, curren
           <button className="fp-close" onClick={onClose} title="Đóng"><Icon.Close d={15} color="#475569"/></button>
         </div>
         <div className="hist-list">
+          <div className="hist-section-lbl"><Icon.FileText d={13} color="#1D6FE8"/>Báo cáo - Demo</div>
           {HISTORY.map(rec=>(
             <div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>onOpen(rec)}>
               <div className="hist-avatar">{rec.ho_ten.charAt(0)}</div>
@@ -6182,6 +6368,11 @@ function HistoryPanel({ onClose, onOpen, onOpenDbPatient, onOpenEcgEntry, curren
                     <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Cập nhật gần nhất: {fmtDateTime(p.cap_nhat_luc)}</div>
                   </div>
                   <span className="hist-open">Mở ▶</span>
+                  <button className="hist-del-btn" onClick={(e)=>handleDelete(e, p)} disabled={deletingId===p.so_benh_an} title="Xóa hồ sơ" aria-label="Xóa hồ sơ">
+                    {deletingId===p.so_benh_an
+                      ? <span className="hist-del-spin"/>
+                      : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>}
+                  </button>
                 </div>
               ))}
             </>
@@ -6769,6 +6960,21 @@ body.theme-dark .bm-label{color:#EAF1FB}
 body.theme-dark .bm-go{background:#1B2536;border-color:#2F4368;color:#7FB0FF}
 body.theme-dark .bm-go:hover{background:#22304a}
 body.theme-dark .bm-detail{color:#A8BBD6}
+.nav-hist-btn{border:1px solid var(--border);background:var(--glass);border-radius:10px;width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:#475569;transition:background .15s,border-color .15s}
+.nav-hist-btn:hover{background:#EFF6FF;border-color:#93C5FD;color:#1D6FE8}
+body.theme-dark .nav-hist-btn{background:#161F33;border-color:#2F4368;color:#93A5C4}
+body.theme-dark .nav-hist-btn:hover{background:#132038;color:#93C5FD}
+.nav-save-btn{border:1px solid var(--border);background:var(--glass);border-radius:10px;width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:#475569;transition:background .15s,border-color .15s}
+.nav-save-btn:hover{background:#EFF6FF;border-color:#93C5FD;color:#1D6FE8}
+.nav-save-btn.saved{color:#059669}
+.nav-save-btn.saved:hover{background:#ECFDF5;border-color:#6EE7B7}
+.nav-save-btn.err{color:#DC2626;cursor:not-allowed;opacity:.75}
+.nav-save-btn.err:hover{background:var(--glass);border-color:var(--border)}
+body.theme-dark .nav-save-btn{background:#161F33;border-color:#2F4368;color:#93A5C4}
+body.theme-dark .nav-save-btn:hover{background:#132038;color:#93C5FD}
+body.theme-dark .nav-save-btn.saved{color:#34D399}
+body.theme-dark .nav-save-btn.saved:hover{background:#0F2A20}
+body.theme-dark .nav-save-btn.err{color:#F87171}
 .nav-bm-btn{position:relative;border:1px solid var(--border);background:var(--glass);border-radius:10px;width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:#D97706;transition:background .15s,border-color .15s}
 .nav-bm-btn:hover{background:#FFFBEB;border-color:#FBBF24}
 .nav-bm-badge{position:absolute;top:-5px;right:-5px;background:#D97706;color:#fff;font-size:10px;font-weight:700;border-radius:999px;min-width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;padding:0 3px;border:2px solid var(--glass)}
@@ -6859,7 +7065,9 @@ body.theme-dark .teach-chip{background:#1A2536;color:#C6D5E8;border-color:#2A3A5
 .co-stat-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .co-stat-val{font-size:17px;font-weight:800;color:var(--navy);line-height:1.15}
 .co-spark{display:block;width:100%;height:24px;margin:3px 0 1px}
+.co-stat-foot{display:flex;align-items:center;justify-content:space-between;gap:6px}
 .co-stat-norm{font-size:10px;color:var(--muted2)}
+.co-stat-date{font-size:10px;color:var(--muted2);white-space:nowrap}
 .co-prios{display:flex;align-items:flex-start;gap:12px;margin-top:14px;padding-top:12px;border-top:1px dashed var(--border);flex-wrap:wrap}
 .co-prios-lbl{font-size:12px;font-weight:800;color:var(--navy2);white-space:nowrap;padding-top:1px}
 .co-prio-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;flex:1;min-width:200px}
@@ -6932,9 +7140,10 @@ body.theme-dark .takeaway-txt,body.theme-dark .clin-txt,body.theme-dark .lead,bo
 .upd-body{padding:18px}
 .upd-desc{font-size:12.5px;color:var(--muted2);line-height:1.6;margin:0 0 14px}
 .upd-drop{border:2px dashed var(--border);border-radius:12px;padding:28px 16px;display:flex;flex-direction:column;align-items:center;gap:9px;cursor:pointer;font-size:13px;font-weight:600;color:var(--navy2);transition:border-color .15s,background .15s}
-.upd-drop:hover{border-color:#1D6FE8;background:rgba(29,111,232,.04)}
+.upd-drop:hover,.upd-drop.drag{border-color:#1D6FE8;background:rgba(29,111,232,.04)}
 .upd-staged{display:flex;align-items:center;gap:9px;border:1px solid var(--border);border-radius:10px;padding:10px 13px;font-size:13px;color:var(--navy2)}
-.upd-staged span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upd-staged-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upd-staged-meta{flex-shrink:0;font-size:11px;color:#94A3B8}
 .upd-staged button{border:none;background:transparent;cursor:pointer;display:inline-flex}
 .upd-loading{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--navy2);padding:14px 0}
 .spin{width:16px;height:16px;border:2.5px solid #DCE5F2;border-top-color:#1D6FE8;border-radius:50%;display:inline-block;animation:mp-spin .7s linear infinite;flex-shrink:0}
@@ -7041,6 +7250,12 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .hist-dx{font-size:12px;color:#475569;line-height:1.5;margin:3px 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .hist-foot{display:flex;align-items:center;gap:5px;font-size:11px;color:#94a3b8}
 .hist-open{font-size:12px;font-weight:600;color:#1D6FE8;flex-shrink:0}
+.hist-del-btn{flex-shrink:0;width:30px;height:30px;border-radius:9px;border:1px solid transparent;background:transparent;color:#94A3B8;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+.hist-del-btn:hover{background:#FEF2F2;border-color:#FECACA;color:#DC2626}
+.hist-del-btn:disabled{cursor:not-allowed;opacity:.6}
+.hist-del-spin{width:13px;height:13px;border:2px solid #FCA5A5;border-top-color:#DC2626;border-radius:50%;animation:mp-spin .7s linear infinite}
+body.theme-dark .hist-del-btn{color:#64748B}
+body.theme-dark .hist-del-btn:hover{background:#3A1418;border-color:#5C2027;color:#F87171}
 .hist-section-lbl{display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#DC2626;margin:10px 2px 2px}
 .hist-loading-hint{font-size:12px;color:#94A3B8;padding:8px 4px;text-align:center}
 .hist-item-ecg:hover{border-color:#DC2626;background:rgba(220,38,38,.03);box-shadow:0 6px 18px rgba(220,38,38,.1)}

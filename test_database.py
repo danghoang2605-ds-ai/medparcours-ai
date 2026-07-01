@@ -200,3 +200,27 @@ def test_cap_nhat_luu_lai_lich_su_truoc_khi_gop(temp_db):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ─── Regression: bug thật đã gặp trên Hugging Face Space ──────────────────
+# "Forbidden control character detected in headers. Potential header
+# injection attack." — do TURSO_DATABASE_URL/TURSO_AUTH_TOKEN dính ký tự
+# xuống dòng/khoảng trắng ẩn khi copy-paste vào Secrets. Test này KHÔNG dùng
+# fixture temp_db (không được monkeypatch _get_db_url/_get_auth_token) —
+# mục đích là test đúng 2 hàm đọc biến môi trường thật.
+def test_get_db_url_tu_dong_bo_ky_tu_dieu_khien_thua(monkeypatch):
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://medparcours-test.aws-us-east-2.turso.io\n")
+    url = db._get_db_url()
+    assert url == "libsql://medparcours-test.aws-us-east-2.turso.io"
+    assert "\n" not in url
+
+
+def test_get_auth_token_tu_dong_bo_ky_tu_dieu_khien_thua(monkeypatch):
+    monkeypatch.setenv("TURSO_AUTH_TOKEN", "  eyJhbGc.fake.token  \n")
+    token = db._get_auth_token()
+    assert token == "eyJhbGc.fake.token"
+
+
+def test_get_auth_token_khong_co_bien_moi_truong_tra_none(monkeypatch):
+    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
+    assert db._get_auth_token() is None

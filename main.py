@@ -14,7 +14,7 @@ try:
 except Exception:
     pass
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -66,7 +66,7 @@ QUY TẮC BẮT BUỘC:
 3. Cảnh báo phải có căn cứ rõ từ hồ sơ
 4. Giữ nguyên số liệu y khoa, không làm tròn
 5. Trả về JSON THUẦN TÚY — không markdown, không text bên ngoài JSON
-6. Nếu một chỉ số có kết quả ở NHIỀU NGÀY KHÁC NHAU: CHỈ lấy kết quả của ngày GẦN NHẤT (ngày lớn nhất). Ghi rõ ngày đó vào field "ngay" trong mỗi item xet_nghiem_key.
+6. Nếu một chỉ số có kết quả ở NHIỀU NGÀY KHÁC NHAU: field "ngay" LUÔN LUÔN chỉ ghi ngày của kết quả GẦN NHẤT (ngày lớn nhất) — dùng để hiển thị giá trị hiện tại. Nếu chỉ số đó có từ 2 lần đo trở lên (mảng "trend" có từ 2 phần tử), BẮT BUỘC điền thêm "trendDates" với NGÀY CỦA TỪNG LẦN ĐO tương ứng theo đúng thứ tự trong "trend" — đây là dữ liệu để vẽ biểu đồ xu hướng có ngày, khác với "ngay" (chỉ 1 ngày duy nhất).
 7. Nếu một chỉ số KHÔNG CÓ trong hồ sơ: điền null, không bịa số liệu.
 8. xet_nghiem_key là danh sách ĐỘNG — chỉ đưa vào các chỉ số THỰC SỰ CÓ trong hồ sơ, không hardcode cấu trúc cố định.
 9. SIÊU ÂM TIM: liệt kê TẤT CẢ các lượt siêu âm trong mảng sieu_am_tim.lan_kham, mỗi lượt BẮT BUỘC ghi rõ ngày. Sắp xếp theo thời gian tăng dần. Đánh dấu latest:true cho lượt có ngày gần nhất. Đánh dấu canh_bao:true nếu lượt đó có bất thường nguy hiểm (EF giảm nặng, dịch màng tim ép buồng tim...). Điền phase phù hợp: truoc_mo (trước phẫu thuật), sau_mo (ngay sau mổ), hoi_phuc (đang hồi phục), tai_kham (tái khám ổn định).
@@ -107,7 +107,8 @@ Schema bắt buộc:
       "status": "normal|high|low",
       "ngay": "Ngày xét nghiệm gần nhất",
       "phase": "truoc_mo|sau_mo|tai_kham",
-      "trend": [/* mảng rawVal theo thời gian từ cũ đến mới, nếu có nhiều lần đo */]
+      "trend": [/* mảng rawVal theo thời gian từ cũ đến mới, nếu có nhiều lần đo */],
+      "trendDates": [/* mảng ngày (dd/mm) tương ứng TỪNG điểm trong "trend", CÙNG SỐ LƯỢNG và CÙNG THỨ TỰ với "trend". Nếu "trend" có 3 điểm thì trendDates phải có đúng 3 ngày tương ứng. */]
     }
   ],
   "sieu_am_tim": {
@@ -535,6 +536,147 @@ def select_relevant_text(full_text: str, budget: int):
 MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8MB - giới hạn an toàn cho ảnh chụp/scan hồ sơ
 
 
+def _parse_report_json(raw: str) -> dict:
+    """Bóc JSON chắc chắn từ text trả về của Claude: bỏ code fence, lấy từ
+    '{' đầu tiên đến '}' cuối cùng. Dùng chung cho các luồng MỚI (endpoint
+    cập nhật hồ sơ đa định dạng) — các luồng /analyze* cũ giữ nguyên bản
+    khắc trực tiếp của họ, không đụng vào để tránh rủi ro hồi quy.
+    Ném json.JSONDecodeError nếu không parse được — nơi gọi tự xử lý."""
+    json_text = raw.strip()
+    if "```json" in json_text:
+        json_text = json_text.split("```json")[1].split("```")[0]
+    elif "```" in json_text:
+        json_text = json_text.split("```")[1].split("```")[0]
+    json_text = json_text.strip()
+    start, end = json_text.find("{"), json_text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        json_text = json_text[start:end + 1]
+    return json.loads(json_text)
+
+
+def _extract_report_step1_from_upload(filename: str, content: bytes) -> dict:
+    """
+    Bước 1 (LLM Extraction) CHO 1 FILE BẤT KỲ — tái dùng đúng logic phân
+    loại định dạng của /analyze (PDF/.docx/.xlsx/.pptx/ảnh), nhưng CHỈ chạy
+    Bước 1 (không chạy rule engine/diễn giải) — dùng cho endpoint "cập nhật
+    hồ sơ" khi cần gộp report_moi vào report cũ trước khi tính lại toàn bộ
+    trên dữ liệu ĐÃ GỘP (xem _merge_and_reevaluate).
+
+    Ném ValueError với thông báo tiếng Việt rõ nghĩa khi không trích được
+    nội dung hoặc định dạng chưa hỗ trợ — nơi gọi (endpoint) bắt lại và trả
+    JSONResponse success=False, KHÔNG để lộ traceback thô cho bác sĩ.
+    """
+    filename_lower = (filename or "").lower()
+    ext = "." + filename_lower.rsplit(".", 1)[-1] if "." in filename_lower else ""
+
+    if ext == ".pdf":
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            extracted = extract_text_from_pdf(tmp_path)
+        finally:
+            os.unlink(tmp_path)
+        text = extracted["text"]
+        if len(text.strip()) < MIN_TOTAL_CHARS:
+            raise ValueError("Không có đủ nội dung text để phân tích. File có thể là bản scan "
+                              "(ảnh chụp) không có lớp text — hãy thử tải lên dưới dạng ảnh (.png/.jpg).")
+        raw = call_claude(system=REPORT_SYSTEM, user_message=f"Hồ sơ bệnh nhân:\n\n{text}",
+                           max_tokens=16000, cache_system=True)
+        return _parse_report_json(raw)
+
+    if ext in document_extract.EXTRACTORS:
+        text, warning, _ = document_extract.extract_from_filename(filename, content)
+        if not text.strip():
+            raise ValueError(warning or f"Không trích được nội dung từ file {ext}.")
+        raw = call_claude(system=REPORT_SYSTEM, user_message=f"Hồ sơ bệnh nhân:\n\n{text}",
+                           max_tokens=16000, cache_system=True)
+        return _parse_report_json(raw)
+
+    if ext in (".png", ".jpg", ".jpeg"):
+        if len(content) > MAX_IMAGE_BYTES:
+            raise ValueError(f"Ảnh quá lớn ({len(content)//1024//1024}MB). "
+                              f"Giới hạn {MAX_IMAGE_BYTES//1024//1024}MB.")
+        image_b64 = base64.b64encode(content).decode("ascii")
+        media_type = "image/png" if ext == ".png" else "image/jpeg"
+        raw = call_claude_with_image(
+            system=REPORT_SYSTEM,
+            user_text="Đây là ảnh chụp/scan tài liệu MỚI bổ sung cho hồ sơ đã có. Hãy đọc và trích "
+                      "xuất đúng theo format JSON đã quy định. Nếu chữ viết tay khó đọc ở vài chỗ, "
+                      "ưu tiên để trống/null cho phần đó hơn là đoán bừa.",
+            image_b64=image_b64, media_type=media_type,
+        )
+        return _parse_report_json(raw)
+
+    if ext in document_extract.UNSUPPORTED_BUT_LISTED_IN_UI:
+        raise ValueError(f"Định dạng {ext} (phiên bản cũ) chưa được hỗ trợ. "
+                          f"Vui lòng lưu lại dưới định dạng mới (.docx/.xlsx/.pptx) rồi tải lên.")
+
+    raise ValueError(f"Không nhận diện được định dạng file {ext or '(không có đuôi)'}. "
+                      f"Hỗ trợ: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), ảnh (.png/.jpg).")
+
+
+def _merge_and_reevaluate(so_benh_an: str, report_moi: dict, nguon_tai_lieu: str) -> dict:
+    """
+    Gộp report_moi vào hồ sơ đã lưu (database.update_patient_with_new_document),
+    rồi chạy Bước 2-3 TRÊN REPORT ĐÃ GỘP — tách thành helper dùng chung cho
+    cả /patient/update (text) và /patient/update_file (đa định dạng), tránh
+    lặp lại ~35 dòng logic build response giống hệt nhau ở 2 nơi.
+
+    Ném HTTPException(503) nếu lỗi kết nối lưu trữ, HTTPException(409) nếu
+    gộp thất bại (vd không tìm thấy hồ sơ — dù nơi gọi thường đã check trước).
+    """
+    try:
+        result = database.update_patient_with_new_document(so_benh_an, report_moi, nguon_tai_lieu)
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+    if not result.get("success"):
+        raise HTTPException(status_code=409, detail=result.get("message", "Lỗi không xác định"))
+
+    merged_report = result["report"]
+    engine = evaluate_v2(merged_report)
+    trend_summary = ""
+    if engine["trend_facts"]:
+        try:
+            trend_summary = call_claude(
+                system=TREND_SYSTEM,
+                user_message="Các mốc chênh lệch chỉ số (chỉ diễn đạt, không bịa thêm):\n"
+                             + json.dumps(engine["trend_facts"], ensure_ascii=False),
+                max_tokens=400
+            ).strip()
+        except Exception:
+            trend_summary = ""
+
+    return {
+        "success": True,
+        "so_benh_an": so_benh_an,
+        "so_lan_cap_nhat": result["so_lan_cap_nhat"],
+        "report": merged_report,
+        "analysis": {
+            "egfr": engine["egfr"],
+            "egfr_detail": engine.get("egfr_detail"),
+            "priority_findings": engine["priority_findings"],
+            "drug_safety": engine["drug_safety"],
+            "trend_summary": trend_summary,
+            "risk_scores": engine.get("risk_scores"),
+            "ttr": engine.get("ttr"),
+            "care_gaps": engine.get("care_gaps"),
+            "active_profiles": engine.get("active_profiles", []),
+            "indicators_applicable": engine.get("indicators_applicable", []),
+            "anticoagulant_status": engine.get("anticoagulant_status"),
+            "inr_target_detail": engine.get("inr_target_detail"),
+            "ttr_khong_tinh_duoc_ly_do": engine.get("ttr_khong_tinh_duoc_ly_do"),
+            "active_icd_groups": engine.get("active_icd_groups", []),
+            "vital_signs": engine.get("vital_signs"),
+            "risk_factors": engine.get("risk_factors"),
+            "baseline_labs": engine.get("baseline_labs"),
+            "score2_applicability": engine.get("score2_applicability"),
+            "antithrombotic_priority": engine.get("antithrombotic_priority"),
+        },
+    }
+
+
 def run_analysis_pipeline_from_image(image_bytes: bytes, media_type: str,
                                        filename: str = "") -> JSONResponse:
     """
@@ -893,6 +1035,23 @@ async def get_patient(so_benh_an: str):
     }
 
 
+@app.delete("/patient/{so_benh_an}")
+async def delete_patient_endpoint(so_benh_an: str):
+    """
+    Xóa vĩnh viễn 1 hồ sơ đã lưu (không áp dụng cho 2 hồ sơ demo hard-code —
+    chúng không đi qua database nên không tồn tại ở đây để xóa). Frontend
+    bắt buộc xác nhận qua hộp thoại trước khi gọi endpoint này.
+    """
+    try:
+        result = database.delete_patient(so_benh_an)
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("message", "Không tìm thấy hồ sơ."))
+    return result
+
+
 @app.get("/patient")
 async def list_patients_endpoint(limit: int = 50):
     """Danh sách hồ sơ đã lưu, mới cập nhật gần nhất lên đầu — dùng cho màn
@@ -1009,6 +1168,48 @@ async def update_patient(req: UpdatePatientRequest):
             "antithrombotic_priority": engine.get("antithrombotic_priority"),
         },
     }
+
+
+@app.post("/patient/update_file")
+async def update_patient_file(
+    so_benh_an: str = Form(...),
+    nguon_tai_lieu: str = Form(""),
+    file: UploadFile = File(...),
+):
+    """
+    Bản mở rộng của /patient/update: nhận trực tiếp FILE (multipart) thay vì
+    text đã bóc sẵn — hỗ trợ ĐÚNG các định dạng như /analyze (PDF, Word,
+    Excel, PowerPoint, ảnh chụp/scan), để bác sĩ tải thêm tài liệu tái khám
+    dưới bất kỳ định dạng nào, không chỉ PDF bóc chữ ở client.
+
+    /patient/update (text) VẪN GIỮ NGUYÊN, không xóa — vẫn cần cho luồng PDF
+    lớn bóc chữ ở trình duyệt (pdf.js) để tránh giới hạn dung lượng upload.
+    """
+    existing = None
+    try:
+        existing = database.get_patient(so_benh_an)
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+    if existing is None:
+        raise HTTPException(status_code=404,
+                             detail=f"Chưa có hồ sơ lưu trữ cho số bệnh án {so_benh_an}. "
+                                    f"Dùng /patient/save để lưu hồ sơ mới trước.")
+
+    content = await file.read()
+    try:
+        report_moi = _extract_report_step1_from_upload(file.filename, content)
+    except ValueError as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=200)
+    except json.JSONDecodeError:
+        return JSONResponse({
+            "success": False,
+            "error": "Không đọc được rõ nội dung tài liệu mới để tạo JSON. "
+                     "Hãy thử lại hoặc kiểm tra định dạng tài liệu.",
+        }, status_code=200)
+
+    nguon = nguon_tai_lieu or file.filename or ""
+    return _merge_and_reevaluate(so_benh_an, report_moi, nguon)
 
 
 class ChatRequest(BaseModel):
