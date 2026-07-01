@@ -1709,8 +1709,15 @@ const TIER_META = {
 }
 const TIER_ORDER = { critical:0, warning:1, stable:2 }
 
-// Nhận xét xu hướng từng chỉ số xét nghiệm dựa trên chuỗi giá trị theo thời gian
-function labVerdict(m) {
+// Nhận xét xu hướng từng chỉ số xét nghiệm dựa trên chuỗi giá trị theo thời gian.
+// inrTarget (tùy chọn): { target_min, target_max, ten_hien_thi } lấy từ
+// analysis.inr_target_detail (backend cde/anticoagulation_targets.py) — ĐÚNG
+// theo từng loại bệnh nhân (sửa van/sinh học/cơ học/không liên quan van),
+// KHÔNG còn hardcode "van cơ học 2.0-3.0" cho mọi bệnh nhân như bản cũ (đây
+// chính là "Vấn đề 1" đã nêu — hệ thống ngầm coi mọi bệnh nhân đều là ca van
+// cơ học). Nếu không có inrTarget (vd DOAC, hoặc chưa xác định đủ dữ liệu),
+// dùng nhận xét trung tính, không đoán ngưỡng.
+function labVerdict(m, inrTarget) {
   const t = m.trend
   if (!t || t.length < 2) return null
   const delta = t[t.length - 1] - t[0]
@@ -1723,7 +1730,19 @@ function labVerdict(m) {
     HGB:        () => down ? { txt:"Thiếu máu, cần theo dõi", good:false } : { txt:"Cải thiện", good:true },
     "Na+":      () => up ? { txt:"Natri đang về bình thường", good:true } : { txt:"Hạ natri", good:false },
     Albumin:    () => up ? { txt:"Dinh dưỡng cải thiện", good:true } : { txt:"Albumin thấp", good:false },
-    INR:        () => { const last = t[t.length-1]; return last < 2 ? { txt:"Dưới mục tiêu, nguy cơ huyết khối van", good:false } : last > 3 ? { txt:"Trên mục tiêu, nguy cơ chảy máu", good:false } : { txt:"Trong mục tiêu điều trị (van cơ học 2.0-3.0)", good:true } },
+    INR:        () => {
+      const last = t[t.length-1]
+      if (inrTarget && inrTarget.target_min != null && inrTarget.target_max != null) {
+        const { target_min, target_max, ten_hien_thi } = inrTarget
+        const label = ten_hien_thi ? ` (${ten_hien_thi})` : ""
+        return last < target_min ? { txt:`Dưới mục tiêu${label}, nguy cơ huyết khối`, good:false }
+          : last > target_max ? { txt:`Trên mục tiêu${label}, nguy cơ chảy máu`, good:false }
+          : { txt:`Trong mục tiêu điều trị${label}`, good:true }
+      }
+      // Chưa xác định đủ dữ liệu để biết ngưỡng đúng (vd van cơ học thiếu vị
+      // trí van/thế hệ van) — KHÔNG đoán ngưỡng, chỉ nhận xét trung tính.
+      return { txt:"Chưa xác định được ngưỡng mục tiêu chính xác — xem chi tiết ở mục An toàn thuốc", neutral:true }
+    },
   }
   return V[m.key] ? V[m.key]() : null
 }
@@ -3149,21 +3168,32 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
               <button className="nav-hist-btn" onClick={onOpenHistory} title="Lịch sử bệnh án" aria-label="Lịch sử bệnh án">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg>
               </button>
-              {savedStatus === "chua_luu" && (
-                <button className="nav-save-btn" onClick={handleSavePatient} title="Lưu hồ sơ (để cập nhật lần sau)" aria-label="Lưu hồ sơ">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              {pkey === "x" ? (
+                <button className="nav-save-btn err" disabled title="Hồ sơ này chưa có số bệnh án (AI không trích được từ tài liệu) — không thể lưu lâu dài. Bổ sung số bệnh án trong hồ sơ gốc rồi phân tích lại." aria-label="Thiếu số bệnh án, không lưu được">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><line x1="12" y1="11" x2="12" y2="14"/><circle cx="12" cy="17" r="0.5" fill="currentColor"/></svg>
                 </button>
-              )}
-              {savedStatus === "da_luu" && (
-                <button className="nav-save-btn saved" onClick={()=>setUpdatePanelOpen(true)} title={`Cập nhật hồ sơ${savedMeta ? ` (đã lưu, lần ${savedMeta.so_lan_cap_nhat})` : ""}`} aria-label="Cập nhật hồ sơ">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
-                </button>
-              )}
-              {savedStatus === "loi_ket_noi" && (
-                <button className="nav-save-btn err" disabled title="Chưa kết nối được hệ thống lưu trữ lâu dài — chỉ xem được báo cáo lần này, không lưu lại được." aria-label="Lỗi kết nối lưu trữ">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><line x1="4" y1="4" x2="20" y2="20"/></svg>
-                </button>
-              )}
+              ) : <>
+                {savedStatus === "chua_luu" && (
+                  <button className="nav-save-btn" onClick={handleSavePatient} title="Lưu hồ sơ (để cập nhật lần sau)" aria-label="Lưu hồ sơ">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                  </button>
+                )}
+                {savedStatus === "da_luu" && (
+                  <button className="nav-save-btn saved" onClick={()=>setUpdatePanelOpen(true)} title={`Cập nhật hồ sơ${savedMeta ? ` (đã lưu, lần ${savedMeta.so_lan_cap_nhat})` : ""}`} aria-label="Cập nhật hồ sơ">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+                  </button>
+                )}
+                {savedStatus === "loi_ket_noi" && (
+                  <button className="nav-save-btn err" disabled title="Chưa kết nối được hệ thống lưu trữ lâu dài — chỉ xem được báo cáo lần này, không lưu lại được." aria-label="Lỗi kết nối lưu trữ">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><line x1="4" y1="4" x2="20" y2="20"/></svg>
+                  </button>
+                )}
+                {savedStatus === null && (
+                  <button className="nav-save-btn" disabled title="Đang kiểm tra trạng thái lưu trữ..." aria-label="Đang kiểm tra">
+                    <span className="hist-del-spin"/>
+                  </button>
+                )}
+              </>}
               <button className="nav-bm-btn" onClick={()=>setTab("bookmarks")} title="Mục đã đánh dấu" aria-label="Mục đã đánh dấu">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill={bmList.length>0?"currentColor":"none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
                 {bmList.length>0 && <span className="nav-bm-badge">{bmList.length}</span>}
@@ -3380,15 +3410,20 @@ function SummaryCard({ text }) {
   const safe = typeof text === "string" ? text : (text == null ? "" : String(text))
   const toBullets = (body) => String(body || "").split(/(?<=\.)\s+/).map(s=>s.replace(/\.$/,"").trim()).filter(Boolean)
   if (!safe.trim()) return null
-  // Tách theo marker "GIAI ĐOẠN ...:"
-  const re = /GIAI ĐO[AẠ]N[^:]*:/gi
+  // Tách theo marker "GIAI ĐOẠN ...:" — CHỈ khớp đúng 3 cụm cố định mà
+  // REPORT_SYSTEM quy định (viết hoa, không có cờ /i). Bug đã sửa: regex cũ
+  // dùng cờ /i (case-insensitive) nên bắt nhầm cụm "giai đoạn" viết thường
+  // xuất hiện tình cờ giữa câu văn AI viết (vd "...phù hợp giai đoạn ngay
+  // sau mổ tim.") làm marker giả, nuốt luôn đoạn text từ đó tới dấu ":" kế
+  // tiếp — khiến tiêu đề Giai đoạn 3 hiển thị lẫn cả câu cuối của Giai đoạn 2.
+  const re = /GIAI ĐO[AẠ]N (TRƯỚC MỔ|SAU MỔ[^:]*|NGOẠI TRÚ[^:]*|HỒI PHỤC[^:]*):/g
   const markers = [...safe.matchAll(re)]
   let blocks = []
   if (markers.length) {
     markers.forEach((m, i) => {
       const start = m.index + m[0].length
       const end = i+1 < markers.length ? markers[i+1].index : safe.length
-      const rawTitle = m[0].replace(/:$/,"").replace(/GIAI ĐO[AẠ]N/i,"").trim()
+      const rawTitle = m[0].replace(/:$/,"").replace(/GIAI ĐO[AẠ]N/,"").trim()
       blocks.push({ phase: i+1, title: rawTitle, items: toBullets(safe.slice(start, end)) })
     })
   }
@@ -3514,7 +3549,7 @@ function PhaseSection({ phase, events, info, ketLuan }) {
         <span className="phase-sec-tag" style={{ background:m.color }}><i/>{m.name}</span>
         {rangeTxt && <span className="phase-sec-range">{rangeTxt}</span>}
         <span className="sec-tools" onClick={e=>e.stopPropagation()}>
-          <WidgetNoteOnlyButton tools={tools}/>
+          <WidgetToolButtons tools={tools}/>
           <FlagBtn pkey={CURRENT_PKEY} label={m.name} sub="Giai đoạn lâm sàng" detail={()=>elText(bodyRef.current)}/>
           <CopyBtn text={()=>elText(bodyRef.current)}/>
         </span>
@@ -3523,7 +3558,7 @@ function PhaseSection({ phase, events, info, ketLuan }) {
         </button>
       </div>
       {!collapsed && (
-        <>
+        <WidgetEditableBody tools={tools} bodyRef={bodyRef}>
           <div className="phase-tl">
             {events.map((e,i) => {
               const rel = relMarker(e.ngay, phase, info)
@@ -3559,7 +3594,7 @@ function PhaseSection({ phase, events, info, ketLuan }) {
               <span className="phase-ketluan-lbl" style={{ color:m.color }}>Kết luận {`Giai đoạn ${phase}`}:</span> {ketLuan}
             </div>
           )}
-        </>
+        </WidgetEditableBody>
       )}
       <WidgetNotePanel tools={tools}/>
     </div>
@@ -3944,7 +3979,7 @@ function UpdatePatientPanel({ pkey, onClose, onUpdated }){
           {!loading && <button className="fp-close" onClick={onClose} title="Đóng"><Icon.Close d={15} color="#475569"/></button>}
         </div>
         <div className="upd-body">
-          <p className="upd-desc">Tải thêm tài liệu mới cho bệnh nhân này (vd kết quả tái khám, xét nghiệm bổ sung). Hệ thống sẽ <b>gộp</b> vào hồ sơ đã lưu — xét nghiệm/diễn biến cũ vẫn được giữ nguyên, không bị mất.</p>
+          <p className="upd-desc">Bổ sung tài liệu tái khám mới cho bệnh nhân này — hệ thống <b>gộp</b> vào hồ sơ đã lưu, không ghi đè, không mất dữ liệu cũ. Chọn <b>một trong hai cách</b> bên dưới, rồi bấm "Cập nhật hồ sơ".</p>
 
           {loading && <div className="upd-loading"><span className="spin"/>{progress}</div>}
           {error && <div className="rec-note err"><Icon.Alert d={12} color="#B91C1C"/>{error}</div>}
@@ -3959,7 +3994,7 @@ function UpdatePatientPanel({ pkey, onClose, onUpdated }){
                   onDrop={e=>{e.preventDefault();setDragging(false);onPick(e.dataTransfer.files)}}>
                   <input ref={inputRef} type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style={{display:"none"}} onChange={e=>{onPick(e.target.files);e.target.value=""}}/>
                   <Icon.Upload d={24} color="#1D6FE8"/>
-                  <span>Chọn tài liệu mới (VD: kết quả tái khám, xét nghiệm bổ sung)</span>
+                  <span><b>Cách 1 —</b> Chọn tài liệu (kết quả tái khám, xét nghiệm...)</span>
                   <div className="fmt-row" style={{justifyContent:"center", marginTop:"8px"}}>
                     <div className="fmt-chips">
                       {["PDF","DOCX","XLSX","PPTX","PNG","JPG"].map(t=>{
@@ -3983,9 +4018,10 @@ function UpdatePatientPanel({ pkey, onClose, onUpdated }){
 
               {!staged && (
                 <div className="rec-inline-wrap" style={{marginTop:"12px"}}>
-                  <div className="rec-inline-h"><Icon.Pulse d={13} color="#1D6FE8"/>Hoặc đọc/gõ trực tiếp lời dặn tái khám — không cần file</div>
-                  <AudioRecorder value={note} onChange={setNote}
-                    onAttach={(t)=>{ setNote(t); mpToast("Đã chuyển giọng nói thành chữ, kiểm tra lại rồi bấm Cập nhật hồ sơ") }}/>
+                  <div className="rec-inline-h"><Icon.Pulse d={13} color="#1D6FE8"/><b>Cách 2 —</b> Gõ hoặc đọc lời dặn tái khám (không cần file)</div>
+                  <p className="upd-note-hint">Nội dung gõ/đọc dưới đây sẽ trở thành "tài liệu mới" và được gộp vào hồ sơ y như một tài liệu tải lên.</p>
+                  <AudioRecorder value={note} onChange={setNote} attachLabel="Đã đọc xong" attachHint="Ctrl/Cmd + Enter khi đọc xong"
+                    onAttach={(t)=>{ setNote(t); mpToast("Đã chuyển giọng nói thành chữ — kiểm tra lại nội dung rồi bấm \"Cập nhật hồ sơ\" bên dưới") }}/>
                 </div>
               )}
 
@@ -4230,7 +4266,7 @@ function TermTip({ term, children }){
 }
 const LAB_SYSTEM = { "EF":"tim", "NT-proBNP":"tim", "INR":"tim", "Creatinin":"than", "Na+":"than", "K+":"than", "CRP":"nhiem", "WBC":"nhiem", "HGB":"huyet", "PLT":"huyet", "Albumin":"huyet" }
 const SYS_LABEL = { tim:"Tim mạch", than:"Thận - điện giải", nhiem:"Nhiễm khuẩn", huyet:"Huyết học" }
-function LabPanel({ labs, note }) {
+function LabPanel({ labs, note, inrTargetDetail, anticoagulantStatus }) {
   const [filter, setFilter] = useState("all")
   const [sysFilter, setSysFilter] = useState("all")
   const counts = { high:0, normal:0, low:0 }
@@ -4271,18 +4307,31 @@ function LabPanel({ labs, note }) {
       <div className="lab-grid">
         {shown.map(m => {
           const arrowChar = m.arrow==="up"?"↑":m.arrow==="down"?"↓":"→"
-          const sparkColor = m.status==="high"?"#DC2626":m.status==="low"?"#EA580C":"#16A34A"
-          const verdict = labVerdict(m)
           const isINR = m.key === "INR"
-          const statusTxt = isINR
-            ? (m.status==="high"?"Trên mục tiêu":m.status==="low"?"Dưới mục tiêu":"Trong mục tiêu")
-            : (m.status==="high"?"Cao":m.status==="low"?"Thấp":"Bình thường")
+          const isDoac = isINR && anticoagulantStatus && anticoagulantStatus.an_inr_ttr
+          // ─── Ghi đè phán đoán của AI (status/normal do Rule 17 trong
+          // REPORT_SYSTEM tự gán, CHỈ nhận biết van cơ học qua từ khóa) bằng
+          // ngưỡng THẬT từ cde/anticoagulation_targets.py — đúng theo từng
+          // loại bệnh nhân (sửa van/sinh học/cơ học/không liên quan van),
+          // không còn mặc định "van cơ học 2.0-3.0" cho mọi ca (Vấn đề 1).
+          let effStatus = m.status, effNormalTxt = m.normal, hasDeterministicTarget = false
+          if (isINR && inrTargetDetail && inrTargetDetail.target_min != null && inrTargetDetail.target_max != null) {
+            hasDeterministicTarget = true
+            const { target_min, target_max } = inrTargetDetail
+            effStatus = m.rawVal < target_min ? "low" : m.rawVal > target_max ? "high" : "normal"
+            effNormalTxt = `${target_min.toFixed(1)} - ${target_max.toFixed(1)}`
+          }
+          const sparkColor = effStatus==="high"?"#DC2626":effStatus==="low"?"#EA580C":"#16A34A"
+          const verdict = isINR ? labVerdict(m, hasDeterministicTarget ? inrTargetDetail : null) : labVerdict(m)
+          const statusTxt = isDoac ? "DOAC — không theo dõi INR"
+            : isINR ? (effStatus==="high"?"Trên mục tiêu":effStatus==="low"?"Dưới mục tiêu":hasDeterministicTarget?"Trong mục tiêu":"Chưa xác định ngưỡng")
+            : (effStatus==="high"?"Cao":effStatus==="low"?"Thấp":"Bình thường")
           const rangeLabel = isINR ? "Mục tiêu" : "Bình thường"
           return (
             <div key={m.key} className="lab-cell">
               <div className="lab-top">
                 <TermTip term={m.key}><span className="lab-key">{m.key}</span></TermTip>
-                <span className={`lab-status ${m.status}`}>{statusTxt}</span>
+                <span className={`lab-status ${isDoac ? "normal" : effStatus}`}>{statusTxt}</span>
               </div>
               <div className="lab-val-row">
                 <span className="lab-val"><CountUp value={parseFloat(m.val)} decimals={(String(m.rawVal).split(".")[1]||"").length} suffix={(m.val.split(" ")[0].match(/[^0-9.,\-]+$/)||[""])[0]}/></span>
@@ -4303,7 +4352,7 @@ function LabPanel({ labs, note }) {
               {verdict && <div className={`lab-verdict ${verdict.neutral?"neutral":verdict.good?"good":"bad"}`}>{verdict.txt}</div>}
               <div className="lab-foot">
                 <span className="lab-desc">{(m.trendDates && m.trendDates.length) ? `Lấy mẫu: ${m.trendDates[m.trendDates.length-1]}` : (m.ngay ? `Ngày ${m.ngay}` : m.desc)}</span>
-                <span className="lab-normal">{rangeLabel} {m.normal}</span>
+                <span className="lab-normal">{isDoac ? "" : `${rangeLabel} ${effNormalTxt}`}</span>
               </div>
             </div>
           )
@@ -5027,6 +5076,14 @@ function ReportTab({ report: r, analysis }) {
     // offline, 2 Card này tự ẩn (đúng theo thiết kế null-safe của chúng).
     riskScores = computeRiskScoresClient(r)
   }
+  // inrTargetDetail/anticoagulantStatus TÁCH RIÊNG khỏi nhánh if/else ở trên
+  // (không gộp vào "analysis" state) — vì gộp sẽ làm ReportTab hiểu nhầm là
+  // đang ở luồng "có backend" và bỏ qua toàn bộ tính findings/egfr/drug_safety
+  // client-side cho demo (đã từng gây bug, xem lịch sử sửa). Với 2 hồ sơ demo
+  // offline, dùng bảng tra cứu tĩnh MOCK_ANALYSIS_BY_SBA (loại van đã biết
+  // trước, không cần rule engine tính lại).
+  const inrTargetDetail = analysis ? (analysis.inr_target_detail || null) : (MOCK_ANALYSIS_BY_SBA[CURRENT_PKEY]?.inr_target_detail || null)
+  const anticoagulantStatus = analysis ? (analysis.anticoagulant_status || null) : (MOCK_ANALYSIS_BY_SBA[CURRENT_PKEY]?.anticoagulant_status || null)
   const trajectory = assessTrajectory(r)
   const phaseInfo = computePhaseInfo(r)
   const phaseEvents = buildPhaseEvents(r, phaseInfo)
@@ -5150,7 +5207,7 @@ function ReportTab({ report: r, analysis }) {
       <Card id="sec-trend" title="Xu hướng tổng hợp (% so với lần đầu)" icon={<Icon.Pulse d={16}/>}><MultiTrend report={r}/></Card>
 
       {/* PHÂN TÍCH: Xét nghiệm */}
-      <LabPanel labs={r.xet_nghiem_key||r.xet_nghiem_meta||[]} note={r.xet_nghiem_truoc_mo?.ghi_chu}/>
+      <LabPanel labs={r.xet_nghiem_key||r.xet_nghiem_meta||[]} note={r.xet_nghiem_truoc_mo?.ghi_chu} inrTargetDetail={inrTargetDetail} anticoagulantStatus={anticoagulantStatus}/>
 
       {/* PHÂN TÍCH: Thuốc */}
       <Card id="sec-meds" title="Đơn thuốc và lịch dùng" icon={<Icon.Pill d={16}/>}>
@@ -5550,6 +5607,24 @@ const HISTORY = [
   { id:"BN-B", ...recMeta(PATIENT_B) },
 ]
 
+// ─── Mock "analysis" cho 2 hồ sơ demo (Nguyễn Văn A/B) ─────────────────────
+// Demo mode không gọi backend nên analysis vốn = null — nhưng từ khi
+// LabPanel đọc analysis.inr_target_detail để hiện đúng ngưỡng INR theo
+// TỪNG LOẠI bệnh nhân (sửa "Vấn đề 1" — hệ thống từng mặc định mọi bệnh
+// nhân là ca van cơ học), demo cần có sẵn field này để không hiện "chưa xác
+// định ngưỡng" cho 2 ca demo (vốn đã biết rõ loại van). Giá trị khớp đúng
+// logic cde/anticoagulation_targets.py sẽ tính cho từng ca thật tương ứng.
+const MOCK_ANALYSIS_BY_SBA = {
+  "25.019647": { // Nguyễn Văn A
+    inr_target_detail: { target_min: 2.0, target_max: 3.0, target_mid: 2.5, ten_hien_thi: "Van ĐMC cơ học On-X — ESC/EACTS 2021 (nguy cơ thấp)" },
+    anticoagulant_status: { an_inr_ttr: false },
+  },
+  "26.007850": { // Nguyễn Văn B
+    inr_target_detail: { target_min: 2.0, target_max: 3.0, target_mid: 2.5, ten_hien_thi: "Sửa van tim (mitral/tricuspid repair) — chỉ 3 tháng đầu, không suốt đời" },
+    anticoagulant_status: { an_inr_ttr: false },
+  },
+}
+
 // ─── Lịch sử quét ECG (lưu sessionStorage, KHÔNG bao gồm 2 mẫu demo tĩnh) ────
 // Tích hợp theo yêu cầu: mục "Lịch sử bệnh án" cũng hiện các lượt quét ECG đã
 // thực hiện, không chỉ hồ sơ bệnh án. Mỗi lượt quét ảnh thật qua /ecg (không
@@ -5878,7 +5953,7 @@ function LoginPage({ onLogin }){
 }
 
 // ─── Ghi âm tài liệu hỗ trợ (Web Speech API vi-VN, có xử lý quyền + lỗi) ───────
-function AudioRecorder({ value, onChange, onAttach }){
+function AudioRecorder({ value, onChange, onAttach, attachLabel="Đính kèm", attachHint="Ctrl/Cmd + Enter để đính kèm" }){
   const [supported] = useState(() => typeof window!=="undefined" && !!(window.SpeechRecognition||window.webkitSpeechRecognition))
   const [rec, setRec] = useState(false)
   const [err, setErr] = useState("")
@@ -5944,9 +6019,9 @@ function AudioRecorder({ value, onChange, onAttach }){
             ? <><span className="rec-dot pulse"/>Đang nghe... bấm để dừng</>
             : <><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>Ghi âm</>}
         </button>
-        <span className="sn-count">{chars>0 ? `${chars} ký tự` : "Ctrl/Cmd + Enter để đính kèm"}</span>
+        <span className="sn-count">{chars>0 ? `${chars} ký tự` : attachHint}</span>
         <span style={{flex:1}}/>
-        <button type="button" className="sn-send" onClick={attach} disabled={!(value||"").trim()}><Icon.Send d={13} color="#fff"/>Đính kèm</button>
+        <button type="button" className="sn-send" onClick={attach} disabled={!(value||"").trim()}><Icon.Send d={13} color="#fff"/>{attachLabel}</button>
       </div>
       {!supported && <div className="rec-note warn">Trình duyệt chưa hỗ trợ ghi âm giọng nói. Hãy dùng Chrome hoặc Edge mới nhất (trên trang HTTPS đã xuất bản).</div>}
       {err && <div className="rec-note err"><Icon.Alert d={13} color="#B91C1C"/>{err}</div>}
@@ -6294,7 +6369,7 @@ function TeachingView({ report }){
 }
 
 // ─── Lịch sử bệnh án (overlay) ────────────────────────────────────────────────
-function HistoryPanel({ onClose, onOpen, onOpenDbPatient, onOpenEcgEntry, currentId }){
+function HistoryPanel({ onBack, onOpen, onOpenDbPatient, onOpenEcgEntry, currentId }){
   const ecgList = loadEcgHistory()
   const demoEntries = Object.entries(ECG_DEMO_SAMPLES).map(([key, sample]) => ({
     id: "demo-" + key,
@@ -6316,6 +6391,11 @@ function HistoryPanel({ onClose, onOpen, onOpenDbPatient, onOpenEcgEntry, curren
     return () => { cancelled = true }
   }, [])
   const [deletingId, setDeletingId] = useState(null)
+  // handleDelete gọi mpConfirm() — trước đây là bug đã sửa: HistoryPanel là
+  // overlay modal riêng với z-index CAO HƠN cả hộp thoại xác nhận (.cfm-ov),
+  // nên hộp xác nhận xóa bị che khuất phía sau, nhìn như "chìm mất". Chuyển
+  // HistoryPanel thành TRANG RIÊNG (không còn overlay/z-index) loại bỏ hẳn
+  // lớp bug này, không chỉ riêng chỗ xóa mà mọi hộp thoại mở từ trang này.
   const handleDelete = async (e, p) => {
     e.stopPropagation()
     const ok = await mpConfirm({
@@ -6337,79 +6417,92 @@ function HistoryPanel({ onClose, onOpen, onOpenDbPatient, onOpenEcgEntry, curren
     }
   }
   return (
-    <div className="hist-overlay" onClick={onClose}>
-      <div className="hist-modal" onClick={e=>e.stopPropagation()}>
-        <div className="hist-head">
-          <span className="hist-title"><Icon.FileText d={17} color="#1D6FE8"/>Lịch sử bệnh án</span>
-          <button className="fp-close" onClick={onClose} title="Đóng"><Icon.Close d={15} color="#475569"/></button>
-        </div>
-        <div className="hist-list">
-          <div className="hist-section-lbl"><Icon.FileText d={13} color="#1D6FE8"/>Báo cáo - Demo</div>
-          {HISTORY.map(rec=>(
-            <div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>onOpen(rec)}>
-              <div className="hist-avatar">{rec.ho_ten.charAt(0)}</div>
-              <div className="hist-info">
-                <div className="hist-name">{rec.ho_ten} <span className="hist-meta">{rec.tuoi} tuổi, {rec.gioi_tinh} · BA {rec.so_benh_an}</span></div>
-                <div className="hist-dx">{expandAbbr(rec.chan_doan)}</div>
-                <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Vào viện {rec.ngay_vao_vien} · {rec.bac_si}</div>
+    <div className="hist-page">
+      <header className="report-nav">
+        <div className="report-nav-inner">
+          <div className="nav-row1">
+            <div className="nav-left">
+              <button className="ecg-back" onClick={onBack} title="Quay lại"><Icon.Back d={16} color="#1D6FE8"/></button>
+              <div className="logo">
+                <BrandMark size={30} radius={9}/>
+                <span className="logo-text" style={{fontSize:14}}>Med<em>Parcours</em></span>
+                <span className="logo-sub" style={{fontSize:12}}>AI</span>
               </div>
-              <span className="hist-open">Mở ▶</span>
             </div>
-          ))}
-          {dbPatients && dbPatients.length > 0 && (
-            <>
-              <div className="hist-section-lbl"><Icon.FileText d={13} color="#059669"/>Hồ sơ đã lưu</div>
-              {dbPatients.map(p=>(
-                <div key={p.so_benh_an} className={`hist-item${currentId===("db-"+p.so_benh_an)?" cur":""}`} onClick={()=>onOpenDbPatient(p.so_benh_an)}>
-                  <div className="hist-avatar" style={{background:"linear-gradient(135deg,#D1FAE5,#A7F3D0)",color:"#059669"}}>{(p.ho_ten||"?").charAt(0)}</div>
-                  <div className="hist-info">
-                    <div className="hist-name">{p.ho_ten || "(chưa rõ tên)"} <span className="hist-meta">BA {p.so_benh_an}</span></div>
-                    <div className="hist-dx">Đã cập nhật {p.so_lan_cap_nhat} lần</div>
-                    <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Cập nhật gần nhất: {fmtDateTime(p.cap_nhat_luc)}</div>
-                  </div>
-                  <span className="hist-open">Mở ▶</span>
-                  <button className="hist-del-btn" onClick={(e)=>handleDelete(e, p)} disabled={deletingId===p.so_benh_an} title="Xóa hồ sơ" aria-label="Xóa hồ sơ">
-                    {deletingId===p.so_benh_an
-                      ? <span className="hist-del-spin"/>
-                      : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>}
-                  </button>
+          </div>
+        </div>
+      </header>
+      <div className="hist-page-body">
+        <div className="hist-page-inner">
+          <span className="hist-title"><Icon.FileText d={17} color="#1D6FE8"/>Lịch sử bệnh án</span>
+          <div className="hist-list">
+            <div className="hist-section-lbl"><Icon.FileText d={13} color="#1D6FE8"/>Báo cáo - Demo</div>
+            {HISTORY.map(rec=>(
+              <div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>onOpen(rec)}>
+                <div className="hist-avatar">{rec.ho_ten.charAt(0)}</div>
+                <div className="hist-info">
+                  <div className="hist-name">{rec.ho_ten} <span className="hist-meta">{rec.tuoi} tuổi, {rec.gioi_tinh} · BA {rec.so_benh_an}</span></div>
+                  <div className="hist-dx">{expandAbbr(rec.chan_doan)}</div>
+                  <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Vào viện {rec.ngay_vao_vien} · {rec.bac_si}</div>
                 </div>
-              ))}
-            </>
-          )}
-          {dbPatients === null && (
-            <div className="hist-loading-hint">Đang tải hồ sơ đã lưu...</div>
-          )}
-          {dbError && (
-            <div className="hist-loading-hint">Chưa kết nối được hệ thống lưu trữ lâu dài — chỉ hiện được hồ sơ mẫu.</div>
-          )}
-          {(ecgList.length > 0 || demoEntries.length > 0) && (
-            <>
-              <div className="hist-section-lbl"><Icon.Pulse d={13} color="#DC2626"/>Lịch sử quét điện tâm đồ</div>
-              {ecgList.map(e=>(
-                <div key={e.id} className="hist-item hist-item-ecg" onClick={()=>onOpenEcgEntry(e)}>
-                  <div className="hist-avatar hist-avatar-ecg"><Icon.Pulse d={15} color="#DC2626"/></div>
-                  <div className="hist-info">
-                    <div className="hist-name">{e.ten_file}</div>
-                    <div className="hist-dx">{e.bpm != null ? `${e.bpm} lần/phút` : "Không xác định tần số"}{e.nhip_deu === false ? " · nghi ngờ nhịp không đều" : ""}</div>
-                    <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>{fmtDateTime(e.thoi_diem)}</div>
+                <span className="hist-open">Mở ▶</span>
+              </div>
+            ))}
+            {dbPatients && dbPatients.length > 0 && (
+              <>
+                <div className="hist-section-lbl"><Icon.FileText d={13} color="#059669"/>Hồ sơ đã lưu</div>
+                {dbPatients.map(p=>(
+                  <div key={p.so_benh_an} className={`hist-item${currentId===("db-"+p.so_benh_an)?" cur":""}`} onClick={()=>onOpenDbPatient(p.so_benh_an)}>
+                    <div className="hist-avatar" style={{background:"linear-gradient(135deg,#D1FAE5,#A7F3D0)",color:"#059669"}}>{(p.ho_ten||"?").charAt(0)}</div>
+                    <div className="hist-info">
+                      <div className="hist-name">{p.ho_ten || "(chưa rõ tên)"} <span className="hist-meta">BA {p.so_benh_an}</span></div>
+                      <div className="hist-dx">Đã cập nhật {p.so_lan_cap_nhat} lần</div>
+                      <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Cập nhật gần nhất: {fmtDateTime(p.cap_nhat_luc)}</div>
+                    </div>
+                    <span className="hist-open">Mở ▶</span>
+                    <button className="hist-del-btn" onClick={(e)=>handleDelete(e, p)} disabled={deletingId===p.so_benh_an} title="Xóa hồ sơ" aria-label="Xóa hồ sơ">
+                      {deletingId===p.so_benh_an
+                        ? <span className="hist-del-spin"/>
+                        : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>}
+                    </button>
                   </div>
-                  <span className="hist-open">Mở ▶</span>
-                </div>
-              ))}
-              {demoEntries.map(e=>(
-                <div key={e.id} className="hist-item hist-item-ecg hist-item-ecg-demo" onClick={()=>onOpenEcgEntry(e)}>
-                  <div className="hist-avatar hist-avatar-ecg"><Icon.Pulse d={15} color="#DC2626"/></div>
-                  <div className="hist-info">
-                    <div className="hist-name">{e.ten_file} <span className="hist-demo-tag">Mẫu demo</span></div>
-                    <div className="hist-dx">{e.bpm != null ? `${e.bpm} lần/phút` : "Không xác định tần số"}</div>
-                    <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Ảnh ECG thật dùng để minh họa tính năng</div>
+                ))}
+              </>
+            )}
+            {dbPatients === null && (
+              <div className="hist-loading-hint">Đang tải hồ sơ đã lưu...</div>
+            )}
+            {dbError && (
+              <div className="hist-loading-hint">Chưa kết nối được hệ thống lưu trữ lâu dài — chỉ hiện được hồ sơ mẫu.</div>
+            )}
+            {(ecgList.length > 0 || demoEntries.length > 0) && (
+              <>
+                <div className="hist-section-lbl"><Icon.Pulse d={13} color="#DC2626"/>Lịch sử quét điện tâm đồ</div>
+                {ecgList.map(e=>(
+                  <div key={e.id} className="hist-item hist-item-ecg" onClick={()=>onOpenEcgEntry(e)}>
+                    <div className="hist-avatar hist-avatar-ecg"><Icon.Pulse d={15} color="#DC2626"/></div>
+                    <div className="hist-info">
+                      <div className="hist-name">{e.ten_file}</div>
+                      <div className="hist-dx">{e.bpm != null ? `${e.bpm} lần/phút` : "Không xác định tần số"}{e.nhip_deu === false ? " · nghi ngờ nhịp không đều" : ""}</div>
+                      <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>{fmtDateTime(e.thoi_diem)}</div>
+                    </div>
+                    <span className="hist-open">Mở ▶</span>
                   </div>
-                  <span className="hist-open">Mở ▶</span>
-                </div>
-              ))}
-            </>
-          )}
+                ))}
+                {demoEntries.map(e=>(
+                  <div key={e.id} className="hist-item hist-item-ecg hist-item-ecg-demo" onClick={()=>onOpenEcgEntry(e)}>
+                    <div className="hist-avatar hist-avatar-ecg"><Icon.Pulse d={15} color="#DC2626"/></div>
+                    <div className="hist-info">
+                      <div className="hist-name">{e.ten_file} <span className="hist-demo-tag">Mẫu demo</span></div>
+                      <div className="hist-dx">{e.bpm != null ? `${e.bpm} lần/phút` : "Không xác định tần số"}</div>
+                      <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Ảnh ECG thật dùng để minh họa tính năng</div>
+                    </div>
+                    <span className="hist-open">Mở ▶</span>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -7235,10 +7328,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .teach-q-ic{color:#0E9488;font-weight:800;width:13px;display:inline-block;flex-shrink:0}
 .teach-q-a{font-size:12.5px;color:#475569;line-height:1.65;padding:0 14px 13px 36px}
 .teach-q-a-lbl{display:inline-block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#0E9488;background:rgba(14,148,136,.1);padding:2px 8px;border-radius:6px;margin-right:8px}
-.hist-overlay{position:fixed;inset:0;background:rgba(10,22,40,.5);backdrop-filter:blur(3px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px}
-.hist-modal{width:100%;max-width:580px;max-height:84vh;overflow:auto;background:#fff;border-radius:20px;padding:24px}
-.hist-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
-.hist-title{display:flex;align-items:center;gap:8px;font-size:18px;font-weight:800;color:#0F2740}
+.hist-title{display:flex;align-items:center;gap:8px;font-size:18px;font-weight:800;color:#0F2740;margin-bottom:16px}
 .hist-list{display:flex;flex-direction:column;gap:11px}
 .hist-item{display:flex;gap:13px;align-items:center;border:1px solid #e7eef8;border-radius:14px;padding:14px;cursor:pointer;transition:all .15s}
 .hist-item:hover{border-color:#1D6FE8;background:rgba(29,111,232,.03);transform:translateY(-1px);box-shadow:0 6px 18px rgba(29,111,232,.1)}
@@ -7379,6 +7469,7 @@ body.theme-dark .hist-dx{color:#9FB3CC}
 .pw-eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;color:#7A96C8;display:flex}
 .rec-inline-wrap{margin-top:14px;border:1px solid #dbe6f5;border-radius:14px;padding:13px 15px;background:linear-gradient(180deg,rgba(29,111,232,.045),rgba(14,148,136,.03))}
 .rec-inline-h{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;color:#0F2740;margin-bottom:10px}
+.upd-note-hint{font-size:11.5px;color:var(--muted2);line-height:1.5;margin:-6px 0 10px}
 .rec-inline{display:flex;flex-direction:column}
 .rec-inline-row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
 .rec-attach{display:inline-flex;align-items:center;gap:6px;border:none;background:#0E9488;color:#fff;font-size:12.5px;font-weight:600;padding:9px 14px;border-radius:10px;cursor:pointer}
@@ -7587,6 +7678,9 @@ body.theme-dark .fmt-chip-soon{color:#64748B;background:#141E2C;border-color:#2A
 
 /* ── EcgPage: quét điện tâm đồ - TRANG RIÊNG HOÀN TOÀN ───────────────────── */
 .ecg-page{min-height:100vh;background:var(--page-bg)}
+.hist-page{min-height:100vh;background:var(--page-bg)}
+.hist-page-body{display:flex;justify-content:center;padding:28px 20px 60px}
+.hist-page-inner{width:100%;max-width:640px}
 .ecg-back{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:9px;border:1px solid var(--border);background:var(--glass);color:#1D6FE8;cursor:pointer;flex-shrink:0}
 .ecg-back:hover{background:#EFF6FF}
 .ecg-page-title{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;color:var(--navy)}
@@ -7791,7 +7885,7 @@ function ShortcutHelp(){
 export default function App() {
   const [authed, setAuthed] = useState(() => { try { return sessionStorage.getItem("mp_auth")==="1" } catch { return false } })
   const login = () => { try { sessionStorage.setItem("mp_auth","1") } catch {} setAuthed(true) }
-  const logout = () => { try { sessionStorage.removeItem("mp_auth") } catch {} setAuthed(false); setState("upload"); setReport(null); setAnalysis(null); setChatMessages([]); setCurrentId(null); setShowHistory(false) }
+  const logout = () => { try { sessionStorage.removeItem("mp_auth") } catch {} setAuthed(false); setState("upload"); setReport(null); setAnalysis(null); setChatMessages([]); setCurrentId(null) }
   const [state, setState] = useState("upload")
   const [report, setReport] = useState(null)
   const [hoSoText, setHoSoText] = useState("")
@@ -7801,7 +7895,6 @@ export default function App() {
   const [lastFile, setLastFile] = useState(null)
   const [uploadError, setUploadError] = useState(null)
   const [chatMessages, setChatMessages] = useState([])
-  const [showHistory, setShowHistory] = useState(false)
   const [ecgInitial, setEcgInitial] = useState(null)
   const [currentId, setCurrentId] = useState(null)
 
@@ -7907,13 +8000,13 @@ export default function App() {
 
   const loadRecord = (rec) => {
     setReport(rec.data); setHoSoText(JSON.stringify(rec.data)); setAnalysis(null)
-    initChat(rec.data); setCurrentId(rec.id); setShowHistory(false); setUploadError(null); setState("report")
+    initChat(rec.data); setCurrentId(rec.id); setUploadError(null); setState("report")
   }
   // Mở hồ sơ THẬT đã lưu (Turso) — khác loadRecord (demo cố định): dùng đúng
   // analysis backend đã tính sẵn (GET /patient/{id} trả cả report+analysis),
   // không để null, vì có sẵn dữ liệu thật tốt hơn cách demo cũ.
   const loadDbPatient = async (soBenhAn) => {
-    setShowHistory(false); setLoading(true); setLoadingMsg("Đang tải hồ sơ đã lưu...")
+    setLoading(true); setLoadingMsg("Đang tải hồ sơ đã lưu...")
     try {
       const data = await mpApi.getPatient(soBenhAn)
       setReport(data.report); setHoSoText(JSON.stringify(data.report)); setAnalysis(data.analysis)
@@ -7934,18 +8027,26 @@ export default function App() {
       <style>{CSS}</style>
       <style>{EXTRA_CSS}</style>
       <ErrorBoundary>
-        {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)} onRetry={()=>lastFile && handleUpload(lastFile)} onOpenHistory={()=>setShowHistory(true)} onOpenEcg={()=>setState("ecg")} onLogout={logout}/>}
+        {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)} onRetry={()=>lastFile && handleUpload(lastFile)} onOpenHistory={()=>setState("history")} onOpenEcg={()=>setState("ecg")} onLogout={logout}/>}
         {state === "report" && report && (
           <ReportPage report={report} hoSoText={hoSoText} analysis={analysis}
             onReset={()=>{setState("upload");setReport(null);setAnalysis(null);setChatMessages([]);setCurrentId(null)}}
             onReportUpdated={(newReport, newAnalysis)=>{setReport(newReport);setAnalysis(newAnalysis)}}
             chatMessages={chatMessages} setChatMessages={setChatMessages}
-            onOpenHistory={()=>setShowHistory(true)} onLogout={logout}/>
+            onOpenHistory={()=>setState("history")} onLogout={logout}/>
         )}
         {state === "ecg" && (
           <EcgPage onBack={()=>{setState("upload");setEcgInitial(null)}} initialResult={ecgInitial} onLogout={logout}/>
         )}
-        {showHistory && <HistoryPanel onClose={()=>setShowHistory(false)} onOpen={loadRecord} onOpenDbPatient={loadDbPatient} onOpenEcgEntry={(entry)=>{setEcgInitial(entry);setShowHistory(false);setState("ecg")}} currentId={currentId}/>}
+        {state === "history" && (
+          <HistoryPanel
+            onBack={()=>setState(report ? "report" : "upload")}
+            onOpen={loadRecord}
+            onOpenDbPatient={loadDbPatient}
+            onOpenEcgEntry={(entry)=>{setEcgInitial(entry);setState("ecg")}}
+            currentId={currentId}
+          />
+        )}
         <ToastHost/>
         <ConfirmHost/>
         <ShortcutHelp/>
