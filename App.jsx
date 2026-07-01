@@ -1,11 +1,7 @@
-import { useState, useRef, useEffect, useCallback, Component } from "react"
-
-// API_URL: trỏ tới backend trên Hugging Face Spaces.
-// SAU KHI tạo Space, thay URL bên dưới bằng URL thật, dạng:
-//   https://<tên-tài-khoản-HF>-mediflow-ai.hf.space   (chữ thường, dùng dấu gạch ngang)
-// Có thể ghi đè bằng window.MEDIFLOW_API_URL trong index.html mà không cần sửa file này.
-const API_URL = (typeof window !== "undefined" && window.MEDIFLOW_API_URL) || "https://danghoang2605-mediflow-ai.hf.space"
-
+import React, { useState, useRef, useEffect, useCallback, Component } from "react";
+import { supabase, supabaseConfigured } from "./supabaseClient";
+import { callApi } from "./api";
+// API backend và Bearer token được quản lý tập trung trong api.js.
 // ─── Lớp gọi Backend (Hugging Face Spaces) ───────────────────────────────────
 // analyzeText/analyze: phân tích hồ sơ. mdt/teaching: lấy biên bản hội chẩn và
 // bài giảng từ medparcours_modes_backend.py. Mọi lỗi sẽ ném ra để nơi gọi fallback.
@@ -13,7 +9,7 @@ async function mpFetchJSON(path, body, ms=45000){
   const ctrl = new AbortController()
   const timer = setTimeout(()=>ctrl.abort(), ms)
   try {
-    const res = await fetch(`${API_URL}${path}`, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body), signal: ctrl.signal })
+    const res = await callApi(path, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body), signal: ctrl.signal })
     if(!res.ok) throw new Error("API "+res.status)
     return await res.json()
   } finally { clearTimeout(timer) }
@@ -22,7 +18,7 @@ const mpApi = {
   analyzeText: (ho_so_text, pages=0) => mpFetchJSON("/analyze_text", { ho_so_text, pages }),
   analyzeFile: async (file) => {
     const fd = new FormData(); fd.append("file", file)
-    const res = await fetch(`${API_URL}/analyze`, { method:"POST", body: fd })
+    const res = await callApi("/analyze", { method:"POST", body: fd })
     if(!res.ok) throw new Error("API "+res.status)
     return res.json()
   },
@@ -5013,7 +5009,7 @@ function FloatingChat({ report, hoSoText, messages, setMessages, onExpand, mode 
     const q = text || input.trim(); if (!q || loading) return
     setInput(""); setMessages(prev => [...prev, { role:"user", content:q }]); setLoading(true)
     try {
-      const res = await fetch(`${API_URL}/chat`, { method:"POST", headers:{ "Content-Type":"application/json" },
+      const res = await callApi("/chat", { method:"POST", headers:{ "Content-Type":"application/json" },
         body:JSON.stringify({ question:q, ho_so_text:hoSoText||JSON.stringify(report), chat_history:messages.slice(-6), mode }) })
       const data = await res.json()
       // fetch KHÔNG tự throw khi status lỗi (400/500) nếu backend vẫn trả JSON
@@ -5023,10 +5019,12 @@ function FloatingChat({ report, hoSoText, messages, setMessages, onExpand, mode 
       // xuống catch để dùng DEMO_CHAT, người dùng vẫn có câu trả lời hữu ích.
       if (!res.ok || !data || !data.answer) throw new Error(data?.detail || "no answer")
       setMessages(prev => [...prev, { role:"assistant", content:data.answer }])
-    } catch {
-      const key = Object.keys(DEMO_CHAT).find(k => q.toLowerCase().includes(k))
-      const ans = key ? DEMO_CHAT[key] : "Không tìm thấy thông tin cụ thể trong hồ sơ. Bác sĩ có thể hỏi về: biến chứng sau mổ, thuốc chống đông, kết quả siêu âm, hoặc diễn biến CRP."
-      setMessages(prev => [...prev, { role:"assistant", content:ans }])
+    } catch (error) {
+      console.error("Chat API error:", error)
+      setMessages(prev => [...prev, {
+        role:"assistant",
+        content:"Không thể kết nối với VNPT SmartBot lúc này. Vui lòng kiểm tra kết nối backend và cấu hình SMARTBOT_."
+      }])
     }
     setLoading(false)
   }
@@ -5098,17 +5096,19 @@ function ChatTab({ report, hoSoText, messages, setMessages, mode }) {
     const q = text || input.trim(); if (!q || loading) return
     setInput(""); setMessages(prev => [...prev, {role:"user", content:q}]); setLoading(true)
     try {
-      const res = await fetch(`${API_URL}/chat`, {method:"POST", headers:{"Content-Type":"application/json"},
+      const res = await callApi("/chat", {method:"POST", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({question:q, ho_so_text:hoSoText||JSON.stringify(report), chat_history:messages.slice(-6), mode})})
       const data = await res.json()
       // Xem ghi chú ở FloatingChat.send(): fetch không tự throw khi status lỗi
       // nhưng vẫn trả JSON hợp lệ -> phải tự kiểm tra res.ok + data.answer.
       if (!res.ok || !data || !data.answer) throw new Error(data?.detail || "no answer")
       setMessages(prev => [...prev, {role:"assistant", content:data.answer}])
-    } catch {
-      const key = Object.keys(DEMO_CHAT).find(k => q.toLowerCase().includes(k))
-      const ans = key ? DEMO_CHAT[key] : "Không tìm thấy thông tin cụ thể trong hồ sơ. Bác sĩ có thể hỏi về: biến chứng sau mổ, thuốc chống đông, kết quả siêu âm, hoặc diễn biến CRP."
-      setMessages(prev => [...prev, {role:"assistant", content:ans}])
+    } catch (error) {
+      console.error("Chat API error:", error)
+      setMessages(prev => [...prev, {
+        role:"assistant",
+        content:"Không thể kết nối với VNPT SmartBot lúc này. Vui lòng kiểm tra kết nối backend và cấu hình SMARTBOT_."
+      }])
     }
     setLoading(false)
   }
@@ -5493,15 +5493,20 @@ function deriveTeaching(r){
   }
 }
 
-// ─── Đăng nhập (demo) ─────────────────────────────────────────────────────────
+// ─── Đăng nhập bằng Supabase Auth ──────────────────────────────────────────────
 function LoginPage({ onLogin }){
-  const [u, setU] = useState("")
-  const [p, setP] = useState("")
+  const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
   const [showPw, setShowPw] = useState(false)
   const [err, setErr] = useState("")
-  const submit = () => {
-    if(u.trim()==="hackaithon2026" && p==="medparcours"){ setErr(""); onLogin() }
-    else setErr("Tên đăng nhập hoặc mật khẩu không đúng.")
+  const [busy, setBusy] = useState(false)
+  const submit = async () => {
+    if(busy) return
+    if(!email.trim() || !password){ setErr("Vui lòng nhập email và mật khẩu."); return }
+    setBusy(true); setErr("")
+    try { await onLogin(email.trim(), password) }
+    catch(e) { setErr(e?.message || "Sai email hoặc mật khẩu.") }
+    finally { setBusy(false) }
   }
   const FEATURES = [
     { ic:<Icon.FileText d={16} color="#1D6FE8"/>, t:"Tự động phân tích và tóm tắt diễn biến lâm sàng theo 3 giai đoạn." },
@@ -5526,13 +5531,13 @@ function LoginPage({ onLogin }){
               <div className="login-brand">Med<em>Parcours</em> <span>AI</span></div>
               <div className="login-sub">Trợ lý lâm sàng cho bác sĩ - Đăng nhập để tiếp tục</div>
               <div className="login-field">
-                <label>Tên đăng nhập</label>
-                <input value={u} onChange={e=>setU(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Nhập tên đăng nhập" autoFocus/>
+                <label>Email bác sĩ</label>
+                <input type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="bacsi@benhvien.vn" autoComplete="email" autoFocus/>
               </div>
               <div className="login-field">
                 <label>Mật khẩu</label>
                 <div className="pw-wrap">
-                  <input type={showPw?"text":"password"} value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Nhập mật khẩu" style={{paddingRight:"40px"}}/>
+                  <input type={showPw?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Nhập mật khẩu" autoComplete="current-password" style={{paddingRight:"40px"}}/>
                   <button type="button" className="pw-eye" onClick={()=>setShowPw(s=>!s)} title={showPw?"Ẩn mật khẩu":"Hiện mật khẩu"} aria-label="Hiện/ẩn mật khẩu">
                     {showPw
                       ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
@@ -5541,10 +5546,10 @@ function LoginPage({ onLogin }){
                 </div>
               </div>
               {err && <div className="login-err"><Icon.Alert d={14} color="#B91C1C"/>{err}</div>}
-              <button className="btn-primary login-btn" onClick={submit}>Đăng nhập</button>
+              <button className="btn-primary login-btn" onClick={submit} disabled={busy}>{busy ? "Đang đăng nhập..." : "Đăng nhập"}</button>
               <div className="login-hint">
-                <div className="login-hint-row"><span>Tài khoản dùng thử</span><b>hackaithon2026</b></div>
-                <div className="login-hint-row"><span>Mật khẩu</span><b>medparcours</b></div>
+                <div className="login-hint-row"><span>Tài khoản dùng thử</span><b>bacsi@medparcours.com</b></div>
+                <div className="login-hint-row"><span>Mật khẩu</span><b>un1svengers</b></div>
               </div>
             </div>
           </div>
@@ -5979,7 +5984,12 @@ function TeachingView({ report }){
 }
 
 // ─── Lịch sử bệnh án (overlay) ────────────────────────────────────────────────
-function HistoryPanel({ onClose, onOpen, onOpenEcgEntry, currentId }){
+function HistoryPanel({ onClose, onOpen, onOpenRemote, onOpenEcgEntry, currentId }){
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [query, setQuery] = useState("")
+  const [openingId, setOpeningId] = useState(null)
   const ecgList = loadEcgHistory()
   const demoEntries = Object.entries(ECG_DEMO_SAMPLES).map(([key, sample]) => ({
     id: "demo-" + key,
@@ -5989,52 +5999,57 @@ function HistoryPanel({ onClose, onOpen, onOpenEcgEntry, currentId }){
     nhip_deu: null,
     result: sample,
   }))
+  const refresh = useCallback(async () => {
+    setLoading(true); setError("")
+    try {
+      const res = await callApi("/lich-su")
+      const data = await res.json()
+      if(!res.ok) throw new Error(data?.detail || "Không tải được lịch sử")
+      setRows(Array.isArray(data) ? data : [])
+    } catch(e) { setError(e?.message || "Không tải được lịch sử từ Supabase") }
+    finally { setLoading(false) }
+  }, [])
+  useEffect(() => { refresh() }, [refresh])
+  const openRemote = async (rec) => {
+    if(openingId) return
+    setOpeningId(rec.id)
+    try { await onOpenRemote(rec) }
+    catch(e) { setError(e?.message || "Không mở được bản phân tích") }
+    finally { setOpeningId(null) }
+  }
+  const removeRemote = async (event, rec) => {
+    event.stopPropagation()
+    const ok = await mpConfirm({title:"Xóa bản phân tích?",message:"Bản phân tích sẽ bị xóa khỏi lịch sử Supabase. Hành động vẫn được ghi vào nhật ký truy cập.",okText:"Xóa",danger:true})
+    if(!ok) return
+    try {
+      const res = await callApi(`/phan-tich/${rec.id}`, { method:"DELETE" })
+      const data = await res.json()
+      if(!res.ok || !data?.ok) throw new Error(data?.detail || "Không xóa được bản phân tích")
+      setRows(prev => prev.filter(x => x.id !== rec.id)); mpToast("Đã xóa bản phân tích")
+    } catch(e) { setError(e?.message || "Không xóa được bản phân tích") }
+  }
+  const q = query.trim().toLowerCase()
+  const filteredRows = rows.filter(r => !q || [r.ma_hien_thi,r.chan_doan_chinh,r.giai_doan,r.gioi_tinh].some(v=>String(v||"").toLowerCase().includes(q)))
   return (
     <div className="hist-overlay" onClick={onClose}>
       <div className="hist-modal" onClick={e=>e.stopPropagation()}>
-        <div className="hist-head">
-          <span className="hist-title"><Icon.FileText d={17} color="#1D6FE8"/>Lịch sử bệnh án</span>
-          <button className="fp-close" onClick={onClose} title="Đóng"><Icon.Close d={15} color="#475569"/></button>
-        </div>
+        <div className="hist-head"><span className="hist-title"><Icon.FileText d={17} color="#1D6FE8"/>Lịch sử bệnh án</span><button className="fp-close" onClick={onClose} title="Đóng"><Icon.Close d={15} color="#475569"/></button></div>
+        <div className="hist-search-wrap"><input className="hist-search" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm theo mã hồ sơ, chẩn đoán hoặc giai đoạn..."/><button className="hist-refresh" onClick={refresh} disabled={loading}>Làm mới</button></div>
         <div className="hist-list">
-          {HISTORY.map(rec=>(
-            <div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>onOpen(rec)}>
-              <div className="hist-avatar">{rec.ho_ten.charAt(0)}</div>
-              <div className="hist-info">
-                <div className="hist-name">{rec.ho_ten} <span className="hist-meta">{rec.tuoi} tuổi, {rec.gioi_tinh} · BA {rec.so_benh_an}</span></div>
-                <div className="hist-dx">{expandAbbr(rec.chan_doan)}</div>
-                <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Vào viện {rec.ngay_vao_vien} · {rec.bac_si}</div>
-              </div>
-              <span className="hist-open">Mở ▶</span>
+          <div className="hist-section-lbl"><Icon.FileText d={13} color="#1D6FE8"/>Lịch sử phân tích trên Supabase</div>
+          {loading && <div className="hist-state"><span className="loading-spin small"/>Đang tải lịch sử...</div>}
+          {error && <div className="hist-state hist-state-error">{error}</div>}
+          {!loading && !error && filteredRows.length===0 && <div className="hist-state">Chưa có bản phân tích nào phù hợp.</div>}
+          {filteredRows.map(rec=>(
+            <div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>openRemote(rec)}>
+              <div className="hist-avatar">{(rec.ma_hien_thi||"HS").charAt(0)}</div>
+              <div className="hist-info"><div className="hist-name">Hồ sơ {rec.ma_hien_thi || String(rec.id).slice(0,8)} <span className="hist-meta">{rec.tuoi ? `${rec.tuoi} tuổi` : "Tuổi chưa rõ"}{rec.gioi_tinh ? `, ${rec.gioi_tinh}` : ""}</span></div><div className="hist-dx">{expandAbbr(rec.chan_doan_chinh || "Chưa có chẩn đoán chính")}</div><div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>{fmtDateTime(rec.ngay_phan_tich)} · {rec.giai_doan || "Chưa xác định giai đoạn"} · {rec.so_canh_bao || 0} cảnh báo</div></div>
+              <div className="hist-actions">{rec.co_the_xoa && <button className="hist-delete" onClick={e=>removeRemote(e,rec)} title="Xóa bản phân tích">×</button>}<span className="hist-open">{openingId===rec.id ? "Đang mở..." : "Mở ▶"}</span></div>
             </div>
           ))}
-          {(ecgList.length > 0 || demoEntries.length > 0) && (
-            <>
-              <div className="hist-section-lbl"><Icon.Pulse d={13} color="#DC2626"/>Lịch sử quét điện tâm đồ</div>
-              {ecgList.map(e=>(
-                <div key={e.id} className="hist-item hist-item-ecg" onClick={()=>onOpenEcgEntry(e)}>
-                  <div className="hist-avatar hist-avatar-ecg"><Icon.Pulse d={15} color="#DC2626"/></div>
-                  <div className="hist-info">
-                    <div className="hist-name">{e.ten_file}</div>
-                    <div className="hist-dx">{e.bpm != null ? `${e.bpm} lần/phút` : "Không xác định tần số"}{e.nhip_deu === false ? " · nghi ngờ nhịp không đều" : ""}</div>
-                    <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>{fmtDateTime(e.thoi_diem)}</div>
-                  </div>
-                  <span className="hist-open">Mở ▶</span>
-                </div>
-              ))}
-              {demoEntries.map(e=>(
-                <div key={e.id} className="hist-item hist-item-ecg hist-item-ecg-demo" onClick={()=>onOpenEcgEntry(e)}>
-                  <div className="hist-avatar hist-avatar-ecg"><Icon.Pulse d={15} color="#DC2626"/></div>
-                  <div className="hist-info">
-                    <div className="hist-name">{e.ten_file} <span className="hist-demo-tag">Mẫu demo</span></div>
-                    <div className="hist-dx">{e.bpm != null ? `${e.bpm} lần/phút` : "Không xác định tần số"}</div>
-                    <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Ảnh ECG thật dùng để minh họa tính năng</div>
-                  </div>
-                  <span className="hist-open">Mở ▶</span>
-                </div>
-              ))}
-            </>
-          )}
+          <div className="hist-section-lbl"><Icon.Layers d={13} color="#0E9488"/>Hồ sơ mẫu</div>
+          {HISTORY.map(rec=>(<div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>onOpen(rec)}><div className="hist-avatar">{rec.ho_ten.charAt(0)}</div><div className="hist-info"><div className="hist-name">{rec.ho_ten} <span className="hist-demo-tag">Mẫu demo</span> <span className="hist-meta">{rec.tuoi} tuổi, {rec.gioi_tinh}</span></div><div className="hist-dx">{expandAbbr(rec.chan_doan)}</div><div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Dữ liệu minh họa, không lưu Supabase</div></div><span className="hist-open">Mở ▶</span></div>))}
+          {(ecgList.length > 0 || demoEntries.length > 0) && (<><div className="hist-section-lbl"><Icon.Pulse d={13} color="#DC2626"/>Lịch sử quét điện tâm đồ</div>{ecgList.map(e=>(<div key={e.id} className="hist-item hist-item-ecg" onClick={()=>onOpenEcgEntry(e)}><div className="hist-avatar hist-avatar-ecg"><Icon.Pulse d={15} color="#DC2626"/></div><div className="hist-info"><div className="hist-name">{e.ten_file}</div><div className="hist-dx">{e.bpm != null ? `${e.bpm} lần/phút` : "Không xác định tần số"}{e.nhip_deu === false ? " · nghi ngờ nhịp không đều" : ""}</div><div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>{fmtDateTime(e.thoi_diem)}</div></div><span className="hist-open">Mở ▶</span></div>))}{demoEntries.map(e=>(<div key={e.id} className="hist-item hist-item-ecg hist-item-ecg-demo" onClick={()=>onOpenEcgEntry(e)}><div className="hist-avatar hist-avatar-ecg"><Icon.Pulse d={15} color="#DC2626"/></div><div className="hist-info"><div className="hist-name">{e.ten_file} <span className="hist-demo-tag">Mẫu demo</span></div><div className="hist-dx">{e.bpm != null ? `${e.bpm} lần/phút` : "Không xác định tần số"}</div><div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Ảnh ECG thật dùng để minh họa tính năng</div></div><span className="hist-open">Mở ▶</span></div>))}</>)}
         </div>
       </div>
     </div>
@@ -6192,7 +6207,7 @@ function EcgPage({ onBack, initialResult, onLogout }) {
     try {
       const buf = await staged.file.arrayBuffer()
       const b64 = btoa(new Uint8Array(buf).reduce((s, b) => s + String.fromCharCode(b), ""))
-      const res = await fetch(`${API_URL}/ecg`, {
+      const res = await callApi("/ecg", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ image_base64: b64 }),
       })
@@ -7429,6 +7444,25 @@ body.theme-dark .ecg-form-row{border-top-color:#2A3A52}
 body.theme-dark .ecg-form-row-label{color:#EAF1FB}
 body.theme-dark .ecg-form-chip{background:#1A2536;color:#9FB3CC;border-color:#2A3A52}
 body.theme-dark .ecg-form-tag{background:#16243A;color:#5FA8FF;border-color:#2A3A52}
+/* Supabase Auth + lịch sử */
+.auth-loading{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#F3F6FA;color:#52708F;font-size:14px}
+.hist-search-wrap{display:flex;gap:9px;padding:12px 16px;border-bottom:1px solid #E3E9F1;background:#FAFBFD}
+.hist-search{flex:1;min-width:0;border:1px solid #D8E2F0;border-radius:10px;padding:9px 12px;font:inherit;font-size:12.5px;outline:none}
+.hist-search:focus{border-color:#1D6FE8;box-shadow:0 0 0 3px rgba(29,111,232,.1)}
+.hist-refresh{border:1px solid #BFD3EE;background:#EFF6FF;color:#1D6FE8;border-radius:10px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer}
+.hist-refresh:disabled{opacity:.55;cursor:not-allowed}
+.hist-state{display:flex;align-items:center;justify-content:center;gap:10px;padding:24px 16px;color:#7186A2;font-size:12.5px;text-align:center}
+.hist-state-error{color:#B91C1C;background:#FEF2F2;margin:8px 14px;border-radius:10px}
+.loading-spin.small{width:18px;height:18px;border-width:2px}
+.hist-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
+.hist-delete{width:25px;height:25px;border-radius:8px;border:1px solid #FECACA;background:#FEF2F2;color:#B91C1C;font-size:18px;line-height:20px;cursor:pointer}
+.hist-delete:hover{background:#FEE2E2}
+body.theme-dark .auth-loading{background:#0C1420;color:#9FB3CC}
+body.theme-dark .hist-search-wrap{background:#111B29;border-color:#26364E}
+body.theme-dark .hist-search{background:#141E2C;border-color:#2F4368;color:#EAF1FB}
+body.theme-dark .hist-refresh{background:#16243A;border-color:#2A3A52;color:#7FB0FF}
+body.theme-dark .hist-state-error{background:#2A1518;color:#FCA5A5}
+
 `
 
 // ─── Toast + Confirm + Copy (UX dùng chung) ──────────────────────────────────
@@ -7570,9 +7604,8 @@ function ShortcutHelp(){
 }
 
 export default function App() {
-  const [authed, setAuthed] = useState(() => { try { return sessionStorage.getItem("mp_auth")==="1" } catch { return false } })
-  const login = () => { try { sessionStorage.setItem("mp_auth","1") } catch {} setAuthed(true) }
-  const logout = () => { try { sessionStorage.removeItem("mp_auth") } catch {} setAuthed(false); setState("upload"); setReport(null); setAnalysis(null); setChatMessages([]); setCurrentId(null); setShowHistory(false) }
+  const [session, setSession] = useState(null)
+  const [authReady, setAuthReady] = useState(false)
   const [state, setState] = useState("upload")
   const [report, setReport] = useState(null)
   const [hoSoText, setHoSoText] = useState("")
@@ -7585,6 +7618,33 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(false)
   const [ecgInitial, setEcgInitial] = useState(null)
   const [currentId, setCurrentId] = useState(null)
+
+  const resetWorkspace = useCallback(() => {
+    setState("upload"); setReport(null); setHoSoText(""); setAnalysis(null)
+    setChatMessages([]); setCurrentId(null); setShowHistory(false); setUploadError(null)
+  }, [])
+
+  const login = async (email, password) => {
+    if(!supabaseConfigured || !supabase) throw new Error("Chưa cấu hình Supabase ở frontend.")
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    if(error) throw new Error("Sai email hoặc mật khẩu, hoặc tài khoản chưa được xác nhận.")
+    if(!data?.session) throw new Error("Supabase không trả về phiên đăng nhập.")
+    setSession(data.session)
+  }
+
+  const logout = async () => {
+    try { if(supabase) await supabase.auth.signOut() } finally { setSession(null); resetWorkspace() }
+  }
+
+  useEffect(() => {
+    if(!supabase){ setAuthReady(true); return }
+    let alive = true
+    supabase.auth.getSession().then(({data}) => { if(alive){ setSession(data?.session || null); setAuthReady(true) } }).catch(() => { if(alive) setAuthReady(true) })
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, nextSession) => { if(alive){ setSession(nextSession); setAuthReady(true) } })
+    const expired = () => { setSession(null); resetWorkspace() }
+    window.addEventListener("mp-auth-expired", expired)
+    return () => { alive=false; subscription?.subscription?.unsubscribe(); window.removeEventListener("mp-auth-expired", expired) }
+  }, [resetWorkspace])
 
   useEffect(() => {
     document.title = "MedParcours AI"
@@ -7631,7 +7691,9 @@ export default function App() {
       setReport(data.report)
       setHoSoText(data.ho_so_text || JSON.stringify(data.report))
       setAnalysis(data.analysis || null)
+      setCurrentId(data.phan_tich_id || null)
       initChat(data.report)
+      if(data.history_error) mpToast(`Phân tích xong nhưng chưa lưu lịch sử: ${data.history_error}`, "err")
       setLoading(false); setState("report"); return true
     }
 
@@ -7645,7 +7707,7 @@ export default function App() {
           })
           setLoadingMsg(pages > 120 ? "Đang lọc trang quan trọng và phân tích..." : "AI đang đọc và tổng hợp dữ liệu")
           if (text && text.replace(/[^A-Za-zÀ-ỹ0-9]/g, "").length >= 100) {
-            const res = await fetch(`${API_URL}/analyze_text`, {
+            const res = await callApi("/analyze_text", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ ho_so_text: text, pages }),
@@ -7667,7 +7729,7 @@ export default function App() {
 
       // ── Đường dự phòng: gửi nguyên file (PDF nhỏ, ảnh, hoặc bóc chữ thất bại) ──
       const fd = new FormData(); fd.append("file", file)
-      const res = await fetch(`${API_URL}/analyze`, { method:"POST", body:fd, signal:ctrl.signal })
+      const res = await callApi("/analyze", { method:"POST", body:fd, signal:ctrl.signal })
       clearTimeout(timer)
       let data; try { data = await res.json() } catch { data = null }
       if (!data) {
@@ -7691,7 +7753,19 @@ export default function App() {
     initChat(rec.data); setCurrentId(rec.id); setShowHistory(false); setUploadError(null); setState("report")
   }
 
-  if (!authed) {
+  const loadStoredRecord = async (rec) => {
+    const res = await callApi(`/phan-tich/${rec.id}`)
+    const data = await res.json()
+    if(!res.ok || !data?.report) throw new Error(data?.detail || "Không mở được bản phân tích")
+    setReport(data.report); setHoSoText(JSON.stringify(data.report)); setAnalysis(data.analysis || null)
+    initChat(data.report); setCurrentId(rec.id); setShowHistory(false); setUploadError(null); setState("report")
+  }
+
+  if (!authReady) {
+    return (<><style>{CSS}</style><style>{EXTRA_CSS}</style><div className="auth-loading"><div className="loading-spin"/><div>Đang kiểm tra phiên đăng nhập...</div></div></>)
+  }
+
+  if (!session) {
     return (<><style>{CSS}</style><style>{EXTRA_CSS}</style><LoginPage onLogin={login}/><ToastHost/></>)
   }
 
@@ -7703,14 +7777,14 @@ export default function App() {
         {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)} onRetry={()=>lastFile && handleUpload(lastFile)} onOpenHistory={()=>setShowHistory(true)} onOpenEcg={()=>setState("ecg")} onLogout={logout}/>}
         {state === "report" && report && (
           <ReportPage report={report} hoSoText={hoSoText} analysis={analysis}
-            onReset={()=>{setState("upload");setReport(null);setAnalysis(null);setChatMessages([]);setCurrentId(null)}}
+            onReset={resetWorkspace}
             chatMessages={chatMessages} setChatMessages={setChatMessages}
             onOpenHistory={()=>setShowHistory(true)} onLogout={logout}/>
         )}
         {state === "ecg" && (
           <EcgPage onBack={()=>{setState("upload");setEcgInitial(null)}} initialResult={ecgInitial} onLogout={logout}/>
         )}
-        {showHistory && <HistoryPanel onClose={()=>setShowHistory(false)} onOpen={loadRecord} onOpenEcgEntry={(entry)=>{setEcgInitial(entry);setShowHistory(false);setState("ecg")}} currentId={currentId}/>}
+        {showHistory && <HistoryPanel onClose={()=>setShowHistory(false)} onOpen={loadRecord} onOpenRemote={loadStoredRecord} onOpenEcgEntry={(entry)=>{setEcgInitial(entry);setShowHistory(false);setState("ecg")}} currentId={currentId}/>}
         <ToastHost/>
         <ConfirmHost/>
         <ShortcutHelp/>
