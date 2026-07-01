@@ -234,3 +234,54 @@ def test_update_patient_file_dinh_dang_khong_ho_tro_tra_loi_ro(client):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ─── PATCH /patient/{so_benh_an}/ten — đổi tên hiển thị (Part 3) ──────────
+def test_rename_patient_thanh_cong(client):
+    client.post("/patient/save", json={"report": _sample_report()})
+    resp = client.patch("/patient/02.000001/ten", json={"ten_moi": "Ông A - phòng 302"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["ten_hien_thi"] == "Ông A - phòng 302"
+    # Xác nhận list_patients() trả đúng tên MỚI làm tên hiển thị chính
+    listed = client.get("/patient").json()["patients"]
+    p = next(x for x in listed if x["so_benh_an"] == "02.000001")
+    assert p["ho_ten"] == "Ông A - phòng 302"
+    assert p["ten_hien_thi"] == "Ông A - phòng 302"
+    assert p["ho_ten_goc"] != "Ông A - phòng 302"  # tên gốc AI trích xuất không đổi
+
+
+def test_rename_patient_khong_ton_tai_tra_ve_404(client):
+    resp = client.patch("/patient/00.999999/ten", json={"ten_moi": "Tên bất kỳ"})
+    assert resp.status_code == 404
+
+
+def test_rename_patient_chuoi_rong_quay_ve_ten_goc(client):
+    """Gửi tên rỗng = bỏ tên tùy chỉnh, quay về hiển thị ho_ten gốc do AI
+    trích xuất (không phải lỗi, đây là hành vi 'reset' có chủ đích)."""
+    client.post("/patient/save", json={"report": _sample_report()})
+    client.patch("/patient/02.000001/ten", json={"ten_moi": "Tên tạm"})
+    resp = client.patch("/patient/02.000001/ten", json={"ten_moi": "   "})
+    assert resp.status_code == 200
+    assert resp.json()["ten_hien_thi"] is None
+    listed = client.get("/patient").json()["patients"]
+    p = next(x for x in listed if x["so_benh_an"] == "02.000001")
+    assert p["ho_ten"] == p["ho_ten_goc"]  # quay lại đúng tên gốc
+
+
+def test_rename_patient_khong_bi_ghi_de_khi_cap_nhat_ho_so(client, mock_anthropic_patient_update):
+    """Bug đã lường trước khi thiết kế: cập nhật hồ sơ (gộp tài liệu mới)
+    KHÔNG được phép âm thầm xóa tên tùy chỉnh bác sĩ đã đặt, vì update chỉ
+    ghi vào cột ho_ten (AI trích xuất), không đụng ten_hien_thi."""
+    client.post("/patient/save", json={"report": _sample_report()})
+    client.patch("/patient/02.000001/ten", json={"ten_moi": "Tên tùy chỉnh của bác sĩ"})
+    client.post("/patient/update", json={
+        "so_benh_an": "02.000001",
+        "ho_so_text": "Kết quả tái khám mới, INR đo lại 2.8, dài ít nhất vài chục ký tự để qua kiểm tra.",
+        "nguon_tai_lieu": "tai_kham_moi",
+    })
+    listed = client.get("/patient").json()["patients"]
+    p = next(x for x in listed if x["so_benh_an"] == "02.000001")
+    assert p["ten_hien_thi"] == "Tên tùy chỉnh của bác sĩ"
+    assert p["ho_ten"] == "Tên tùy chỉnh của bác sĩ"

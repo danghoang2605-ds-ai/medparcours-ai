@@ -251,3 +251,62 @@ def test_nguong_tu_thich_nghi_khong_dem_0_dinh_khi_calibration_lan_at():
     result = ecg.detect_r_peaks(signal.tolist(), px_per_mm=5.0)
     assert result["warning"] is None, f"Vẫn đếm 0 đỉnh dù có QRS thật rõ ràng: {result['warning']}"
     assert len(result["peaks"]) >= 4, f"Bỏ sót quá nhiều đỉnh QRS thật: chỉ tìm {len(result['peaks'])}/5"
+
+
+# ─── MỨC 3: LUẬT CỨNG AN TOÀN LÂM SÀNG (apply_ecg_safety_rules) ───────────
+class TestEcgSafetyRules:
+    """Test luật cứng theo yêu cầu cố vấn y khoa: không kết luận ST-T/trục khi
+    < 12 chuyển đạo, ghi đè toàn bộ khi có điện cực tuột."""
+
+    def test_electrode_detached_overrides_everything(self):
+        """Điện cực tuột -> chặn TẤT CẢ findings (kể cả không thuộc ST-T/trục),
+        trả về đúng câu ghi đè cố định yêu cầu."""
+        r = ecg.apply_ecg_safety_rules(
+            n_leads=1,
+            redflags=["Điện cực tuột (Electrode Detached)"],
+            findings=["Bloc nhĩ-thất độ 1", "Nhịp xoang bình thường"],
+        )
+        assert r["findings_hien_thi"] == []
+        assert len(r["bi_chan"]) == 2
+        assert r["ghi_de_toan_bo"] == ecg.ECG_ELECTRODE_DETACHED_OVERRIDE
+        assert r["confidence_level"] == "Thấp"
+
+    def test_single_lead_blocks_stt_and_axis_only(self):
+        """< 12 chuyển đạo: chặn đúng câu ST-T/trục, GIỮ LẠI câu không thuộc
+        2 danh mục này (vd cảnh báo nhiễu kỹ thuật thuần túy)."""
+        r = ecg.apply_ecg_safety_rules(
+            n_leads=1,
+            redflags=["ARTIFACT PRESENT"],
+            findings=[
+                "Bất thường sóng T, nghi thiếu máu cơ tim thành dưới",
+                "Lệch trục trái mức độ vừa",
+                "Có nhiễu tín hiệu khi đo (ARTIFACT PRESENT)",
+            ],
+        )
+        assert r["ghi_de_toan_bo"] is None
+        assert r["findings_hien_thi"] == ["Có nhiễu tín hiệu khi đo (ARTIFACT PRESENT)"]
+        assert len(r["bi_chan"]) == 2
+        assert r["confidence_level"] == "Thấp"
+
+    def test_no_redflag_single_lead_no_stt_findings_medium_confidence(self):
+        """< 12 chuyển đạo nhưng không có redflag và không có finding ST-T/trục
+        nào bị chặn -> độ tin cậy Trung bình (không phải Thấp, không phải Cao)."""
+        r = ecg.apply_ecg_safety_rules(n_leads=1, redflags=[], findings=["Nhịp xoang đều"])
+        assert r["findings_hien_thi"] == ["Nhịp xoang đều"]
+        assert r["bi_chan"] == []
+        assert r["confidence_level"] == "Trung bình"
+
+    def test_twelve_leads_no_blocking(self):
+        """Đủ 12 chuyển đạo (kịch bản tương lai): không chặn gì, độ tin cậy Cao
+        nếu không có redflag."""
+        r = ecg.apply_ecg_safety_rules(n_leads=12, redflags=[], findings=["Lệch trục trái"])
+        assert r["findings_hien_thi"] == ["Lệch trục trái"]
+        assert r["bi_chan"] == []
+        assert r["ghi_de_toan_bo"] is None
+        assert r["confidence_level"] == "Cao"
+
+    def test_empty_findings_and_redflags(self):
+        """Không có gì để chặn, không crash trên input rỗng."""
+        r = ecg.apply_ecg_safety_rules(n_leads=1, redflags=[], findings=[])
+        assert r["findings_hien_thi"] == []
+        assert r["ghi_de_toan_bo"] is None

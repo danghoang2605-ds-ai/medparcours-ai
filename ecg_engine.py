@@ -815,6 +815,108 @@ def encode_image_to_base64_png(image_bgr: np.ndarray) -> Optional[str]:
     return f"data:image/png;base64,{base64.b64encode(buf.tobytes()).decode()}"
 
 
+# ─── MỨC 3: LUẬT CỨNG AN TOÀN LÂM SÀNG (không phụ thuộc LLM) ──────────────
+# Yêu cầu từ cố vấn chuyên môn y khoa: hệ thống hiện chỉ trích xuất được 1
+# chuyển đạo (Lead I) từ 1 ảnh trang 12 chuyển đạo — KHÔNG được phép để lộ
+# ra ngoài kết luận về ST-T/trục điện tim như thể hệ thống đã tự phân tích
+# đủ 12 chuyển đạo, dù nội dung đó vốn trích từ máy đo gốc (máy đo có đủ 12
+# chuyển đạo thật, nhưng hệ thống MedParcours thì chưa xác minh lại được).
+#
+# 2 danh mục bị chặn khi n_leads < 12: "st_t" (bất thường ST/T, thiếu máu cơ
+# tim, tái cực...) và "truc" (lệch trục điện tim). Các cảnh báo kỹ thuật
+# thuần túy (nhiễu, artifact) KHÔNG bị chặn vì không phải kết luận lâm sàng.
+ECG_MIN_LEADS_FOR_STT_AXIS = 12
+
+# Từ khóa nhận diện 1 phát hiện thuộc danh mục ST-T hay trục — dùng để lọc
+# khỏi danh sách hiển thị khi chưa đủ 12 chuyển đạo (rule cứng bên dưới).
+_STT_KEYWORDS = ["st ", "st-t", "st_t", "sóng t", "twave", "t wave", "thiếu máu cơ tim",
+                 "ischemia", "tái cực", "repolarization", "st chênh", "viêm màng ngoài tim",
+                 "pericarditis", "injury"]
+_AXIS_KEYWORDS = ["trục", "axis", "lệch trục"]
+
+ECG_ELECTRODE_DETACHED_OVERRIDE = (
+    "Chất lượng bản ghi không đạt để kết luận. Bản ghi có cảnh báo điện cực tuột "
+    "và hệ thống mới trích xuất được 1 chuyển đạo. Không nên kết luận bất thường "
+    "ST-T hoặc trục điện tim từ dữ liệu hiện tại. Cần đối chiếu ECG 12 chuyển đạo "
+    "đo lại và bác sĩ xác nhận."
+)
+
+ECG_PERMANENT_DISCLAIMER = (
+    "Hệ thống hiện chỉ trích xuất được Lead I. Các nhận định ST-T/trục dưới đây "
+    "được lấy từ báo cáo máy ECG gốc, chưa được AI xác minh độc lập từ đủ 12 "
+    "chuyển đạo."
+)
+
+
+def _is_stt_or_axis_finding(text: str) -> Optional[str]:
+    """Trả 'st_t' | 'truc' | None tùy nội dung 1 câu phát hiện thuộc danh mục nào."""
+    t = text.lower()
+    if any(k in t for k in _STT_KEYWORDS):
+        return "st_t"
+    if any(k in t for k in _AXIS_KEYWORDS):
+        return "truc"
+    return None
+
+
+def apply_ecg_safety_rules(n_leads: int, redflags: list, findings: list) -> dict:
+    """
+    Áp LUẬT CỨNG an toàn lâm sàng lên danh sách phát hiện (findings) trước khi
+    hiển thị cho bác sĩ. KHÔNG dùng LLM — thuần quyết định dựa trên dữ liệu đã
+    biết chắc chắn (số chuyển đạo trích xuất được, redflags đã phát hiện).
+
+    Tham số:
+      n_leads: số chuyển đạo hệ thống THỰC SỰ trích xuất được (không phải số
+               chuyển đạo máy đo gốc có — hiện luôn là 1 vì kiến trúc chưa tách
+               được nhiều chuyển đạo từ 1 ảnh trang đầy đủ).
+      redflags: danh sách cảnh báo chất lượng đã phát hiện, vd
+               ["Điện cực tuột (Electrode Detached)", "Nhiễu cơ", "Baseline wander",
+                "Thiếu chuyển đạo", "Ảnh mờ"].
+      findings: danh sách câu kết luận gốc (vd từ máy đo hoặc AI OCR).
+
+    Trả về dict:
+      {"findings_hien_thi": [...], "bi_chan": [...], "ghi_de_toan_bo": str|None,
+       "confidence_level": "Cao"|"Trung bình"|"Thấp"}
+    """
+    redflags = redflags or []
+    findings = findings or []
+    has_electrode_detached = any("điện cực tuột" in r.lower() or "electrode detached" in r.lower()
+                                  for r in redflags)
+
+    # Luật 1 (nghiêm trọng nhất): điện cực tuột -> ghi đè TOÀN BỘ kết luận,
+    # không hiển thị bất kỳ findings gốc nào nữa (kể cả không thuộc ST-T/trục),
+    # vì đã có cảnh báo chất lượng bản ghi ở mức nghiêm trọng nhất.
+    if has_electrode_detached:
+        return {
+            "findings_hien_thi": [],
+            "bi_chan": list(findings),
+            "ghi_de_toan_bo": ECG_ELECTRODE_DETACHED_OVERRIDE,
+            "confidence_level": "Thấp",
+        }
+
+    # Luật 2: chưa đủ 12 chuyển đạo -> lọc bỏ riêng các câu thuộc ST-T/trục,
+    # giữ lại các cảnh báo kỹ thuật thuần túy (nhiễu, artifact...).
+    if n_leads < ECG_MIN_LEADS_FOR_STT_AXIS:
+        hien_thi, bi_chan = [], []
+        for f in findings:
+            (bi_chan if _is_stt_or_axis_finding(f) else hien_thi).append(f)
+        confidence = "Thấp" if (redflags or bi_chan) else "Trung bình"
+        return {
+            "findings_hien_thi": hien_thi,
+            "bi_chan": bi_chan,
+            "ghi_de_toan_bo": None,
+            "confidence_level": confidence,
+        }
+
+    # Đủ 12 chuyển đạo (hiện chưa xảy ra trong thực tế với kiến trúc hiện tại,
+    # nhưng để sẵn nhánh này cho tương lai khi tách được đủ chuyển đạo).
+    return {
+        "findings_hien_thi": list(findings),
+        "bi_chan": [],
+        "ghi_de_toan_bo": None,
+        "confidence_level": "Cao" if not redflags else "Trung bình",
+    }
+
+
 # ─── TEST nhanh khi chạy trực tiếp ────────────────────────────────────────────
 if __name__ == "__main__":
     synthetic = generate_synthetic_ecg()
@@ -823,3 +925,4 @@ if __name__ == "__main__":
     print(f"Width: {result['width']}, columns_with_signal: {result['columns_with_signal']}")
     print(f"Warning: {result['warning']}")
     print(f"Signal length: {len(result['signal'])}, sample: {result['signal'][:10]}")
+

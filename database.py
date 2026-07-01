@@ -129,6 +129,18 @@ def init_db():
                 thoi_diem TEXT NOT NULL
             )
         """)
+        # ten_hien_thi: tên hiển thị TÙY CHỌN do bác sĩ tự đặt để cá nhân hóa
+        # quản lý (vd "Ông A - phòng 302"), TÁCH RIÊNG khỏi ho_ten (tên do AI
+        # trích xuất từ tài liệu). Tách riêng CỐ Ý — nếu dùng chung 1 cột,
+        # mỗi lần "Cập nhật hồ sơ" (update_patient_with_new_document) ghi đè
+        # ho_ten theo tài liệu mới sẽ vô tình xóa mất tên tùy chỉnh của bác sĩ.
+        # ALTER TABLE không có cú pháp "IF NOT EXISTS" cho cột trên SQLite/
+        # libSQL cũ — bọc try/except để an toàn khi init_db() chạy lại nhiều
+        # lần (vd mỗi lần Space khởi động lại) mà cột đã tồn tại từ trước.
+        try:
+            client.execute("ALTER TABLE patients ADD COLUMN ten_hien_thi TEXT")
+        except Exception:
+            pass  # Cột đã tồn tại từ lần init_db() trước — bỏ qua, không phải lỗi thật.
     finally:
         client.close()
 
@@ -228,15 +240,41 @@ def list_patients(limit: int = 50) -> list:
     client = get_client()
     try:
         rs = client.execute(
-            "SELECT so_benh_an, ho_ten, so_lan_cap_nhat, tao_luc, cap_nhat_luc "
+            "SELECT so_benh_an, ho_ten, so_lan_cap_nhat, tao_luc, cap_nhat_luc, ten_hien_thi "
             "FROM patients ORDER BY cap_nhat_luc DESC LIMIT ?",
             [limit],
         )
         return [
-            {"so_benh_an": r[0], "ho_ten": r[1], "so_lan_cap_nhat": r[2],
+            {"so_benh_an": r[0], "ho_ten": r[5] or r[1], "ho_ten_goc": r[1],
+             "ten_hien_thi": r[5], "so_lan_cap_nhat": r[2],
              "tao_luc": r[3], "cap_nhat_luc": r[4]}
             for r in rs.rows
         ]
+    finally:
+        client.close()
+
+
+def rename_patient(so_benh_an: str, ten_moi: str) -> dict:
+    """
+    Đổi TÊN HIỂN THỊ (ten_hien_thi) cho 1 hồ sơ đã lưu — mục đích cá nhân hóa
+    quản lý (vd bác sĩ ghi thêm "phòng 302" hoặc biệt danh dễ nhớ), KHÔNG
+    đụng tới ho_ten gốc do AI trích xuất từ tài liệu. ten_moi rỗng/khoảng
+    trắng -> coi như "bỏ tên tùy chỉnh", quay về hiển thị ho_ten gốc.
+    """
+    ten_moi = (ten_moi or "").strip()
+    client = get_client()
+    try:
+        existing = client.execute(
+            "SELECT so_benh_an FROM patients WHERE so_benh_an = ?", [so_benh_an]
+        )
+        if not existing.rows:
+            return {"success": False, "error": "khong_ton_tai",
+                    "message": f"Không tìm thấy hồ sơ lưu trữ cho số bệnh án {so_benh_an}."}
+        client.execute(
+            "UPDATE patients SET ten_hien_thi = ? WHERE so_benh_an = ?",
+            [ten_moi or None, so_benh_an],
+        )
+        return {"success": True, "so_benh_an": so_benh_an, "ten_hien_thi": ten_moi or None}
     finally:
         client.close()
 

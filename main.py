@@ -1052,6 +1052,27 @@ async def delete_patient_endpoint(so_benh_an: str):
     return result
 
 
+class RenamePatientRequest(BaseModel):
+    ten_moi: str
+
+
+@app.patch("/patient/{so_benh_an}/ten")
+async def rename_patient_endpoint(so_benh_an: str, req: RenamePatientRequest):
+    """
+    Đổi TÊN HIỂN THỊ (không phải ho_ten do AI trích xuất) cho 1 hồ sơ đã lưu
+    — mục đích cá nhân hóa quản lý trong danh sách Lịch sử. Gửi ten_moi rỗng
+    để bỏ tên tùy chỉnh, quay về hiển thị tên gốc.
+    """
+    try:
+        result = database.rename_patient(so_benh_an, req.ten_moi)
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("message", "Không tìm thấy hồ sơ."))
+    return result
+
+
 @app.get("/patient")
 async def list_patients_endpoint(limit: int = 50):
     """Danh sách hồ sơ đã lưu, mới cập nhật gần nhất lên đầu — dùng cho màn
@@ -1302,12 +1323,35 @@ async def ecg_digitize(request: EcgDigitizeRequest):
     calib = ecg_engine.estimate_px_per_mm(img)
     r_peaks = ecg_engine.detect_r_peaks(result["signal"], px_per_mm=calib["px_per_mm"])
     heart_rate = ecg_engine.compute_heart_rate(r_peaks["rr_intervals_px"], calib["px_per_mm"])
+
+    # MỨC 3 — LUẬT CỨNG AN TOÀN LÂM SÀNG (theo yêu cầu cố vấn y khoa).
+    # Ảnh tải lên thật KHÔNG qua bước AI đọc kết luận lâm sàng (chưa có prompt
+    # Claude Vision cho ECG — xem ghi chú trong ecg_engine.py), nên "findings"
+    # luôn rỗng ở nhánh này. Vẫn áp luật để: (1) redflags phản ánh đúng chất
+    # lượng tín hiệu đã biết chắc từ chính thuật toán (không suy đoán thêm),
+    # (2) confidence_level/source_of_truth nhất quán với dữ liệu demo, để FE
+    # dùng chung 1 bộ badge cho cả 2 nguồn dữ liệu.
+    redflags = []
+    if calib.get("do_tin_cay") == "thap":
+        redflags.append("Ảnh mờ hoặc lưới không rõ (chất lượng ảnh thấp)")
+    if r_peaks.get("warning"):
+        redflags.append("Nhiễu cơ hoặc không dò được đỉnh R rõ ràng")
+    if heart_rate.get("warning"):
+        redflags.append(heart_rate["warning"])
+
+    safety = ecg_engine.apply_ecg_safety_rules(n_leads=1, redflags=redflags, findings=[])
+
     return {
         "success": True,
         **result,
         "calibration": calib,
         "r_peaks": r_peaks,
         "heart_rate": heart_rate,
+        "confidence_level": safety["confidence_level"],
+        "source_of_truth": "AI đo từ waveform",
+        "redflags": redflags,
+        "ghi_de_toan_bo": safety["ghi_de_toan_bo"],
+        "permanent_disclaimer": ecg_engine.ECG_PERMANENT_DISCLAIMER,
         "disclaimer": "Kết quả số hóa và ước tính nhịp tim chỉ mang tính trực quan "
                        "hóa hỗ trợ, cần bác sĩ xác nhận. Không phải kết luận chẩn đoán. "
                        "Tỉ lệ pixel/mm được tự suy ra từ lưới ảnh — luôn là ƯỚC LƯỢNG, "
