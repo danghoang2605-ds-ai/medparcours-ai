@@ -1,18 +1,42 @@
 <!DOCTYPE html>
-<html lang="vi">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MedParcours AI</title>
-  <!--
-    KHÔNG override window.MEDIFLOW_API_URL ở đây — App.jsx đã có sẵn default
-    trỏ đúng Hugging Face Space (xem dòng đầu App.jsx). File này CHỈ dùng cho
-    bản deploy GitHub Pages thật; bản Docker local dùng index.html riêng ở
-    docker_setup/ (có override localhost:8000).
-  -->
-</head>
-<body>
-  <div id="root"></div>
-  <script type="module" src="./mount.js"></script>
-</body>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MedParcours AI</title>
+
+    <script type='text/javascript'>
+        var VNPT = VNPT || {};
+        VNPT.q = VNPT.q || [];
+    
+        VNPT.app_key = '4b852db8fad5ca2398bded67ac92d21905b5dde7';
+    
+        VNPT.url = 'https://console-smartux.vnpt.vn';
+    
+        VNPT.q.push(['track_sessions']);
+        VNPT.q.push(['track_pageview']);
+        VNPT.q.push(['track_clicks']);
+        VNPT.q.push(['track_scrolls']);
+        VNPT.q.push(['track_errors']);
+        VNPT.q.push(['track_links']);
+        VNPT.q.push(['track_forms']);
+        VNPT.q.push(['collect_from_forms']);
+    
+        (function () {
+        const paths = ['https://console-smartux.vnpt.vn/sdk/web/core-track.js', 'https://console-smartux.vnpt.vn/sdk/web/minify.min.js'];
+        for (let i in paths) {
+            var cly = document.createElement('script'); cly.type = 'text/javascript';
+            cly.async = true;
+            cly.src = paths[i];
+            cly.onload = i == 0 ? function () { VNPT.init() } : function() { window.minify = require("html-minifier").minify; };
+            var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(cly, s);
+        }
+        })();
+    </script>
+    </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
 </html>
