@@ -298,3 +298,89 @@ def test_idempotent_three_runs(client, mock_anthropic):
         })
         assert resp.status_code == 200
         assert resp.json()["success"] is True
+
+
+# ─── 11. "Động cơ kép" VNPT — fallback Claude khi VNPT lỗi/chưa cấu hình ──
+# Môi trường test KHÔNG có VNPT_TOKEN_ID/KEY/ACCESS_TOKEN -> VNPTClient()
+# luôn raise VNPTAPIError ngay khi khởi tạo -> luôn rơi về Claude. Test này
+# xác nhận đúng hành vi "AN TOÀN" đó, và lỗi VNPT không lộ ra response.
+def test_chat_roi_ve_claude_khi_vnpt_chua_cau_hinh(client, mock_anthropic, monkeypatch):
+    for k in ("VNPT_TOKEN_ID", "VNPT_TOKEN_KEY", "VNPT_ACCESS_TOKEN"):
+        monkeypatch.delenv(k, raising=False)
+    resp = client.post("/chat", json={
+        "question": "Bệnh nhân có dùng thuốc chống đông không?",
+        "ho_so_text": "Hồ sơ test: bệnh nhân dùng Acenocoumarol.",
+        "chat_history": [],
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "answer" in data
+    assert "loi" not in data and "error" not in data  # không lộ lỗi VNPT ra response
+
+
+def test_analyze_anh_roi_ve_claude_vision_khi_vnpt_chua_cau_hinh(client, mock_anthropic, monkeypatch):
+    """Upload ảnh (PNG) qua /analyze — VNPT chưa cấu hình nên phải tự rơi về
+    Claude Vision (call_claude_with_image), KHÔNG trả lỗi 500 ra frontend."""
+    for k in ("VNPT_TOKEN_ID", "VNPT_TOKEN_KEY", "VNPT_ACCESS_TOKEN"):
+        monkeypatch.delenv(k, raising=False)
+    # Ảnh PNG 1x1 hợp lệ tối thiểu (đủ để qua bước decode ảnh của thư viện)
+    png_1x1 = bytes.fromhex(
+        "89504e470d0a1a0a0000000d494844520000000100000001080600000"
+        "01f15c4890000000a49444154789c6360000002000100e221bc330000000049454e44ae426082"
+    )
+    resp = client.post("/analyze", files={
+        "file": ("scan.png", io.BytesIO(png_1x1), "image/png")
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True  # dùng mock_anthropic Claude Vision path, không sập
+
+
+# ─── 12. FAQ Bot & SmartVoice — luồng fallback an toàn ────────────────────
+def test_faq_bot_fallback_khi_thieu_bot_id(client, monkeypatch):
+    """Chưa có VNPT_FAQ_BOT_ID -> phải trả đúng câu bảo trì, KHÔNG lỗi 500."""
+    monkeypatch.delenv("VNPT_FAQ_BOT_ID", raising=False)
+    resp = client.post("/faq-bot", json={"question": "MedParcours là gì?"})
+    assert resp.status_code == 200
+    assert "bảo trì" in resp.json()["text"]
+
+
+def test_faq_bot_thanh_cong_khi_co_du_cau_hinh(client, monkeypatch):
+    """Mock requests.post trả đúng cấu trúc card_data thật (theo docx) -> lấy
+    đúng text từ card loại 'text'."""
+    monkeypatch.setenv("VNPT_TOKEN_ID", "tid")
+    monkeypatch.setenv("VNPT_TOKEN_KEY", "tkey")
+    monkeypatch.setenv("VNPT_ACCESS_TOKEN", "tok")
+    monkeypatch.setenv("VNPT_FAQ_BOT_ID", "bot-abc-123")
+    fake_resp = MagicMock()
+    fake_resp.raise_for_status = lambda: None
+    fake_resp.json.return_value = {
+        "object": {"sb": {"card_data": [
+            {"type": "text", "text": "MedParcours là trợ lý AI hỗ trợ đọc hồ sơ bệnh án."}
+        ]}}
+    }
+    with patch("vnpt_client.requests.post", return_value=fake_resp):
+        resp = client.post("/faq-bot", json={"question": "MedParcours là gì?"})
+    assert resp.status_code == 200
+    assert "trợ lý AI" in resp.json()["text"]
+
+
+def test_voice_tts_fallback_dung_local_tts(client):
+    """SmartVoice TTS chưa triển khai -> luôn trả use_local_tts=true."""
+    resp = client.post("/voice/tts", json={"text": "Cảnh báo điện cực tuột"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is False
+    assert data["use_local_tts"] is True
+
+
+def test_voice_stt_fallback_error_code(client):
+    """SmartVoice STT chưa triển khai -> đúng error_code STT_FALLBACK, không sập."""
+    resp = client.post("/voice/stt", files={
+        "file": ("ghi_am.wav", io.BytesIO(b"fake-audio-bytes"), "audio/wav")
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is False
+    assert data["error_code"] == "STT_FALLBACK"
+    assert data["text"] == ""

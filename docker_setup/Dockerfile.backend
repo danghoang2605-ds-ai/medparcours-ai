@@ -13,7 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy các file backend chính
-COPY main.py clinical_rules.py ecg_engine.py document_extract.py ./
+COPY main.py clinical_rules.py ecg_engine.py document_extract.py vnpt_client.py database.py ./
 
 # Copy package CDE
 COPY cde ./cde

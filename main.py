@@ -14,7 +14,7 @@ try:
 except Exception:
     pass
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -24,6 +24,7 @@ from pypdf import PdfReader
 import anthropic
 import clinical_rules
 import ecg_engine
+import vnpt_client
 import document_extract
 import database
 from cde.engine import evaluate_v2
@@ -702,16 +703,34 @@ def run_analysis_pipeline_from_image(image_bytes: bytes, media_type: str,
     image_b64 = base64.b64encode(image_bytes).decode("ascii")
     raw = ""
     try:
-        # ─── BƯỚC 1 (LLM Extraction từ ẢNH): Claude Vision đọc -> JSON thuần ──
-        raw = call_claude_with_image(
-            system=REPORT_SYSTEM,
-            user_text="Đây là ảnh chụp/scan hồ sơ bệnh án. Hãy đọc và trích "
-                      "xuất đúng theo format JSON đã quy định. Nếu chữ viết "
-                      "tay khó đọc ở vài chỗ, ưu tiên để trống/null cho phần "
-                      "đó hơn là đoán bừa — KHÔNG suy luận số liệu không đọc rõ.",
-            image_b64=image_b64,
-            media_type=media_type,
-        )
+        # ─── BƯỚC 1 (LLM Extraction từ ẢNH): "Động cơ kép" ─────────────────
+        # Ưu tiên VNPT SmartReader (OCR -> text) rồi đẩy text vào ĐÚNG pipeline
+        # trích xuất JSON dạng text (call_claude + REPORT_SYSTEM) đang dùng
+        # cho luồng PDF/Word/Excel — không viết lại bước này.
+        # Bất kỳ lỗi nào (thiếu cấu hình, lỗi mạng, timeout, SmartReader báo
+        # lỗi xử lý...) đều bị bắt và LOG RA CONSOLE cho dev biết, sau đó rơi
+        # ngay về Claude Vision (call_claude_with_image, cách hiện tại) —
+        # bác sĩ ở frontend KHÔNG được biết VNPT vừa lỗi, chỉ thấy kết quả.
+        try:
+            vnpt = vnpt_client.VNPTClient()
+            ocr_text = vnpt.extract_clinical_table(image_bytes, filename or "ho_so.jpg")
+            print(f"[VNPT SmartReader] OCR thành công, {len(ocr_text)} ký tự, dùng làm nguồn trích xuất chính.")
+            raw = call_claude(
+                system=REPORT_SYSTEM,
+                user_message=f"Đây là văn bản đã OCR từ ảnh hồ sơ bệnh án (qua VNPT SmartReader). "
+                              f"Hãy đọc và trích xuất đúng theo format JSON đã quy định:\n\n{ocr_text}",
+            )
+        except Exception as vnpt_err:
+            print(f"[VNPT SmartReader lỗi — rơi về Claude Vision] {type(vnpt_err).__name__}: {vnpt_err}")
+            raw = call_claude_with_image(
+                system=REPORT_SYSTEM,
+                user_text="Đây là ảnh chụp/scan hồ sơ bệnh án. Hãy đọc và trích "
+                          "xuất đúng theo format JSON đã quy định. Nếu chữ viết "
+                          "tay khó đọc ở vài chỗ, ưu tiên để trống/null cho phần "
+                          "đó hơn là đoán bừa — KHÔNG suy luận số liệu không đọc rõ.",
+                image_b64=image_b64,
+                media_type=media_type,
+            )
 
         json_text = raw.strip()
         if "```json" in json_text:
@@ -1267,6 +1286,25 @@ async def chat(request: ChatRequest):
         f"tiếp theo):\n{request.ho_so_text}"
     )
 
+    # ─── "Động cơ kép": ưu tiên VNPT Smartbot, rơi về Claude nếu lỗi ───────
+    # Hiện chat_smartbot() luôn raise NotImplementedError (chưa có tài liệu
+    # kỹ thuật Smartbot đã xác thực — xem vnpt_client.py) nên nhánh try dưới
+    # đây LUÔN rơi về Claude ở thời điểm này — đây là hành vi ĐÚNG và AN
+    # TOÀN, không phải bug. Khi có tài liệu Smartbot thật, chỉ cần cập nhật
+    # vnpt_client.chat_smartbot(), không cần sửa gì ở đây.
+    try:
+        answer = vnpt_client.VNPTClient().chat_smartbot(messages)
+        return {"answer": answer, "tokens_used": None, "nguon": "smartbot"}
+    except Exception as vnpt_err:
+        print(f"[VNPT Smartbot lỗi/chưa sẵn sàng — rơi về Claude] {type(vnpt_err).__name__}: {vnpt_err}")
+
+    answer, tokens_used = _chat_via_claude(system_with_context, messages)
+    return {"answer": answer, "tokens_used": tokens_used}
+
+
+def _chat_via_claude(system_with_context: str, messages: list) -> tuple[str, int]:
+    """Gọi Claude cho /chat — tách thành hàm riêng để dùng làm fallback khi
+    VNPT Smartbot lỗi/chưa sẵn sàng, giữ nguyên 100% logic gọi Claude cũ."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY chưa được cấu hình")
@@ -1282,13 +1320,59 @@ async def chat(request: ChatRequest):
         }],
         messages=messages
     )
-
     answer = response.content[0].text
-    
-    return {
-        "answer": answer,
-        "tokens_used": response.usage.input_tokens + response.usage.output_tokens
-    }
+    return answer, response.usage.input_tokens + response.usage.output_tokens
+
+
+# ─── FAQ BOT & SMARTVOICE (VNPT) ──────────────────────────────────────────
+# Module ĐỘC LẬP với MedAmi lâm sàng (/chat, dùng Claude) — xem quyết định
+# kiến trúc đã thống nhất: Smartbot dạng kịch bản/FAQ RAG không phù hợp làm
+# lõi suy luận lâm sàng động, nhưng phù hợp cho bot hỏi-đáp chung về sản
+# phẩm. Cả 3 endpoint dưới đây LUÔN trả 200 OK — không bao giờ để lộ lỗi
+# VNPT (thiếu cấu hình, lỗi mạng, hết hạn mức...) ra ngoài cho bác sĩ, chỉ
+# log console cho dev biết rồi rơi về đúng kịch bản dự phòng đã thống nhất.
+
+class FaqBotRequest(BaseModel):
+    question: str
+    sender_id: str = "user_test"
+
+
+@app.post("/faq-bot")
+async def faq_bot(request: FaqBotRequest):
+    try:
+        answer = vnpt_client.VNPTClient().ask_vnpt_faq_bot(request.question, request.sender_id)
+        return {"text": answer}
+    except Exception as e:
+        print(f"[VNPT FAQ Bot lỗi/chưa sẵn sàng] {type(e).__name__}: {e}")
+        return {
+            "text": "Trợ lý hệ thống đang bảo trì cục bộ. Bạn có thể thử lại sau "
+                    "ít phút hoặc liên hệ đội ngũ kỹ thuật."
+        }
+
+
+class TtsRequest(BaseModel):
+    text: str
+
+
+@app.post("/voice/tts")
+async def voice_tts(request: TtsRequest):
+    try:
+        audio_bytes = vnpt_client.VNPTClient().text_to_speech(request.text)
+        return Response(content=audio_bytes, media_type="audio/wav")
+    except Exception as e:
+        print(f"[VNPT TTS lỗi/chưa sẵn sàng] {type(e).__name__}: {e}")
+        return {"success": False, "use_local_tts": True, "message": "VNPT TTS failed"}
+
+
+@app.post("/voice/stt")
+async def voice_stt(file: UploadFile = File(...)):
+    try:
+        audio_bytes = await file.read()
+        text = vnpt_client.VNPTClient().speech_to_text(audio_bytes, file.filename or "recording.wav")
+        return {"success": True, "text": text}
+    except Exception as e:
+        print(f"[VNPT STT lỗi/chưa sẵn sàng] {type(e).__name__}: {e}")
+        return {"success": False, "text": "", "error_code": "STT_FALLBACK"}
 
 
 # ─── ECG (Mức 1: số hóa + vẽ lại) ────────────────────────────────────────────
