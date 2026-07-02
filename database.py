@@ -129,6 +129,19 @@ def init_db():
                 thoi_diem TEXT NOT NULL
             )
         """)
+        # feedback: bác sĩ đánh dấu 1 nhận định của hệ thống là sai/chưa
+        # chuẩn kèm ghi chú ngắn — khép vòng phản hồi (Tính nâng cấp). Chỉ
+        # GHI NHẬN, không tự động sửa gì — cần người rà lại thủ công.
+        client.execute("""
+            CREATE TABLE IF NOT EXISTS feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                so_benh_an TEXT,
+                muc TEXT NOT NULL,
+                noi_dung TEXT NOT NULL,
+                ghi_chu TEXT,
+                thoi_diem TEXT NOT NULL
+            )
+        """)
         # ten_hien_thi: tên hiển thị TÙY CHỌN do bác sĩ tự đặt để cá nhân hóa
         # quản lý (vd "Ông A - phòng 302"), TÁCH RIÊNG khỏi ho_ten (tên do AI
         # trích xuất từ tài liệu). Tách riêng CỐ Ý — nếu dùng chung 1 cột,
@@ -141,12 +154,73 @@ def init_db():
             client.execute("ALTER TABLE patients ADD COLUMN ten_hien_thi TEXT")
         except Exception:
             pass  # Cột đã tồn tại từ lần init_db() trước — bỏ qua, không phải lỗi thật.
+        # nhom_benh: nhãn nhóm bệnh cảnh (vd "Bệnh van tim, Rung nhĩ") tính 1
+        # lần lúc lưu/cập nhật hồ sơ, dùng cho bộ lọc "theo loại bệnh" ở trang
+        # Lịch sử — KHÔNG tính lại mỗi lần list_patients() (sẽ chậm nếu phải
+        # parse report_json đầy đủ cho mọi hồ sơ mỗi lần load danh sách).
+        try:
+            client.execute("ALTER TABLE patients ADD COLUMN nhom_benh TEXT")
+        except Exception:
+            pass
     finally:
         client.close()
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _classify_nhom_benh(report: dict) -> str:
+    """
+    Tính nhãn nhóm bệnh cảnh (vd "Bệnh van tim, Rung nhĩ") để lưu kèm hồ sơ,
+    dùng cho bộ lọc "theo loại bệnh" ở trang Lịch sử — tái dùng ĐÚNG bộ phân
+    loại tất định đã có (cde/disease_classifier.py), không viết lại logic
+    riêng. Lỗi bất kỳ (report thiếu field, chưa đủ dữ liệu...) trả về chuỗi
+    rỗng thay vì chặn việc lưu hồ sơ — phân loại chỉ là tiện ích phụ, không
+    phải điều kiện bắt buộc để lưu.
+    """
+    try:
+        from cde.disease_classifier import classify_profiles
+        profiles = classify_profiles(report)
+        names = [p["ten_hien_thi"] for p in profiles if p.get("ten_hien_thi")]
+        return ", ".join(dict.fromkeys(names))  # dedupe giữ thứ tự
+    except Exception:
+        return ""
+
+
+def save_feedback(so_benh_an: str, muc: str, noi_dung: str, ghi_chu: str = "") -> dict:
+    """Ghi nhận 1 phản hồi 'báo sai/góp ý' từ bác sĩ — chỉ lưu lại, không tự
+    động sửa gì. so_benh_an có thể rỗng (feedback không gắn hồ sơ cụ thể)."""
+    client = get_client()
+    try:
+        client.execute(
+            "INSERT INTO feedback (so_benh_an, muc, noi_dung, ghi_chu, thoi_diem) VALUES (?, ?, ?, ?, ?)",
+            [so_benh_an or "", muc, noi_dung, ghi_chu or "", _now_iso()],
+        )
+        return {"success": True}
+    finally:
+        client.close()
+
+
+def get_patient_history(so_benh_an: str, limit: int = 5) -> list:
+    """Lấy các bản ghi report_json TRƯỚC lần gộp gần nhất (patient_history) —
+    dùng để so sánh thuốc/chẩn đoán giữa lần cập nhật hiện tại và trước đó."""
+    client = get_client()
+    try:
+        rs = client.execute(
+            "SELECT report_json_truoc_khi_gop, nguon_tai_lieu_moi, thoi_diem FROM patient_history "
+            "WHERE so_benh_an = ? ORDER BY thoi_diem DESC LIMIT ?",
+            [so_benh_an, limit],
+        )
+        out = []
+        for r in rs.rows:
+            try:
+                out.append({"report": json.loads(r[0]) if r[0] else None, "nguon": r[1], "thoi_diem": r[2]})
+            except Exception:
+                continue
+        return out
+    finally:
+        client.close()
 
 
 # ─── CRUD hồ sơ ────────────────────────────────────────────────────────────
@@ -176,10 +250,11 @@ def save_new_patient(report: dict) -> dict:
                            f"không tạo bản ghi mới (tránh trùng lặp/mất dữ liệu cũ).",
             }
         now = _now_iso()
+        nhom_benh = _classify_nhom_benh(report)
         client.execute(
-            "INSERT INTO patients (so_benh_an, ho_ten, report_json, so_lan_cap_nhat, tao_luc, cap_nhat_luc) "
-            "VALUES (?, ?, ?, 1, ?, ?)",
-            [so_benh_an, info.get("ho_ten", ""), json.dumps(report, ensure_ascii=False), now, now],
+            "INSERT INTO patients (so_benh_an, ho_ten, report_json, so_lan_cap_nhat, tao_luc, cap_nhat_luc, nhom_benh) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?)",
+            [so_benh_an, info.get("ho_ten", ""), json.dumps(report, ensure_ascii=False), now, now, nhom_benh],
         )
         return {"success": True, "so_benh_an": so_benh_an, "so_lan_cap_nhat": 1}
     finally:
@@ -240,14 +315,14 @@ def list_patients(limit: int = 50) -> list:
     client = get_client()
     try:
         rs = client.execute(
-            "SELECT so_benh_an, ho_ten, so_lan_cap_nhat, tao_luc, cap_nhat_luc, ten_hien_thi "
+            "SELECT so_benh_an, ho_ten, so_lan_cap_nhat, tao_luc, cap_nhat_luc, ten_hien_thi, nhom_benh "
             "FROM patients ORDER BY cap_nhat_luc DESC LIMIT ?",
             [limit],
         )
         return [
             {"so_benh_an": r[0], "ho_ten": r[5] or r[1], "ho_ten_goc": r[1],
              "ten_hien_thi": r[5], "so_lan_cap_nhat": r[2],
-             "tao_luc": r[3], "cap_nhat_luc": r[4]}
+             "tao_luc": r[3], "cap_nhat_luc": r[4], "nhom_benh": r[6] or ""}
             for r in rs.rows
         ]
     finally:
@@ -387,9 +462,10 @@ def update_patient_with_new_document(so_benh_an: str, report_moi: dict, nguon_ta
         )
         client.execute(
             "UPDATE patients SET report_json = ?, so_lan_cap_nhat = so_lan_cap_nhat + 1, "
-            "cap_nhat_luc = ?, ho_ten = ? WHERE so_benh_an = ?",
+            "cap_nhat_luc = ?, ho_ten = ?, nhom_benh = ? WHERE so_benh_an = ?",
             [json.dumps(merged_report, ensure_ascii=False), now,
-             (merged_report.get("thong_tin_benh_nhan") or {}).get("ho_ten", ""), so_benh_an],
+             (merged_report.get("thong_tin_benh_nhan") or {}).get("ho_ten", ""),
+             _classify_nhom_benh(merged_report), so_benh_an],
         )
         return {
             "success": True,

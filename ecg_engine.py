@@ -841,11 +841,18 @@ ECG_ELECTRODE_DETACHED_OVERRIDE = (
     "đo lại và bác sĩ xác nhận."
 )
 
-ECG_PERMANENT_DISCLAIMER = (
-    "Hệ thống hiện chỉ trích xuất được Lead I. Các nhận định ST-T/trục dưới đây "
-    "được lấy từ báo cáo máy ECG gốc, chưa được AI xác minh độc lập từ đủ 12 "
-    "chuyển đạo."
-)
+def ecg_permanent_disclaimer(lead_name: str = "II") -> str:
+    """
+    Disclaimer vĩnh viễn hiện trong mọi kết quả ECG — ĐỘNG theo đúng chuyển
+    đạo bác sĩ đã xác nhận (không hardcode "Lead I" nữa). Trước đây hardcode
+    cứng "Lead I" dù bác sĩ có thể chọn bất kỳ chuyển đạo nào trong 12 chuyển
+    đạo chuẩn khi cắt/tải ảnh lên — gây sai lệch thông tin hiển thị.
+    """
+    return (
+        f"Hệ thống hiện chỉ trích xuất được đúng 1 chuyển đạo đã chọn "
+        f"({lead_name}). Các nhận định ST-T/trục dưới đây được lấy từ báo "
+        f"cáo máy ECG gốc, chưa được AI xác minh độc lập từ đủ 12 chuyển đạo."
+    )
 
 
 def _is_stt_or_axis_finding(text: str) -> Optional[str]:

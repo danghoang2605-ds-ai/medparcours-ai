@@ -1092,6 +1092,41 @@ async def rename_patient_endpoint(so_benh_an: str, req: RenamePatientRequest):
     return result
 
 
+class FeedbackRequest(BaseModel):
+    so_benh_an: str = ""
+    muc: str
+    noi_dung: str
+    ghi_chu: str = ""
+
+
+@app.post("/feedback")
+async def feedback_endpoint(req: FeedbackRequest):
+    """
+    Ghi nhận 1 phản hồi 'báo sai/góp ý' từ bác sĩ trên 1 nhận định cụ thể
+    của hệ thống — CHỈ lưu lại để rà soát thủ công sau, KHÔNG tự động sửa
+    gì. Lỗi lưu trữ không được chặn trải nghiệm — vẫn báo thành công nhẹ
+    nhàng cho bác sĩ, chỉ log lỗi ra console cho dev.
+    """
+    try:
+        database.save_feedback(req.so_benh_an, req.muc, req.noi_dung, req.ghi_chu)
+    except Exception as e:
+        print(f"[Feedback lỗi lưu trữ, không chặn UI] {type(e).__name__}: {e}")
+    return {"success": True}
+
+
+@app.get("/patient/{so_benh_an}/history")
+async def patient_history_endpoint(so_benh_an: str, limit: int = 5):
+    """
+    Trả về các bản ghi report_json TRƯỚC lần gộp gần nhất — dùng cho tính
+    năng so sánh thuốc/chẩn đoán giữa 2 lần cập nhật ở frontend.
+    """
+    try:
+        return {"success": True, "history": database.get_patient_history(so_benh_an, limit=limit)}
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+
+
 @app.get("/patient")
 async def list_patients_endpoint(limit: int = 50):
     """Danh sách hồ sơ đã lưu, mới cập nhật gần nhất lên đầu — dùng cho màn
@@ -1382,6 +1417,9 @@ async def voice_stt(file: UploadFile = File(...)):
 
 class EcgDigitizeRequest(BaseModel):
     image_base64: str  # Ảnh ECG (PNG/JPG) đã encode base64, có hoặc không kèm data URI prefix
+    lead_name: str = "II"  # Chuyển đạo bác sĩ xác nhận đã cắt/tải lên — mặc định
+                            # "II" vì đây là chuyển đạo chuẩn cho dải nhịp theo quy
+                            # ước lâm sàng (không phải suy đoán của hệ thống).
 
 
 @app.post("/ecg")
@@ -1403,6 +1441,11 @@ async def ecg_digitize(request: EcgDigitizeRequest):
             status_code=400,
             detail="Không đọc được ảnh. Kiểm tra lại định dạng base64 (PNG/JPG)."
         )
+    # 12 chuyển đạo chuẩn theo hệ thống ghi ECG quốc tế — validate để tránh
+    # giá trị rác hiện ra trong disclaimer/báo cáo (vd chuỗi rỗng, gõ nhầm).
+    VALID_LEADS = {"I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"}
+    lead_name = request.lead_name if request.lead_name in VALID_LEADS else "II"
+
     result = ecg_engine.digitize_ecg_image(img)
     calib = ecg_engine.estimate_px_per_mm(img)
     r_peaks = ecg_engine.detect_r_peaks(result["signal"], px_per_mm=calib["px_per_mm"])
@@ -1422,12 +1465,21 @@ async def ecg_digitize(request: EcgDigitizeRequest):
         redflags.append("Nhiễu cơ hoặc không dò được đỉnh R rõ ràng")
     if heart_rate.get("warning"):
         redflags.append(heart_rate["warning"])
+    # Chuyển đạo I/aVR/aVL/aVF/V1 thường KHÔNG dùng để đánh giá nhịp trên lâm
+    # sàng (biên độ QRS thấp hơn, khó dò đỉnh R ổn định) — cảnh báo rõ thay vì
+    # âm thầm trả số liệu như thể mọi chuyển đạo đều đáng tin như nhau.
+    if lead_name not in ("II", "V2", "V3", "V4", "V5"):
+        redflags.append(
+            f"Chuyển đạo {lead_name} không phải chuyển đạo khuyến nghị cho dải nhịp "
+            f"(nên dùng Lead II hoặc V2-V5) — số liệu nhịp tim có thể kém tin cậy hơn."
+        )
 
     safety = ecg_engine.apply_ecg_safety_rules(n_leads=1, redflags=redflags, findings=[])
 
     return {
         "success": True,
         **result,
+        "lead_name": lead_name,
         "calibration": calib,
         "r_peaks": r_peaks,
         "heart_rate": heart_rate,
@@ -1435,7 +1487,7 @@ async def ecg_digitize(request: EcgDigitizeRequest):
         "source_of_truth": "AI đo từ waveform",
         "redflags": redflags,
         "ghi_de_toan_bo": safety["ghi_de_toan_bo"],
-        "permanent_disclaimer": ecg_engine.ECG_PERMANENT_DISCLAIMER,
+        "permanent_disclaimer": ecg_engine.ecg_permanent_disclaimer(lead_name),
         "disclaimer": "Kết quả số hóa và ước tính nhịp tim chỉ mang tính trực quan "
                        "hóa hỗ trợ, cần bác sĩ xác nhận. Không phải kết luận chẩn đoán. "
                        "Tỉ lệ pixel/mm được tự suy ra từ lưới ảnh — luôn là ƯỚC LƯỢNG, "

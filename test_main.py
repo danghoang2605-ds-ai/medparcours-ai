@@ -13,11 +13,22 @@ THIẾT KẾ: mock call_claude() ở mọi test cần gọi Anthropic API, để
 import os
 import json
 import io
+import base64
+import cv2
+import numpy as np
 from unittest.mock import patch, MagicMock
 
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key-not-real")
 
 import pytest
+
+
+def _valid_png_b64():
+    """Tạo 1 ảnh PNG hợp lệ tối thiểu (không dùng chuỗi hex cứng — lần trước
+    dính lỗi copy làm hỏng IDAT chunk, libpng từ chối đọc)."""
+    img = np.ones((30, 100, 3), dtype=np.uint8) * 255
+    ok, buf = cv2.imencode(".png", img)
+    return base64.b64encode(buf.tobytes()).decode()
 import anthropic
 from fastapi.testclient import TestClient
 
@@ -223,6 +234,42 @@ def test_ecg_invalid_base64_returns_400(client):
     assert resp.status_code == 400
 
 
+def test_ecg_lead_name_mac_dinh_la_II(client):
+    """Không gửi lead_name -> mặc định 'II' (chuyển đạo chuẩn cho dải nhịp
+    theo quy ước lâm sàng), không phải suy đoán tùy tiện."""
+    b64 = _valid_png_b64()
+    resp = client.post("/ecg", json={"image_base64": b64})
+    assert resp.status_code == 200
+    assert resp.json()["lead_name"] == "II"
+
+
+def test_ecg_lead_name_hop_le_duoc_giu_nguyen(client):
+    b64 = _valid_png_b64()
+    resp = client.post("/ecg", json={"image_base64": b64, "lead_name": "V3"})
+    assert resp.status_code == 200
+    assert resp.json()["lead_name"] == "V3"
+    assert "V3" in resp.json()["permanent_disclaimer"]
+
+
+def test_ecg_lead_name_rac_roi_ve_mac_dinh(client):
+    """Giá trị lead_name không nằm trong 12 chuyển đạo chuẩn -> tự rơi về
+    'II', không để lộ chuỗi rác ra disclaimer/báo cáo."""
+    b64 = _valid_png_b64()
+    resp = client.post("/ecg", json={"image_base64": b64, "lead_name": "<script>xss</script>"})
+    assert resp.status_code == 200
+    assert resp.json()["lead_name"] == "II"
+
+
+def test_ecg_lead_khong_khuyen_nghi_co_redflag(client):
+    """Chọn chuyển đạo không khuyến nghị cho dải nhịp (vd aVR) -> phải có
+    redflag cảnh báo rõ, không âm thầm trả số liệu như bình thường."""
+    b64 = _valid_png_b64()
+    resp = client.post("/ecg", json={"image_base64": b64, "lead_name": "aVR"})
+    assert resp.status_code == 200
+    redflags = resp.json()["redflags"]
+    assert any("aVR" in r for r in redflags)
+
+
 # ─── 8. /chat ──────────────────────────────────────────────────────────────
 def test_chat_success(client, mock_anthropic):
     resp = client.post("/chat", json={
@@ -324,10 +371,7 @@ def test_analyze_anh_roi_ve_claude_vision_khi_vnpt_chua_cau_hinh(client, mock_an
     for k in ("VNPT_TOKEN_ID", "VNPT_TOKEN_KEY", "VNPT_ACCESS_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     # Ảnh PNG 1x1 hợp lệ tối thiểu (đủ để qua bước decode ảnh của thư viện)
-    png_1x1 = bytes.fromhex(
-        "89504e470d0a1a0a0000000d494844520000000100000001080600000"
-        "01f15c4890000000a49444154789c6360000002000100e221bc330000000049454e44ae426082"
-    )
+    png_1x1 = base64.b64decode(_valid_png_b64())
     resp = client.post("/analyze", files={
         "file": ("scan.png", io.BytesIO(png_1x1), "image/png")
     })

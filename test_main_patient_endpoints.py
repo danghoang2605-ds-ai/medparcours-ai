@@ -285,3 +285,49 @@ def test_rename_patient_khong_bi_ghi_de_khi_cap_nhat_ho_so(client, mock_anthropi
     p = next(x for x in listed if x["so_benh_an"] == "02.000001")
     assert p["ten_hien_thi"] == "Tên tùy chỉnh của bác sĩ"
     assert p["ho_ten"] == "Tên tùy chỉnh của bác sĩ"
+
+
+# ─── POST /feedback — góp ý/báo sai (chỉ ghi nhận, không tự sửa) ──────────
+def test_feedback_luon_thanh_cong_du_co_gan_ho_so_hay_khong(client):
+    resp = client.post("/feedback", json={
+        "so_benh_an": "02.000001", "muc": "Nhận định lâm sàng",
+        "noi_dung": "AI nói suy tim độ III nhưng thực tế độ II", "ghi_chu": "Đã xác nhận với BS điều trị",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+    resp2 = client.post("/feedback", json={"muc": "Góp ý chung", "noi_dung": "Giao diện dễ dùng"})
+    assert resp2.status_code == 200
+    assert resp2.json()["success"] is True
+
+
+def test_feedback_khong_chan_khi_luu_loi(client, monkeypatch):
+    """Lỗi lưu trữ (vd mất kết nối Turso) KHÔNG được chặn UI — vẫn trả 200."""
+    def fail(*a, **k): raise RuntimeError("mat ket noi turso")
+    monkeypatch.setattr(db, "save_feedback", fail)
+    resp = client.post("/feedback", json={"muc": "Test", "noi_dung": "Test"})
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+
+# ─── GET /patient/{so_benh_an}/history — so sánh thuốc/chẩn đoán ──────────
+def test_patient_history_rong_khi_chua_tung_cap_nhat(client):
+    client.post("/patient/save", json={"report": _sample_report()})
+    resp = client.get("/patient/02.000001/history")
+    assert resp.status_code == 200
+    assert resp.json()["history"] == []
+
+
+def test_patient_history_co_ban_ghi_truoc_khi_gop(client, mock_anthropic_patient_update):
+    client.post("/patient/save", json={"report": _sample_report()})
+    client.post("/patient/update", json={
+        "so_benh_an": "02.000001",
+        "ho_so_text": "Kết quả tái khám mới, INR đo lại 2.8, dài ít nhất vài chục ký tự để qua kiểm tra.",
+        "nguon_tai_lieu": "tai_kham_moi",
+    })
+    resp = client.get("/patient/02.000001/history")
+    assert resp.status_code == 200
+    hist = resp.json()["history"]
+    assert len(hist) == 1
+    assert hist[0]["report"] is not None
+    assert hist[0]["nguon"] == "tai_kham_moi"
