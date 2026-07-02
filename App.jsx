@@ -5493,21 +5493,58 @@ function deriveTeaching(r){
   }
 }
 
-// ─── Đăng nhập bằng Supabase Auth ──────────────────────────────────────────────
-function LoginPage({ onLogin }){
+// ─── Đăng nhập / tạo tài khoản bằng Supabase Auth ─────────────────────────────
+function LoginPage({ onLogin, onRegister }){
+  const [screen, setScreen] = useState("login")
+  const [fullName, setFullName] = useState("")
+  const [department, setDepartment] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
   const [showPw, setShowPw] = useState(false)
   const [err, setErr] = useState("")
+  const [notice, setNotice] = useState("")
   const [busy, setBusy] = useState(false)
+
+  const switchScreen = (next) => {
+    if(busy) return
+    setScreen(next); setErr(""); setNotice(""); setPassword(""); setConfirmPassword("")
+  }
+
   const submit = async () => {
     if(busy) return
+    setErr(""); setNotice("")
+
+    if(screen === "register"){
+      if(!fullName.trim()){ setErr("Vui lòng nhập họ và tên bác sĩ."); return }
+      if(!email.trim() || !password){ setErr("Vui lòng nhập email và mật khẩu."); return }
+      if(password.length < 8){ setErr("Mật khẩu cần có ít nhất 8 ký tự."); return }
+      if(password !== confirmPassword){ setErr("Mật khẩu xác nhận chưa khớp."); return }
+      setBusy(true)
+      try {
+        const result = await onRegister({
+          fullName: fullName.trim(),
+          department: department.trim(),
+          email: email.trim(),
+          password,
+        })
+        setPassword(""); setConfirmPassword(""); setScreen("login")
+        setNotice(result?.message || "Tạo tài khoản thành công. Bạn có thể đăng nhập bằng tài khoản vừa tạo.")
+      } catch(e) {
+        setErr(e?.message || "Không tạo được tài khoản.")
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+
     if(!email.trim() || !password){ setErr("Vui lòng nhập email và mật khẩu."); return }
-    setBusy(true); setErr("")
+    setBusy(true)
     try { await onLogin(email.trim(), password) }
     catch(e) { setErr(e?.message || "Sai email hoặc mật khẩu.") }
     finally { setBusy(false) }
   }
+
   const FEATURES = [
     { ic:<Icon.FileText d={16} color="#1D6FE8"/>, t:"Tự động phân tích và tóm tắt diễn biến lâm sàng theo 3 giai đoạn." },
     { ic:<Icon.Alert d={16} color="#DC2626"/>, t:"Phát hiện và cảnh báo sớm nguy cơ dựa trên hồ sơ bệnh án." },
@@ -5520,6 +5557,7 @@ function LoginPage({ onLogin }){
     { v:"3 chế độ", l:"Bác sĩ - Hội chẩn - Giảng dạy" },
     { v:"100%", l:"cảnh báo rủi ro lâm sàng" },
   ]
+
   return (
     <div className="login-wrap">
       <div className="login-bg1"/><div className="login-bg2"/><div className="login-bg3"/>
@@ -5529,27 +5567,64 @@ function LoginPage({ onLogin }){
             <div className="login-card">
               <div className="login-logo"><BrandMark size={46} radius={13}/></div>
               <div className="login-brand">Med<em>Parcours</em> <span>AI</span></div>
-              <div className="login-sub">Trợ lý lâm sàng cho bác sĩ - Đăng nhập để tiếp tục</div>
+              <div className="auth-tabs" role="tablist" aria-label="Tài khoản MedParcours">
+                <button type="button" className={screen==="login"?"active":""} onClick={()=>switchScreen("login")}>Đăng nhập</button>
+                <button type="button" className={screen==="register"?"active":""} onClick={()=>switchScreen("register")}>Tạo tài khoản</button>
+              </div>
+              <div className="login-sub">
+                {screen === "login"
+                  ? "Đăng nhập bằng tài khoản bác sĩ đã được tạo trên Supabase"
+                  : "Tạo tài khoản bác sĩ mới trên hệ thống MedParcours"}
+              </div>
+
+              {screen === "register" && <>
+                <div className="login-field">
+                  <label>Họ và tên bác sĩ</label>
+                  <input value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="Nguyễn Văn A" autoComplete="name" autoFocus/>
+                </div>
+                <div className="login-field">
+                  <label>Khoa / đơn vị <span className="field-optional">(không bắt buộc)</span></label>
+                  <input value={department} onChange={e=>setDepartment(e.target.value)} placeholder="Khoa Tim mạch" autoComplete="organization-title"/>
+                </div>
+              </>}
+
               <div className="login-field">
                 <label>Email bác sĩ</label>
-                <input type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="bacsi@benhvien.vn" autoComplete="email" autoFocus/>
+                <input type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="bacsi@benhvien.vn" autoComplete="email" autoFocus={screen==="login"}/>
               </div>
               <div className="login-field">
                 <label>Mật khẩu</label>
                 <div className="pw-wrap">
-                  <input type={showPw?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Nhập mật khẩu" autoComplete="current-password" style={{paddingRight:"40px"}}/>
+                  <input type={showPw?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder={screen==="register"?"Tối thiểu 8 ký tự":"Nhập mật khẩu"} autoComplete={screen==="register"?"new-password":"current-password"} style={{paddingRight:"40px"}}/>
                   <button type="button" className="pw-eye" onClick={()=>setShowPw(s=>!s)} title={showPw?"Ẩn mật khẩu":"Hiện mật khẩu"} aria-label="Hiện/ẩn mật khẩu">
                     {showPw
                       ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                      : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>}
+                      : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>}
                   </button>
                 </div>
               </div>
+
+              {screen === "register" && <div className="login-field">
+                <label>Xác nhận mật khẩu</label>
+                <input type={showPw?"text":"password"} value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Nhập lại mật khẩu" autoComplete="new-password"/>
+              </div>}
+
+              {notice && <div className="login-ok"><Icon.ShieldCheck d={14} color="#047857"/>{notice}</div>}
               {err && <div className="login-err"><Icon.Alert d={14} color="#B91C1C"/>{err}</div>}
-              <button className="btn-primary login-btn" onClick={submit} disabled={busy}>{busy ? "Đang đăng nhập..." : "Đăng nhập"}</button>
+              <button className="btn-primary login-btn" onClick={submit} disabled={busy}>
+                {busy
+                  ? (screen==="register" ? "Đang tạo tài khoản..." : "Đang đăng nhập...")
+                  : (screen==="register" ? "Tạo tài khoản" : "Đăng nhập")}
+              </button>
+
+              <button type="button" className="auth-text-link" onClick={()=>switchScreen(screen==="login"?"register":"login")} disabled={busy}>
+                {screen === "login" ? "Chưa có tài khoản? Tạo tài khoản mới" : "Đã có tài khoản? Quay lại đăng nhập"}
+              </button>
+
               <div className="login-hint">
-                <div className="login-hint-row"><span>Tài khoản dùng thử</span><b>bacsi@medparcours.com</b></div>
-                <div className="login-hint-row"><span>Mật khẩu</span><b>un1svengers</b></div>
+                <div className="login-hint-row"><span>Xác thực</span><b>Supabase Auth</b></div>
+                <div className="login-hint-row"><span>Hồ sơ bác sĩ</span><b>public.bac_si</b></div>
+                <div className="login-hint-row"><span>Dữ liệu</span><b>RLS theo bệnh viện</b></div>
               </div>
             </div>
           </div>
@@ -6357,6 +6432,13 @@ const EXTRA_CSS = `
 .login-logo{display:flex;justify-content:center;margin-bottom:12px}
 .login-brand{font-size:26px;font-weight:800;color:#0F2740;letter-spacing:-.3px}.login-brand em{color:#1D6FE8;font-style:normal}.login-brand span{color:#5A748F;font-weight:700;font-size:17px}
 .login-sub{font-size:13px;color:#7A96C8;margin:6px 0 24px}
+.auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:4px;background:#EEF3FA;border-radius:11px;margin:18px 0 0}
+.auth-tabs button{border:none;background:transparent;color:#6B7F99;font-family:inherit;font-size:12.5px;font-weight:700;padding:8px 10px;border-radius:8px;cursor:pointer;transition:all .15s}
+.auth-tabs button.active{background:#fff;color:#1D6FE8;box-shadow:0 2px 8px rgba(16,41,66,.1)}
+.field-optional{font-weight:400;color:#94A3B8}
+.login-ok{display:flex;align-items:flex-start;gap:7px;background:#ECFDF5;color:#047857;border:1px solid #A7F3D0;font-size:12.5px;line-height:1.5;padding:9px 12px;border-radius:9px;margin-bottom:13px;text-align:left}
+.auth-text-link{width:100%;border:none;background:transparent;color:#1D6FE8;font-family:inherit;font-size:12.5px;font-weight:700;padding:11px 4px 0;cursor:pointer}
+.auth-text-link:hover{text-decoration:underline}.auth-text-link:disabled{opacity:.55;cursor:not-allowed}
 .login-field{text-align:left;margin-bottom:15px}
 .login-field label{display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:6px}
 .login-field input{width:100%;box-sizing:border-box;padding:12px 14px;border:1px solid #d8e2f0;border-radius:11px;font-size:14px;outline:none;transition:border .15s,box-shadow .15s}
@@ -7618,6 +7700,7 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(false)
   const [ecgInitial, setEcgInitial] = useState(null)
   const [currentId, setCurrentId] = useState(null)
+  const registrationInProgress = useRef(false)
 
   const resetWorkspace = useCallback(() => {
     setState("upload"); setReport(null); setHoSoText(""); setAnalysis(null)
@@ -7632,6 +7715,44 @@ export default function App() {
     setSession(data.session)
   }
 
+  const register = async ({ fullName, department, email, password }) => {
+    if(!supabaseConfigured || !supabase) throw new Error("Chưa cấu hình Supabase ở frontend.")
+    registrationInProgress.current = true
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            ho_ten: fullName,
+            khoa: department || null,
+          },
+        },
+      })
+      if(error){
+        const msg = String(error.message || "")
+        if(/already registered|already exists|user already/i.test(msg)) throw new Error("Email này đã được đăng ký. Hãy quay lại đăng nhập.")
+        if(/password/i.test(msg)) throw new Error("Mật khẩu chưa đạt yêu cầu của Supabase.")
+        if(/database error/i.test(msg)) throw new Error("Không tạo được hồ sơ bác sĩ. Hãy kiểm tra trigger handle_new_user trong Supabase.")
+        throw new Error(msg || "Supabase không tạo được tài khoản.")
+      }
+      if(!data?.user) throw new Error("Supabase không trả về tài khoản vừa tạo.")
+
+      // Nếu project tắt Confirm email, signUp tạo session ngay. Đăng xuất ngay để
+      // giữ đúng flow: tạo tài khoản xong, người dùng tự bấm đăng nhập lại.
+      if(data.session) await supabase.auth.signOut()
+      setSession(null)
+
+      return {
+        message: data.session
+          ? "Tạo tài khoản thành công. Hãy đăng nhập bằng email và mật khẩu vừa đăng ký."
+          : "Tạo tài khoản thành công. Hãy xác nhận email (nếu Supabase yêu cầu), sau đó đăng nhập.",
+      }
+    } finally {
+      registrationInProgress.current = false
+    }
+  }
+
   const logout = async () => {
     try { if(supabase) await supabase.auth.signOut() } finally { setSession(null); resetWorkspace() }
   }
@@ -7640,7 +7761,17 @@ export default function App() {
     if(!supabase){ setAuthReady(true); return }
     let alive = true
     supabase.auth.getSession().then(({data}) => { if(alive){ setSession(data?.session || null); setAuthReady(true) } }).catch(() => { if(alive) setAuthReady(true) })
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, nextSession) => { if(alive){ setSession(nextSession); setAuthReady(true) } })
+    const { data: subscription } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if(!alive) return
+      // signUp có thể phát SIGNED_IN nếu Confirm email đang tắt. Trong lúc đăng ký,
+      // không đưa người dùng thẳng vào app; chờ SIGNED_OUT rồi quay lại màn đăng nhập.
+      if(registrationInProgress.current){
+        if(event === "SIGNED_OUT") setSession(null)
+        setAuthReady(true)
+        return
+      }
+      setSession(nextSession); setAuthReady(true)
+    })
     const expired = () => { setSession(null); resetWorkspace() }
     window.addEventListener("mp-auth-expired", expired)
     return () => { alive=false; subscription?.subscription?.unsubscribe(); window.removeEventListener("mp-auth-expired", expired) }
@@ -7766,7 +7897,7 @@ export default function App() {
   }
 
   if (!session) {
-    return (<><style>{CSS}</style><style>{EXTRA_CSS}</style><LoginPage onLogin={login}/><ToastHost/></>)
+    return (<><style>{CSS}</style><style>{EXTRA_CSS}</style><LoginPage onLogin={login} onRegister={register}/><ToastHost/></>)
   }
 
   return (
