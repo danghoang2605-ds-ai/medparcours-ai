@@ -9,10 +9,42 @@ async function mpFetchJSON(path, body, ms=45000){
   const ctrl = new AbortController()
   const timer = setTimeout(()=>ctrl.abort(), ms)
   try {
-    const res = await callApi(path, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body), signal: ctrl.signal })
-    if(!res.ok) throw new Error("API "+res.status)
-    return await res.json()
-  } finally { clearTimeout(timer) }
+    const res = await callApi(path, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify(body),
+      signal:ctrl.signal,
+    })
+
+    // Đọc body đúng 1 lần để giữ được lỗi thật do FastAPI/VNPT trả về.
+    const raw = await res.text()
+    let data = null
+    if(raw){
+      try { data = JSON.parse(raw) }
+      catch { data = { detail: raw } }
+    }
+
+    if(!res.ok){
+      const detail = typeof data?.detail === "string"
+        ? data.detail
+        : data?.detail
+          ? JSON.stringify(data.detail)
+          : raw || `HTTP ${res.status}`
+      const error = new Error(`HTTP ${res.status}: ${detail}`)
+      error.status = res.status
+      error.payload = data
+      throw error
+    }
+
+    return data || {}
+  } catch(error) {
+    if(error?.name === "AbortError") {
+      throw new Error(`Quá thời gian chờ phản hồi từ ${path}`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
 }
 const mpApi = {
   analyzeText: (ho_so_text, pages=0) => mpFetchJSON("/analyze_text", { ho_so_text, pages }),
@@ -24,6 +56,17 @@ const mpApi = {
   },
   mdt: (report) => mpFetchJSON("/mdt", { report }),
   teaching: (report) => mpFetchJSON("/teaching", { report }),
+  // Hai chatbot dùng chung route /chat đã hoạt động ổn định từ bản cũ.
+  // Backend phân luồng bằng assistant_type, không dùng endpoint mạng mới.
+  askSystemBot: (question, senderId="user_test") =>
+    mpFetchJSON("/chat", {
+      question,
+      assistant_type:"system",
+      sender_id:senderId,
+      ho_so_text:"",
+      chat_history:[],
+      mode:"system_support",
+    }, 90000),
 }
 
 // ─── Bóc chữ PDF NGAY TRONG TRÌNH DUYỆT (pdf.js từ CDN) ───────────────────────
@@ -773,6 +816,11 @@ const CSS = `
   .fc-title{font-size:13px;font-weight:700;color:#fff}
   .fc-sub{font-size:11px;color:rgba(200,225,255,0.8)}
   .fc-head-r{display:flex;gap:4px}
+  .fc-mode-tabs{display:flex;gap:5px;padding:8px 10px;background:#EEF5FF;border-bottom:1px solid rgba(200,220,255,0.6)}
+  .fc-mode-tab{flex:1;border:1px solid transparent;border-radius:999px;padding:7px 9px;background:transparent;color:#6682A8;font-family:inherit;font-size:11.5px;font-weight:700;cursor:pointer;transition:all .15s}
+  .fc-mode-tab:hover{background:#fff;color:#1D6FE8}
+  .fc-mode-tab.active{background:#fff;color:#1D6FE8;border-color:#CFE0F8;box-shadow:0 2px 7px rgba(29,111,232,0.12)}
+  .fc-provider{font-size:10px;color:rgba(220,235,255,0.82);margin-top:1px}
   .fc-icon-btn{width:28px;height:28px;border-radius:8px;border:none;background:rgba(255,255,255,0.15);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s}
   .fc-icon-btn:hover{background:rgba(255,255,255,0.28)}
   .fc-msgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:9px;background:rgba(248,251,255,0.7)}
@@ -3168,7 +3216,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
         <BookmarkPage pkey={pkey} items={bmList} onGo={(it)=>{goToBookmark(it)}} onBack={()=>setTab("report")}/>
       )}
       {tab === "report" && (
-        <FloatingChat report={report} hoSoText={hoSoText} messages={chatMessages} setMessages={setChatMessages} mode={viewMode}
+        <UnifiedChatWidget report={report} hoSoText={hoSoText} messages={chatMessages} setMessages={setChatMessages} mode={viewMode}
           onExpand={()=>setTab("chat")}/>
       )}
       <PatientSnapshot report={report}/>
@@ -4998,43 +5046,98 @@ function DoctorNote({ value, onChange }){
     </>
   )
 }
-function FloatingChat({ report, hoSoText, messages, setMessages, onExpand, mode }) {
+function UnifiedChatWidget({ report, hoSoText, messages, setMessages, onExpand, mode }) {
   const [open, setOpen] = useState(false)
+  const [activeMode, setActiveMode] = useState("clinical")
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
+  const [systemMessages, setSystemMessages] = useState([
+    { role:"assistant", content:"Xin chào! Tôi là trợ lý Hỗ trợ hệ thống của MedParcours. Bạn cần hướng dẫn sử dụng tính năng nào?" }
+  ])
+  const [seenClinical, setSeenClinical] = useState(messages.length)
+  const [seenSystem, setSeenSystem] = useState(1)
   const bottomRef = useRef()
-  useEffect(() => { if (open) bottomRef.current?.scrollIntoView({ behavior:"smooth" }) }, [messages, open])
+  const senderId = useRef("user_" + Math.random().toString(36).slice(2, 10))
 
-  const send = async (text) => {
-    const q = text || input.trim(); if (!q || loading) return
-    setInput(""); setMessages(prev => [...prev, { role:"user", content:q }]); setLoading(true)
+  const isClinical = activeMode === "clinical"
+  const activeMessages = isClinical ? messages : systemMessages
+
+  useEffect(() => {
+    if (open) bottomRef.current?.scrollIntoView({ behavior:"smooth" })
+  }, [activeMessages, open, activeMode])
+
+  useEffect(() => {
+    if (!open) return
+    setSeenClinical(messages.length)
+    setSeenSystem(systemMessages.length)
+  }, [open, messages.length, systemMessages.length])
+
+  const sendClinical = async (q) => {
+    setMessages(prev => [...prev, { role:"user", content:q }])
     try {
       const res = await callApi("/chat", { method:"POST", headers:{ "Content-Type":"application/json" },
-        body:JSON.stringify({ question:q, ho_so_text:hoSoText||JSON.stringify(report), chat_history:messages.slice(-6), mode }) })
+        body:JSON.stringify({ question:q, assistant_type:"clinical", ho_so_text:hoSoText||JSON.stringify(report), chat_history:messages.slice(-6), mode }) })
       const data = await res.json()
-      // fetch KHÔNG tự throw khi status lỗi (400/500) nếu backend vẫn trả JSON
-      // hợp lệ (FastAPI HTTPException trả {"detail":"..."}, không có "answer").
-      // Nếu không kiểm tra res.ok, data.answer sẽ là undefined -> hiện bong
-      // bóng chat rỗng, nhìn như app vỡ. Coi lỗi HTTP như lỗi mạng -> rơi
-      // xuống catch để dùng DEMO_CHAT, người dùng vẫn có câu trả lời hữu ích.
       if (!res.ok || !data || !data.answer) throw new Error(data?.detail || "no answer")
       setMessages(prev => [...prev, { role:"assistant", content:data.answer }])
     } catch (error) {
-      console.error("Chat API error:", error)
+      console.error("Claude clinical chat error:", error)
       setMessages(prev => [...prev, {
         role:"assistant",
-        content:"Không thể kết nối với VNPT SmartBot lúc này. Vui lòng kiểm tra kết nối backend và cấu hình SMARTBOT_."
+        content:"Không thể kết nối với Claude lúc này. Vui lòng kiểm tra backend và biến ANTHROPIC_API_KEY."
       }])
     }
+  }
+
+  const sendSystem = async (q) => {
+    setSystemMessages(prev => [...prev, { role:"user", content:q }])
+    try {
+      const data = await mpApi.askSystemBot(q, senderId.current)
+      if (!data?.answer) throw new Error("Backend không trả về trường answer")
+      if (data.provider !== "vnpt-smartbot") {
+        throw new Error(`Sai provider: ${data.provider || "không xác định"}`)
+      }
+      setSystemMessages(prev => [...prev, {
+        role:"assistant",
+        content:data.answer,
+        provider:"vnpt-smartbot",
+      }])
+    } catch (error) {
+      console.error("VNPT system support error:", error)
+      const reason = error?.message || String(error)
+      setSystemMessages(prev => [...prev, {
+        role:"assistant",
+        content:`Không thể kết nối với VNPT SmartBot.\n\nLỗi thực tế: ${reason}`,
+        provider:"vnpt-smartbot-error",
+      }])
+    }
+  }
+
+  const send = async (text) => {
+    const q = text || input.trim()
+    if (!q || loading) return
+    setInput("")
+    setLoading(true)
+    if (isClinical) await sendClinical(q)
+    else await sendSystem(q)
     setLoading(false)
   }
 
-  const unread = !open && messages.filter(m => m.role === "assistant").length
+  const clinicalSuggestions = chatSuggestions(mode).slice(0,3)
+  const systemSuggestions = [
+    "Làm thế nào để tải hồ sơ?",
+    "Cách xem lịch sử phân tích?",
+    "Cách sử dụng hai chatbot?",
+  ]
+  const suggestions = isClinical ? clinicalSuggestions : systemSuggestions
+  const unread = !open
+    ? Math.max(0, messages.length - seenClinical) + Math.max(0, systemMessages.length - seenSystem)
+    : 0
 
   return (
     <>
       {!open && (
-        <button className="fab-chat" onClick={()=>setOpen(true)} aria-label="Mở trợ lý ảo MedAmi">
+        <button className="fab-chat" onClick={()=>setOpen(true)} aria-label="Mở MedAmi và Hỗ trợ hệ thống">
           <Icon.Chat d={22} color="#fff"/>
           {unread > 0 && <span className="fab-badge">{unread}</span>}
         </button>
@@ -5045,36 +5148,50 @@ function FloatingChat({ report, hoSoText, messages, setMessages, onExpand, mode 
             <div className="fc-head-l">
               <div className="fc-avatar"><MedAmiAvatar robotSize={15}/></div>
               <div>
-                <div className="fc-title">MedAmi</div>
-                <div className="fc-sub">{report.thong_tin_benh_nhan.ho_ten}</div>
+                <div className="fc-title">{isClinical ? "MedAmi" : "Hỗ trợ hệ thống"}</div>
+                <div className="fc-provider">{isClinical ? "Bác sĩ lâm sàng - Claude" : "Trợ lý sản phẩm - VNPT SmartBot"}</div>
               </div>
             </div>
             <div className="fc-head-r">
-              <button className="fc-icon-btn" title="Mở rộng" onClick={onExpand}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
-              </button>
+              {isClinical && (
+                <button className="fc-icon-btn" title="Mở rộng" onClick={onExpand}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                </button>
+              )}
               <button className="fc-icon-btn" title="Thu nhỏ" onClick={()=>setOpen(false)}>
                 <Icon.Close d={15} color="#fff"/>
               </button>
             </div>
           </div>
+
+          <div className="fc-mode-tabs">
+            <button className={`fc-mode-tab${isClinical ? " active" : ""}`} onClick={()=>setActiveMode("clinical")}>
+              Bác sĩ (Lâm sàng)
+            </button>
+            <button className={`fc-mode-tab${!isClinical ? " active" : ""}`} onClick={()=>setActiveMode("system")}>
+              Hỗ trợ hệ thống
+            </button>
+          </div>
+
           <div className="fc-msgs">
-            {messages.map((m,i)=>(
-              <div key={i} className={`msg-row${m.role==="user"?" user":""}`}>
-                {m.role==="assistant"&&<div className="bot-avatar sm"><MedAmiAvatar robotSize={11}/></div>}
+            {activeMessages.map((m,i)=>(
+              <div key={`${activeMode}-${i}`} className={`msg-row${m.role==="user"?" user":""}`}>
+                {m.role==="assistant"&&<div className="bot-avatar sm">{isClinical ? <MedAmiAvatar robotSize={11}/> : <Icon.Chat d={12} color="#fff"/>}</div>}
                 <div className={`bubble sm ${m.role==="user"?"user":"bot"}`}>{renderMd(m.content)}</div>
               </div>
             ))}
-            {loading&&<div className="msg-row"><div className="bot-avatar sm"><MedAmiAvatar robotSize={11}/></div><div className="bubble sm bot"><div className="typing"><span/><span/><span/></div></div></div>}
+            {loading&&<div className="msg-row"><div className="bot-avatar sm">{isClinical ? <MedAmiAvatar robotSize={11}/> : <Icon.Chat d={12} color="#fff"/>}</div><div className="bubble sm bot"><div className="typing"><span/><span/><span/></div></div></div>}
             <div ref={bottomRef}/>
           </div>
+
           <div className="fc-sug">
-            {chatSuggestions(mode).slice(0,3).map(s=>(
+            {suggestions.map(s=>(
               <button key={s} onClick={()=>send(s)} disabled={loading}>{s}</button>
             ))}
           </div>
           <div className="fc-input">
-            <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder="Hỏi nhanh về bệnh nhân..."/>
+            <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()}
+              placeholder={isClinical ? "Hỏi nhanh về bệnh nhân..." : "Hỏi về cách dùng MedParcours..."}/>
             <button className="send-btn sm" onClick={()=>send()} disabled={!input.trim()||loading}>
               <Icon.Send d={12} color={input.trim()&&!loading?"white":"#9BB5D8"}/>
             </button>
@@ -5097,9 +5214,9 @@ function ChatTab({ report, hoSoText, messages, setMessages, mode }) {
     setInput(""); setMessages(prev => [...prev, {role:"user", content:q}]); setLoading(true)
     try {
       const res = await callApi("/chat", {method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({question:q, ho_so_text:hoSoText||JSON.stringify(report), chat_history:messages.slice(-6), mode})})
+        body:JSON.stringify({question:q, assistant_type:"clinical", ho_so_text:hoSoText||JSON.stringify(report), chat_history:messages.slice(-6), mode})})
       const data = await res.json()
-      // Xem ghi chú ở FloatingChat.send(): fetch không tự throw khi status lỗi
+      // fetch không tự throw khi status lỗi; MedAmi lâm sàng dùng Claude qua /chat
       // nhưng vẫn trả JSON hợp lệ -> phải tự kiểm tra res.ok + data.answer.
       if (!res.ok || !data || !data.answer) throw new Error(data?.detail || "no answer")
       setMessages(prev => [...prev, {role:"assistant", content:data.answer}])
@@ -5107,7 +5224,7 @@ function ChatTab({ report, hoSoText, messages, setMessages, mode }) {
       console.error("Chat API error:", error)
       setMessages(prev => [...prev, {
         role:"assistant",
-        content:"Không thể kết nối với VNPT SmartBot lúc này. Vui lòng kiểm tra kết nối backend và cấu hình SMARTBOT_."
+        content:"Không thể kết nối với Claude lúc này. Vui lòng kiểm tra backend và biến ANTHROPIC_API_KEY."
       }])
     }
     setLoading(false)
