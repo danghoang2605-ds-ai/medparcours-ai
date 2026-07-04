@@ -141,7 +141,12 @@ class VNPTClient:
         self.ekyc_username = os.environ.get("VNPT_EKYC_USERNAME", "").strip()
         self.ekyc_password = os.environ.get("VNPT_EKYC_PASSWORD", "").strip()
         self.ekyc_client_id = os.environ.get("VNPT_EKYC_CLIENT_ID", "clientapp").strip()
-        self.ekyc_client_secret = os.environ.get("VNPT_EKYC_CLIENT_SECRET", "").strip()
+        # "password" là giá trị CỐ ĐỊNH ghi thẳng trong template Postman mẫu
+        # của BTC (client_secret: "password") — không phải secret riêng
+        # từng đội (BTC chỉ cấp username/password tài khoản, không cấp
+        # riêng client_secret) — dùng làm default để không bắt buộc phải
+        # thêm thêm 1 biến môi trường nữa.
+        self.ekyc_client_secret = os.environ.get("VNPT_EKYC_CLIENT_SECRET", "password").strip()
         # Bộ token riêng cho tóm tắt cuộc họp (eval-emotion-service) — path
         # domain KHÁC hẳn stt-service (dùng cho STT thường), theo đúng
         # pattern đã xác nhận: mỗi sản phẩm VNPT thường có bộ Token-id/
