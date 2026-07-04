@@ -167,12 +167,15 @@ class VNPTClient:
         OAuth nếu chưa rõ có cần hay không.
         """
         if not self.ekyc_username or not self.ekyc_password:
+            print("[eKYC OAuth] CHƯA cấu hình VNPT_EKYC_USERNAME/PASSWORD — dùng access_token tĩnh cũ (có thể không đủ quyền cho eKYC).")
             return self.ekyc_access_token
         now = time.time()
         cached = _EKYC_OAUTH_CACHE.get("token")
         expires_at = _EKYC_OAUTH_CACHE.get("expires_at", 0)
         if cached and now < expires_at:
+            print("[eKYC OAuth] Dùng access_token đã cache từ lần lấy OAuth trước (chưa hết hạn).")
             return cached
+        print(f"[eKYC OAuth] Đang gọi {self.domain}/auth/oauth/token với username={self.ekyc_username!r} để lấy access_token mới...")
         payload = {
             "username": self.ekyc_username, "password": self.ekyc_password,
             "client_id": self.ekyc_client_id, "grant_type": "password",
@@ -185,6 +188,7 @@ class VNPTClient:
         token = data.get("access_token")
         if not token:
             raise VNPTAPIError(f"OAuth eKYC không trả về access_token. Response: {data}")
+        print("[eKYC OAuth] Lấy access_token MỚI thành công qua OAuth, sẽ dùng cho request eKYC tiếp theo.")
         expires_in = int(data.get("expires_in") or 3600)
         _EKYC_OAUTH_CACHE["token"] = token
         _EKYC_OAUTH_CACHE["expires_at"] = now + max(expires_in - 60, 60)
