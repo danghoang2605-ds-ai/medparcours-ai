@@ -221,11 +221,15 @@ class VNPTClient:
 
     def _upload_file(self, file_bytes: bytes, filename: str) -> str:
         """
-        POST /file-service/v1/addFile — bước 1: tải file lên, lấy file_id để
-        dùng cho bước OCR. Endpoint đã xác nhận thật; tên field trong
-        response body là GIẢ ĐỊNH — CẦN XÁC NHẬN LẠI (thường VNPT trả dạng
-        {"fileId": "...", ...} hoặc bọc trong {"data": {"fileId": "..."}} —
-        code dưới đây thử cả 2 dạng, ưu tiên dạng phẳng trước).
+        POST /file-service/v1/addFile — bước 1: tải file lên, lấy file_hash
+        để dùng cho bước OCR.
+
+        BUG THẬT ĐÃ SỬA: field response đúng là "hash" (xác nhận qua tài
+        liệu docx "Tài liệu API bóc tách văn bản hành chính nâng cao" +
+        nhiều tài liệu giấy tờ khác, đều cùng 1 mẫu response addFile) —
+        trước đây code tìm "fileId" (không tồn tại trong bất kỳ response
+        thật nào), khiến bước upload LUÔN trả về rỗng, làm hỏng toàn bộ
+        luồng SmartReader OCR ngay từ bước đầu tiên.
         """
         url = f"{self.domain}/file-service/v1/addFile"
         mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
@@ -241,22 +245,37 @@ class VNPTClient:
         resp = requests.post(url, headers=headers, files=files, data=data_fields, timeout=30)
         _raise_with_body(resp)
         data = resp.json()
-        file_id = data.get("fileId") or (data.get("data") or {}).get("fileId")
-        if not file_id:
-            raise VNPTAPIError(f"Upload SmartReader không trả về fileId. Response: {data}")
-        return file_id
+        file_hash = (data.get("object") or {}).get("hash")
+        if not file_hash:
+            raise VNPTAPIError(f"Upload SmartReader không trả về hash. Response: {data}")
+        return file_hash
 
-    def _start_ocr_session(self, file_id: str) -> str:
+    def _start_ocr_session(self, file_hash: str, file_type: str) -> str:
         """
         POST /rpa-service/aidigdoc/v1/integration/ocr/scan-table — bước 2:
         khởi tạo phiên OCR bất đồng bộ, trả về session_id để poll kết quả.
-        Tên field request/response — GIẢ ĐỊNH, CẦN XÁC NHẬN LẠI.
+
+        Request body và cách bọc response ĐÃ XÁC NHẬN THẬT qua Postman
+        collection "API OCR - Hackathon" (mẫu request có file_type: "pdf"
+        tường minh — xác nhận SmartReader NHẬN PDF làm input trực tiếp,
+        không chỉ ảnh). Trước đây code gửi sai field (file_id thay vì
+        file_hash), THIẾU hoàn toàn file_type/token/client_session/details
+        (bắt buộc), và đọc sai vị trí response (thiếu bọc "object") — sửa
+        lại đúng theo bằng chứng thật.
         """
         url = f"{self.domain}/rpa-service/aidigdoc/v1/integration/ocr/scan-table"
-        resp = requests.post(url, headers=self._headers(), json={"file_id": file_id}, timeout=30)
+        payload = {
+            "file_hash": file_hash,
+            "file_type": file_type,
+            "token": f"medparcours-{int(time.time())}",  # chuỗi bất kỳ để tra log phía VNPT, KHÔNG phải access_token
+            "client_session": f"medparcours-{int(time.time())}",
+            "details": True,
+            "exporter": "json",
+        }
+        resp = requests.post(url, headers=self._headers(), json=payload, timeout=30)
         _raise_with_body(resp)
         data = resp.json()
-        session_id = data.get("session_id") or (data.get("data") or {}).get("session_id")
+        session_id = (data.get("object") or {}).get("session_id")
         if not session_id:
             raise VNPTAPIError(f"Khởi tạo phiên OCR không trả về session_id. Response: {data}")
         return session_id
@@ -274,10 +293,11 @@ class VNPTClient:
             resp = requests.post(url, headers=self._headers(), json={"session_id": session_id}, timeout=20)
             _raise_with_body(resp)
             data = resp.json()
-            status = (data.get("status") or (data.get("data") or {}).get("status") or "").upper()
+            obj = data.get("object") or {}
+            status = (obj.get("status") or "").upper()
             last_status = status
             if status == "SUCCESS":
-                return data
+                return obj
             if status in ("FAILED", "ERROR"):
                 raise VNPTAPIError(f"SmartReader báo lỗi xử lý (status={status}). Response: {data}")
             time.sleep(self.POLL_INTERVAL_SECONDS)
@@ -313,11 +333,20 @@ class VNPTClient:
         sĩ Việt Nam rất phổ biến trong bệnh án thật sẽ đọc sai hoặc rỗng.
         Đây là lý do bắt buộc giữ Claude Vision làm fallback, không phải
         tùy chọn.
+
+        file_type: xác nhận thật SmartReader NHẬN PDF làm input trực tiếp
+        (không chỉ ảnh) — mẫu request thật trong Postman collection có
+        "file_type": "pdf" tường minh. Suy ra từ đuôi file, mặc định "pdf"
+        nếu không nhận diện được.
         """
-        file_id = self._upload_file(file_bytes, filename)
-        session_id = self._start_ocr_session(file_id)
-        result = self._poll_ocr_result(session_id)
-        # Tên field chứa text/bảng kết quả cuối — GIẢ ĐỊNH, CẦN XÁC NHẬN LẠI.
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "pdf"
+        file_type = ext if ext in ("pdf", "png", "jpg", "jpeg") else "pdf"
+        file_hash = self._upload_file(file_bytes, filename)
+        session_id = self._start_ocr_session(file_hash, file_type)
+        result = self._poll_ocr_result(session_id)  # đã là "object" (bỏ lớp bọc ngoài), không cần bóc thêm
+        # Tên field chứa text/bảng kết quả cuối — GIẢ ĐỊNH, CẦN XÁC NHẬN LẠI
+        # (chưa thấy mẫu response ĐẦY ĐỦ cho scan-table/result trong tài
+        # liệu, chỉ xác nhận được request + wrapping "object" cho status).
         text = (
             result.get("text")
             or result.get("content")

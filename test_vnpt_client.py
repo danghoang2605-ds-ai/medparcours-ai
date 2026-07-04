@@ -51,40 +51,68 @@ class TestVNPTClientConfig:
 
 class TestExtractClinicalTable:
     def test_luong_thanh_cong_upload_start_poll(self, monkeypatch):
-        """Test đúng 3 bước: upload -> lấy session_id -> poll tới SUCCESS."""
+        """Test đúng 3 bước: upload -> lấy session_id -> poll tới SUCCESS.
+        Cấu trúc response ĐÃ XÁC NHẬN THẬT qua tài liệu docx (bọc trong
+        "object" ở mọi bước, field "hash" không phải "fileId")."""
         _set_env(monkeypatch)
         c = vnpt_client.VNPTClient()
 
         upload_resp = MagicMock(status_code=200)
-        upload_resp.json.return_value = {"fileId": "file-123"}
+        upload_resp.json.return_value = {"object": {"hash": "file-hash-123"}}
         upload_resp.raise_for_status = lambda: None
 
         start_resp = MagicMock(status_code=200)
-        start_resp.json.return_value = {"session_id": "sess-456"}
+        start_resp.json.return_value = {"object": {"session_id": "sess-456"}}
         start_resp.raise_for_status = lambda: None
 
         poll_resp = MagicMock(status_code=200)
-        poll_resp.json.return_value = {"status": "SUCCESS", "text": "Nội dung OCR test"}
+        poll_resp.json.return_value = {"object": {"status": "SUCCESS", "text": "Nội dung OCR test"}}
         poll_resp.raise_for_status = lambda: None
 
         with patch.object(vnpt_client.requests, "post", side_effect=[upload_resp, start_resp, poll_resp]):
             text = c.extract_clinical_table(b"fake-image-bytes", "test.jpg")
         assert text == "Nội dung OCR test"
 
+    def test_file_type_pdf_duoc_truyen_dung(self, monkeypatch):
+        """Xác nhận thật: SmartReader nhận file_type='pdf' trực tiếp (không
+        chỉ ảnh) — kiểm tra file .pdf truyền đúng file_type vào request."""
+        _set_env(monkeypatch)
+        c = vnpt_client.VNPTClient()
+        upload_resp = MagicMock(status_code=200)
+        upload_resp.json.return_value = {"object": {"hash": "file-hash-123"}}
+        upload_resp.raise_for_status = lambda: None
+        captured = {}
+        def fake_post(url, headers=None, json=None, **kwargs):
+            if "scan-table" in url and "result" not in url and "cancel" not in url:
+                captured["file_type"] = json.get("file_type")
+                resp = MagicMock(status_code=200)
+                resp.json.return_value = {"object": {"session_id": "sess-456"}}
+                resp.raise_for_status = lambda: None
+                return resp
+            if "result" in url:
+                resp = MagicMock(status_code=200)
+                resp.json.return_value = {"object": {"status": "SUCCESS", "text": "OCR test"}}
+                resp.raise_for_status = lambda: None
+                return resp
+            return upload_resp
+        with patch.object(vnpt_client.requests, "post", side_effect=fake_post):
+            c.extract_clinical_table(b"fake-pdf-bytes", "benh_an.pdf")
+        assert captured["file_type"] == "pdf"
+
     def test_poll_status_failed_raise_loi(self, monkeypatch):
         _set_env(monkeypatch)
         c = vnpt_client.VNPTClient()
-        upload_resp = MagicMock(json=lambda: {"fileId": "f1"}, raise_for_status=lambda: None)
-        start_resp = MagicMock(json=lambda: {"session_id": "s1"}, raise_for_status=lambda: None)
-        poll_resp = MagicMock(json=lambda: {"status": "FAILED"}, raise_for_status=lambda: None)
+        upload_resp = MagicMock(json=lambda: {"object": {"hash": "f1"}}, raise_for_status=lambda: None)
+        start_resp = MagicMock(json=lambda: {"object": {"session_id": "s1"}}, raise_for_status=lambda: None)
+        poll_resp = MagicMock(json=lambda: {"object": {"status": "FAILED"}}, raise_for_status=lambda: None)
         with patch.object(vnpt_client.requests, "post", side_effect=[upload_resp, start_resp, poll_resp]):
             with pytest.raises(vnpt_client.VNPTAPIError):
                 c.extract_clinical_table(b"x", "test.jpg")
 
-    def test_upload_khong_tra_file_id_raise_loi(self, monkeypatch):
+    def test_upload_khong_tra_hash_raise_loi(self, monkeypatch):
         _set_env(monkeypatch)
         c = vnpt_client.VNPTClient()
-        bad_resp = MagicMock(json=lambda: {"unexpected": "shape"}, raise_for_status=lambda: None)
+        bad_resp = MagicMock(json=lambda: {"object": {"unexpected": "shape"}}, raise_for_status=lambda: None)
         with patch.object(vnpt_client.requests, "post", return_value=bad_resp):
             with pytest.raises(vnpt_client.VNPTAPIError):
                 c.extract_clinical_table(b"x", "test.jpg")
@@ -96,9 +124,9 @@ class TestExtractClinicalTable:
         c = vnpt_client.VNPTClient()
         c.POLL_TIMEOUT_SECONDS = 0.05
         c.POLL_INTERVAL_SECONDS = 0.01
-        upload_resp = MagicMock(json=lambda: {"fileId": "f1"}, raise_for_status=lambda: None)
-        start_resp = MagicMock(json=lambda: {"session_id": "s1"}, raise_for_status=lambda: None)
-        pending_resp = MagicMock(json=lambda: {"status": "PENDING"}, raise_for_status=lambda: None)
+        upload_resp = MagicMock(json=lambda: {"object": {"hash": "f1"}}, raise_for_status=lambda: None)
+        start_resp = MagicMock(json=lambda: {"object": {"session_id": "s1"}}, raise_for_status=lambda: None)
+        pending_resp = MagicMock(json=lambda: {"object": {"status": "PENDING"}}, raise_for_status=lambda: None)
         cancel_resp = MagicMock(json=lambda: {}, raise_for_status=lambda: None)
         calls = [upload_resp, start_resp]
 
@@ -333,14 +361,14 @@ class TestUploadFileTitle:
         c = vnpt_client.VNPTClient()
         fake_resp = MagicMock()
         fake_resp.raise_for_status = lambda: None
-        fake_resp.json.return_value = {"fileId": "abc123"}
+        fake_resp.json.return_value = {"message": "IDG-00000000", "object": {"hash": "idg20230418/IDG01_abc123", "fileType": "jpg"}}
         captured = {}
         def fake_post(url, headers=None, files=None, data=None, **kwargs):
             captured["data"] = data
             return fake_resp
         with patch.object(vnpt_client.requests, "post", side_effect=fake_post):
-            file_id = c._upload_file(b"fake-image-bytes", "benh_an.jpg")
-        assert file_id == "abc123"
+            file_hash = c._upload_file(b"fake-image-bytes", "benh_an.jpg")
+        assert file_hash == "idg20230418/IDG01_abc123"
         assert captured["data"]["title"] == "benh_an.jpg"
 
 

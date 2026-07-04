@@ -608,8 +608,18 @@ def _extract_report_step1_from_upload(filename: str, content: bytes) -> dict:
             os.unlink(tmp_path)
         text = extracted["text"]
         if len(text.strip()) < MIN_TOTAL_CHARS:
-            raise ValueError("Không có đủ nội dung text để phân tích. File có thể là bản scan "
-                              "(ảnh chụp) không có lớp text — hãy thử tải lên dưới dạng ảnh (.png/.jpg).")
+            # PDF không có (đủ) text layer -> khả năng là bản scan. Trước
+            # đây báo lỗi ngay, giờ THỬ SmartReader OCR trước khi bỏ cuộc —
+            # xác nhận thật SmartReader nhận PDF làm input trực tiếp (không
+            # chỉ ảnh). Nếu SmartReader cũng lỗi/chưa cấu hình, rơi về
+            # thông báo lỗi cũ, KHÔNG để lộ lỗi VNPT thô cho bác sĩ.
+            try:
+                text = vnpt_client.VNPTClient().extract_clinical_table(content, filename or "document.pdf")
+                print(f"[PDF scan -> SmartReader OCR thành công] {filename}")
+            except Exception as e:
+                print(f"[PDF scan -> SmartReader OCR cũng lỗi, báo lỗi cho bác sĩ] {type(e).__name__}: {e}")
+                raise ValueError("Không có đủ nội dung text để phân tích. File có thể là bản scan "
+                                  "(ảnh chụp) không có lớp text — hãy thử tải lên dưới dạng ảnh (.png/.jpg).")
         raw = call_claude(system=REPORT_SYSTEM, user_message=f"Hồ sơ bệnh nhân:\n\n{text}",
                            max_tokens=16000, cache_system=True)
         return _parse_report_json(raw)

@@ -577,3 +577,29 @@ def test_ekyc_face_compare_loi_tra_502(client):
             "file_face": ("face.jpg", _valid_png_b64_bytes(), "image/jpeg"),
         })
     assert resp.status_code == 502
+
+
+def test_pdf_scan_fallback_qua_smartreader_thanh_cong(monkeypatch):
+    """PDF không có text layer (bản scan) -> trước đây báo lỗi ngay, giờ
+    thử SmartReader OCR trước khi bỏ cuộc. Test hàm dùng chung cho luồng
+    cập nhật hồ sơ (_extract_report_step1_from_upload)."""
+    monkeypatch.setenv("VNPT_TOKEN_ID", "tid")
+    monkeypatch.setenv("VNPT_TOKEN_KEY", "tkey")
+    monkeypatch.setenv("VNPT_ACCESS_TOKEN", "tok")
+    import main as main_module
+    monkeypatch.setattr(main_module, "extract_text_from_pdf", lambda path: {"text": "", "pages": 1, "method": "text", "ocr_pages": []})
+    with patch("vnpt_client.VNPTClient.extract_clinical_table", return_value="Nội dung OCR từ SmartReader") as mock_ocr, \
+         patch("main.call_claude", return_value='{"chan_doan_chinh": "test"}'):
+        result = main_module._extract_report_step1_from_upload("benh_an_scan.pdf", b"fake-pdf-bytes")
+    mock_ocr.assert_called_once()
+    assert result["chan_doan_chinh"] == "test"
+
+
+def test_pdf_scan_fallback_smartreader_cung_loi_bao_loi_ro(monkeypatch):
+    """Nếu SmartReader cũng lỗi (chưa cấu hình/API lỗi), phải báo lỗi rõ
+    ràng cho bác sĩ, không để lộ traceback thô."""
+    import main as main_module
+    monkeypatch.setattr(main_module, "extract_text_from_pdf", lambda path: {"text": "", "pages": 1, "method": "text", "ocr_pages": []})
+    with patch("vnpt_client.VNPTClient.extract_clinical_table", side_effect=RuntimeError("VNPT lỗi")):
+        with pytest.raises(ValueError, match="bản scan"):
+            main_module._extract_report_step1_from_upload("benh_an_scan.pdf", b"fake-pdf-bytes")
