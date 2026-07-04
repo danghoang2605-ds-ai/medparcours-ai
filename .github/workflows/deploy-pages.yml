@@ -1,8 +1,8 @@
 name: Deploy MedParcours AI to GitHub Pages
-
 on:
   push:
     branches: ["main"]
+    # BỎ QUA các thay đổi ở Backend (Python, Docker, DB) để không trigger build web oan
     paths-ignore:
       - 'cde/**'
       - '*.py'
@@ -10,58 +10,96 @@ on:
       - 'docker*'
       - 'README.md'
   workflow_dispatch:
-
-# Cấp quyền ghi nội dung để hệ thống tự tạo và cập nhật nhánh gh-pages
+# Cấp quyền tối thượng cho OIDC Token và GitHub Pages (Bắt buộc)
 permissions:
-  contents: write
-
+  contents: read
+  pages: write
+  id-token: write
+# Tự động hủy các bản build cũ nếu có commit mới đẩy lên liên tục
 concurrency:
   group: "pages"
   cancel-in-progress: true
-
 jobs:
-  build-and-deploy:
+  # =========================================================
+  # JOB 1: ĐÓNG GÓI MÃ NGUỒN (BUILD)
+  # =========================================================
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
-
+          node-version: "22" # Nâng lên Node 22 để fix dứt điểm cảnh báo Deprecation của Node 20
       - name: Install dependencies
         run: npm install esbuild@0.27.7 react@19.2.6 react-dom@19.2.6
         env:
           NODE_OPTIONS: "--no-deprecation"
-
       - name: Prepare build folder
         run: |
           mkdir -p build
           cp App.jsx build/App.jsx
           cp docker_setup/mount.jsx build/mount.jsx
-
       - name: Build bundle with esbuild
         run: |
           mkdir -p dist
           npx esbuild build/mount.jsx --bundle --loader:.jsx=jsx --jsx=automatic --format=esm --outfile=dist/mount.js --minify
-
       - name: Copy index.html
         run: cp index.html dist/index.html
-
       - name: Copy logos folder
         run: |
           mkdir -p dist/logos
           cp -r logos/. dist/logos/ || true
-
       - name: Copy ECG demo samples folder
         run: |
           mkdir -p dist/ecg_samples
           cp -r ecg_samples/. dist/ecg_samples/ || true
-
-      - name: Deploy to gh-pages branch
-        uses: JamesIves/github-pages-deploy-action@v4
+      - name: Setup GitHub Pages configuration
+        uses: actions/configure-pages@v5
+      - name: Upload build artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          folder: dist # Thư mục chứa sản phẩm sau khi build xong
-          branch: gh-pages # Tự động đẩy toàn bộ file tĩnh sang nhánh này để làm giao diện web
+          path: dist
+  # =========================================================
+  # JOB 2: TRIỂN KHAI LÊN SERVER GITHUB PAGES (DEPLOY)
+  # =========================================================
+  # "Deployment failed, try again later" thường là lỗi TẠM THỜI phía hạ
+  # tầng GitHub Pages (nghẽn/quá tải dịch vụ) — hay gặp khi deploy liên tục
+  # nhiều lần trong thời gian ngắn, KHÔNG PHẢI lỗi cấu hình workflow. Không
+  # có action retry chính thức nào cho actions/deploy-pages, nên lặp thủ
+  # công tối đa 3 lần bằng continue-on-error + if — cú pháp chuẩn, không
+  # phụ thuộc action bên thứ 3 chưa xác minh.
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 15
+    # Khai báo environment bắt buộc để nhận diện đúng OIDC Token
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy_1.outputs.page_url || steps.deploy_2.outputs.page_url || steps.deploy_3.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages (lần 1)
+        id: deploy_1
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Chờ 20s trước khi thử lại (nếu lần 1 lỗi)
+        if: steps.deploy_1.outcome == 'failure'
+        run: sleep 20
+
+      - name: Deploy to GitHub Pages (lần 2, chỉ chạy nếu lần 1 lỗi)
+        id: deploy_2
+        if: steps.deploy_1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Chờ 30s trước khi thử lại lần cuối (nếu lần 1+2 đều lỗi)
+        if: steps.deploy_1.outcome == 'failure' && steps.deploy_2.outcome == 'failure'
+        run: sleep 30
+
+      - name: Deploy to GitHub Pages (lần 3, chỉ chạy nếu lần 1+2 đều lỗi)
+        id: deploy_3
+        if: steps.deploy_1.outcome == 'failure' && steps.deploy_2.outcome == 'failure'
+        uses: actions/deploy-pages@v4
