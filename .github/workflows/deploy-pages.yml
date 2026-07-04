@@ -1,0 +1,91 @@
+name: Deploy MedParcours AI to GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+    # BỎ QUA các thay đổi ở Backend (Python, Docker, DB) để không trigger build web oan
+    paths-ignore:
+      - 'cde/**'
+      - '*.py'
+      - 'requirements*.txt'
+      - 'docker*'
+      - 'README.md'
+  workflow_dispatch:
+
+# Cấp quyền tối thượng cho OIDC Token và GitHub Pages (Bắt buộc)
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Tự động hủy các bản build cũ nếu có commit mới đẩy lên liên tục
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  # =========================================================
+  # JOB 1: ĐÓNG GÓI MÃ NGUỒN (BUILD)
+  # =========================================================
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22" # Nâng lên Node 22 để fix dứt điểm cảnh báo Deprecation của Node 20
+
+      - name: Install dependencies
+        run: npm install esbuild@0.27.7 react@19.2.6 react-dom@19.2.6
+        env:
+          NODE_OPTIONS: "--no-deprecation"
+
+      - name: Prepare build folder
+        run: |
+          mkdir -p build
+          cp App.jsx build/App.jsx
+          cp docker_setup/mount.jsx build/mount.jsx
+
+      - name: Build bundle with esbuild
+        run: |
+          mkdir -p dist
+          npx esbuild build/mount.jsx --bundle --loader:.jsx=jsx --jsx=automatic --format=esm --outfile=dist/mount.js --minify
+
+      - name: Copy index.html
+        run: cp index.html dist/index.html
+
+      - name: Copy logos folder
+        run: |
+          mkdir -p dist/logos
+          cp -r logos/. dist/logos/ || true
+
+      - name: Copy ECG demo samples folder
+        run: |
+          mkdir -p dist/ecg_samples
+          cp -r ecg_samples/. dist/ecg_samples/ || true
+
+      - name: Setup GitHub Pages configuration
+        uses: actions/configure-pages@v5
+
+      - name: Upload build artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  # =========================================================
+  # JOB 2: TRIỂN KHAI LÊN SERVER GITHUB PAGES (DEPLOY)
+  # =========================================================
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    # Khai báo environment bắt buộc để nhận diện đúng OIDC Token
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

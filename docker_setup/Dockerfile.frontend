@@ -1,0 +1,35 @@
+# Frontend MedParcours AI — build bằng esbuild, ĐÓNG GÓI React TRỰC TIẾP vào
+# bundle (không dùng CDN import map) để demo chạy chắc chắn, không phụ thuộc
+# mạng ngoài lúc chạy. Khác với cách validate khi DEV (esbuild --external:react,
+# giả định React có sẵn ở môi trường khác) — ở ĐÂY ta cần 1 bundle độc lập
+# chạy được ngay khi mở trình duyệt, nên cài react/react-dom làm devDependency
+# rồi để esbuild tự đóng gói (không thêm --external).
+FROM node:20-slim AS build
+
+WORKDIR /app
+RUN npm install esbuild@0.27.7 react@19.2.6 react-dom@19.2.6
+
+COPY App.jsx docker_setup/mount.jsx ./
+# --jsx=automatic BẮT BUỘC: App.jsx dùng JSX nhưng KHÔNG import React mặc định
+# (chỉ import named exports như useState). Nếu thiếu cờ này, esbuild dùng JSX
+# "classic" transform (React.createElement) cần biến React global tồn tại ->
+# lỗi runtime "React is not defined" khi mở trong browser (ĐÃ XÁC NHẬN QUA TEST
+# THẬT bằng Puppeteer trước khi viết file này — không phải suy đoán).
+RUN npx esbuild mount.jsx --bundle --loader:.jsx=jsx --jsx=automatic --format=esm \
+    --outfile=bundle.js --minify
+
+# ─── Giai đoạn phục vụ tĩnh ────────────────────────────────────────────────
+FROM nginx:alpine
+
+COPY --from=build /app/bundle.js /usr/share/nginx/html/mount.js
+COPY docker_setup/index.html /usr/share/nginx/html/index.html
+# logos/ là thư mục tùy chọn (app vẫn chạy nếu thiếu, chỉ ẩn logo) -- nếu
+# không có thư mục này khi build, COPY sẽ lỗi, nên kiểm tra trước ở CI/script
+# build thay vì COPY trực tiếp một thư mục có thể không tồn tại.
+COPY logos/ /usr/share/nginx/html/logos/
+# ecg_samples/ chứa ảnh gốc đầy đủ (không cắt) của các ca demo ECG -- dùng
+# cho phần "Ảnh gốc" đối chiếu trong EcgPage, tách khỏi dữ liệu số hóa
+# (signal/r_peaks) đã nhúng sẵn trong App.jsx.
+COPY ecg_samples/ /usr/share/nginx/html/ecg_samples/
+
+EXPOSE 80

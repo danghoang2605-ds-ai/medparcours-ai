@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MedParcours AI</title>
+  <script>
+    // Override API_URL để trỏ về backend trong docker-compose network.
+    // Mặc định trong App.jsx trỏ HF Spaces — KHÔNG đúng khi chạy Docker local.
+    window.MEDIFLOW_API_URL = window.MEDIFLOW_API_URL || "http://localhost:8000";
+  </script>
+  <!--
+    React được ĐÓNG GÓI TRỰC TIẾP vào bundle.js (xem Dockerfile.frontend),
+    không cần CDN ngoài -> không có import map ở đây, khác với cách App.jsx
+    validate lúc dev (esbuild --external:react). Bundle độc lập, chạy được
+    ngay khi mở trình duyệt mà không cần mạng ngoài.
+  -->
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/mount.js"></script>
+</body>
+</html>

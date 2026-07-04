@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+anthropic
+requests
+pypdf
+python-multipart
+pydantic
+python-dotenv
+opencv-python-headless
+numpy
+scipy
+python-docx
+python-pptx
+openpyxl
+libsql-client
