@@ -41,6 +41,13 @@ from typing import Optional
 import requests
 
 
+# Cache access_token OAuth cho eKYC ở cấp MODULE (không phải instance) —
+# nhiều request backend có thể tạo VNPTClient() mới mỗi lần gọi, cache ở
+# instance sẽ vô nghĩa (luôn mất khi tạo instance mới). Cache ở module để
+# dùng lại token trong cùng tiến trình cho tới khi hết hạn thật.
+_EKYC_OAUTH_CACHE = {}
+
+
 class VNPTAPIError(Exception):
     """Lỗi khi gọi API VNPT — main.py bắt lỗi này (và mọi Exception khác) để
     tự động rơi về Claude, không để lộ ra ngoài cho bác sĩ thấy."""
@@ -122,6 +129,19 @@ class VNPTClient:
         self.ekyc_token_id = os.environ.get("VNPT_EKYC_TOKEN_ID", "").strip() or self.token_id
         self.ekyc_token_key = os.environ.get("VNPT_EKYC_TOKEN_KEY", "").strip() or self.token_key
         self.ekyc_access_token = os.environ.get("VNPT_EKYC_ACCESS_TOKEN", "").strip() or self.access_token
+        # eKYC có KIẾN TRÚC XÁC THỰC KHÁC HẲN SmartReader/TTS/STT — xác
+        # nhận thật qua lỗi 401 "No permission to access api" (mã lỗi
+        # NGHĨA LÀ token hợp lệ về ĐỊNH DẠNG nhưng KHÔNG có quyền, khác hẳn
+        # "TOKEN INVALID"). Tài liệu BTC có riêng mục "API lấy access token
+        # bảo mật dựa vào tài khoản" — eKYC cần username/password (KHÁC
+        # access_token tĩnh) gọi POST /auth/oauth/token để lấy access_token
+        # MỚI trước khi gọi bất kỳ API eKYC nào. Nếu chưa cấu hình username/
+        # password, tự rơi về access_token tĩnh cũ (không phá vỡ nếu hóa ra
+        # không cần OAuth thật).
+        self.ekyc_username = os.environ.get("VNPT_EKYC_USERNAME", "").strip()
+        self.ekyc_password = os.environ.get("VNPT_EKYC_PASSWORD", "").strip()
+        self.ekyc_client_id = os.environ.get("VNPT_EKYC_CLIENT_ID", "clientapp").strip()
+        self.ekyc_client_secret = os.environ.get("VNPT_EKYC_CLIENT_SECRET", "").strip()
         # Bộ token riêng cho tóm tắt cuộc họp (eval-emotion-service) — path
         # domain KHÁC hẳn stt-service (dùng cho STT thường), theo đúng
         # pattern đã xác nhận: mỗi sản phẩm VNPT thường có bộ Token-id/
@@ -131,6 +151,39 @@ class VNPTClient:
         self.summary_token_id = os.environ.get("VNPT_SUMMARY_TOKEN_ID", "").strip() or self.stt_token_id
         self.summary_token_key = os.environ.get("VNPT_SUMMARY_TOKEN_KEY", "").strip() or self.stt_token_key
         self.summary_access_token = os.environ.get("VNPT_SUMMARY_ACCESS_TOKEN", "").strip() or self.stt_access_token
+
+    def _get_ekyc_oauth_token(self) -> str:
+        """
+        Lấy access_token eKYC qua OAuth (POST /auth/oauth/token với
+        username/password) nếu đã cấu hình — cache lại trong bộ nhớ tiến
+        trình, tự gọi lại khi hết hạn (trừ hao 60s an toàn trước
+        expires_in thật). Nếu CHƯA cấu hình username/password, trả về
+        access_token tĩnh cũ (self.ekyc_access_token) — không ép buộc
+        OAuth nếu chưa rõ có cần hay không.
+        """
+        if not self.ekyc_username or not self.ekyc_password:
+            return self.ekyc_access_token
+        now = time.time()
+        cached = _EKYC_OAUTH_CACHE.get("token")
+        expires_at = _EKYC_OAUTH_CACHE.get("expires_at", 0)
+        if cached and now < expires_at:
+            return cached
+        payload = {
+            "username": self.ekyc_username, "password": self.ekyc_password,
+            "client_id": self.ekyc_client_id, "grant_type": "password",
+            "client_secret": self.ekyc_client_secret,
+        }
+        resp = requests.post(f"{self.domain}/auth/oauth/token",
+                              headers={"Content-Type": "application/json"}, json=payload, timeout=20)
+        _raise_with_body(resp)
+        data = resp.json()
+        token = data.get("access_token")
+        if not token:
+            raise VNPTAPIError(f"OAuth eKYC không trả về access_token. Response: {data}")
+        expires_in = int(data.get("expires_in") or 3600)
+        _EKYC_OAUTH_CACHE["token"] = token
+        _EKYC_OAUTH_CACHE["expires_at"] = now + max(expires_in - 60, 60)
+        return token
 
     def _headers(self, content_type: Optional[str] = "application/json",
                  token_id: Optional[str] = None, token_key: Optional[str] = None,
@@ -456,7 +509,7 @@ class VNPTClient:
         mime = mimetypes.guess_type(filename)[0] or "image/jpeg"
         files = {"file": (filename, file_bytes, mime)}
         data = {"title": title, "description": title}
-        headers = self._headers(content_type=None, token_id=self.ekyc_token_id, token_key=self.ekyc_token_key, access_token=self.ekyc_access_token)
+        headers = self._headers(content_type=None, token_id=self.ekyc_token_id, token_key=self.ekyc_token_key, access_token=self._get_ekyc_oauth_token())
         resp = requests.post(url, headers=headers, files=files, data=data, timeout=30)
         _raise_with_body(resp)
         data = resp.json()
@@ -478,7 +531,7 @@ class VNPTClient:
                    "crop_param": "0,0", "client_session": client_session, "token": ""}
         if img_back_bytes:
             payload["img_back"] = self._ekyc_upload_file(img_back_bytes, "cccd_back.jpg", "cccd_back")
-        headers = self._headers(token_id=self.ekyc_token_id, token_key=self.ekyc_token_key, access_token=self.ekyc_access_token)
+        headers = self._headers(token_id=self.ekyc_token_id, token_key=self.ekyc_token_key, access_token=self._get_ekyc_oauth_token())
         resp = requests.post(f"{self.domain}/ai/v1/ocr/id", headers=headers, json=payload, timeout=30)
         _raise_with_body(resp)
         data = resp.json()
@@ -500,7 +553,7 @@ class VNPTClient:
         client_session = f"medparcours-{int(time.time())}"
         img_hash = self._ekyc_upload_file(img_bytes, "face.jpg", "face")
         payload = {"img": img_hash, "token": "", "client_session": client_session}
-        headers = self._headers(token_id=self.ekyc_token_id, token_key=self.ekyc_token_key, access_token=self.ekyc_access_token)
+        headers = self._headers(token_id=self.ekyc_token_id, token_key=self.ekyc_token_key, access_token=self._get_ekyc_oauth_token())
         resp = requests.post(f"{self.domain}/ai/v1/face/liveness", headers=headers, json=payload, timeout=30)
         _raise_with_body(resp)
         data = resp.json()
@@ -522,7 +575,7 @@ class VNPTClient:
         client_session = f"medparcours-{int(time.time())}"
         img_hash = self._ekyc_upload_file(img_bytes, "cccd_check.jpg", "cccd_check")
         payload = {"img": img_hash, "token": "", "client_session": client_session, "crop_param": "0,0"}
-        headers = self._headers(token_id=self.ekyc_token_id, token_key=self.ekyc_token_key, access_token=self.ekyc_access_token)
+        headers = self._headers(token_id=self.ekyc_token_id, token_key=self.ekyc_token_key, access_token=self._get_ekyc_oauth_token())
         resp = requests.post(f"{self.domain}/ai/v1/card/liveness", headers=headers, json=payload, timeout=30)
         _raise_with_body(resp)
         data = resp.json()
@@ -545,7 +598,7 @@ class VNPTClient:
         img_face_hash = self._ekyc_upload_file(img_face_bytes, "face.jpg", "face_compare")
         payload = {"img_front": img_front_hash, "img_face": img_face_hash,
                    "client_session": client_session, "token": ""}
-        headers = self._headers(token_id=self.ekyc_token_id, token_key=self.ekyc_token_key, access_token=self.ekyc_access_token)
+        headers = self._headers(token_id=self.ekyc_token_id, token_key=self.ekyc_token_key, access_token=self._get_ekyc_oauth_token())
         resp = requests.post(f"{self.domain}/ai/v1/face/compare", headers=headers, json=payload, timeout=30)
         _raise_with_body(resp)
         data = resp.json()

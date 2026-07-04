@@ -3,7 +3,6 @@ name: Deploy MedParcours AI to GitHub Pages
 on:
   push:
     branches: ["main"]
-    # BỎ QUA các thay đổi ở Backend (Python, Docker, DB) để không trigger build web oan
     paths-ignore:
       - 'cde/**'
       - '*.py'
@@ -12,22 +11,16 @@ on:
       - 'README.md'
   workflow_dispatch:
 
-# Cấp quyền tối thượng cho OIDC Token và GitHub Pages (Bắt buộc)
+# Cấp quyền ghi nội dung để hệ thống tự tạo và cập nhật nhánh gh-pages
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
-# Tự động hủy các bản build cũ nếu có commit mới đẩy lên liên tục
 concurrency:
   group: "pages"
   cancel-in-progress: true
 
 jobs:
-  # =========================================================
-  # JOB 1: ĐÓNG GÓI MÃ NGUỒN (BUILD)
-  # =========================================================
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -36,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22" # Nâng lên Node 22 để fix dứt điểm cảnh báo Deprecation của Node 20
+          node-version: "22"
 
       - name: Install dependencies
         run: npm install esbuild@0.27.7 react@19.2.6 react-dom@19.2.6
@@ -67,25 +60,8 @@ jobs:
           mkdir -p dist/ecg_samples
           cp -r ecg_samples/. dist/ecg_samples/ || true
 
-      - name: Setup GitHub Pages configuration
-        uses: actions/configure-pages@v5
-
-      - name: Upload build artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Deploy to gh-pages branch
+        uses: JamesIves/github-pages-deploy-action@v4
         with:
-          path: dist
-
-  # =========================================================
-  # JOB 2: TRIỂN KHAI LÊN SERVER GITHUB PAGES (DEPLOY)
-  # =========================================================
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-    # Khai báo environment bắt buộc để nhận diện đúng OIDC Token
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          folder: dist # Thư mục chứa sản phẩm sau khi build xong
+          branch: gh-pages # Tự động đẩy toàn bộ file tĩnh sang nhánh này để làm giao diện web

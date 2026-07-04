@@ -1919,7 +1919,7 @@ function assessTrajectory(report) {
 
 const TRAJECTORY_META = {
   tot:      { label:"Đang đáp ứng điều trị tốt", color:"#059669", bg:"linear-gradient(120deg,#ECFDF5,#F0FDFA)", border:"#A7F3D0", icon:"up" },
-  on_dinh:  { label:"Tiến triển ổn định", color:"#1D6FE8", bg:"linear-gradient(120deg,#EFF6FF,#F0F9FF)", border:"#BFDBFE", icon:"flat" },
+  on_dinh:  { label:"Tiến triển ổn định", color:"#16A34A", bg:"linear-gradient(120deg,#F0FDF4,#F7FEE7)", border:"#BBF7D0", icon:"flat" },
   xau:      { label:"Có dấu hiệu xấu đi, cần chú ý", color:"#DC2626", bg:"linear-gradient(120deg,#FEF2F2,#FFF1F2)", border:"#FECACA", icon:"down" },
 }
 
@@ -2191,7 +2191,7 @@ ${(()=>{const{findings,egfr,ctx}=runPriorityScreens(r);const s=checkDrugSafety(r
 ${riskScoresPrintBlock}
 ${ttrPrintBlock}
 ${careGapsPrintBlock}
-<h2>X. Tóm tắt</h2><p>${r.tom_tat_toan_canh}</p>`
+<h2>X. Tóm tắt</h2>${splitTomTatTheoGiaiDoan(r.tom_tat_toan_canh).map(sec=>`${sec.tieuDe?`<div class="tomtat-giaidoan-t">${sec.tieuDe}</div>`:""}<ul class="tomtat-giaidoan-ul">${sec.cau.map(c=>`<li>${c}</li>`).join("")}</ul>`).join("")}`
   const mdtPrintBody = (rr) => {
     const m = deriveMDT(rr)
     let h = `<h2>I. Tổng quan nguy cơ (MDT Risk Dashboard)</h2><table><tr><th>Vấn đề</th><th>Mức độ</th></tr>` + m.risk.map(d=>`<tr><td>${d.ten}</td><td>${d.pct}%</td></tr>`).join("") + `</table>`
@@ -2228,7 +2228,7 @@ ${careGapsPrintBlock}
   else if(mode==="full") bodyHtml = sectionSep("PHẦN A - BÁO CÁO LÂM SÀNG") + clinicalBody + sectionSep("PHẦN B - BIÊN BẢN HỘI CHẨN ĐA CHUYÊN KHOA") + mdtPrintBody(r) + sectionSep("PHẦN C - TÀI LIỆU GIẢNG DẠY") + teachingPrintBody(r)
   const win = window.open("", "_blank", "width=900,height=700")
   win.document.write(`<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>${meta.title}: ${p.ho_ten}</title>
-<style>body{font-family:'Times New Roman',serif;color:#000;font-size:11pt;line-height:1.55;background:#fff;margin:0}.page{padding:18mm 16mm;max-width:210mm;margin:0 auto}h1{font-size:13pt;text-transform:uppercase;margin:0 0 2pt}h2{font-size:10pt;font-weight:700;text-transform:uppercase;border-bottom:1.5px solid #000;padding-bottom:3pt;margin:14pt 0 7pt}.hdr{border-bottom:2.5px solid #000;padding-bottom:10pt;margin-bottom:8pt;display:flex;justify-content:space-between}.hdr-r{text-align:right;font-size:9pt;color:#444}.sub{font-size:9pt;color:#444;margin:2pt 0}.row{display:flex;gap:6pt;font-size:10pt;margin:3pt 0}.lbl{color:#555;min-width:110pt}table{width:100%;border-collapse:collapse;font-size:10pt;margin:6pt 0 12pt}th{background:#eee;font-weight:700;text-align:left;padding:4pt 7pt;border:1px solid #aaa;font-size:9pt;text-transform:uppercase}td{padding:4pt 7pt;border:1px solid #ccc;vertical-align:top}tr:nth-child(even) td{background:#f9f9f9}.alert{border:1.5px solid #000;border-left:4px solid #000;padding:6pt 10pt;margin:5pt 0}.al{font-size:9pt;font-weight:700;text-transform:uppercase;margin-bottom:2pt}.as{font-size:9pt;color:#555}.footer{border-top:1px solid #999;margin-top:20pt;padding-top:7pt;font-size:8pt;color:#666;display:flex;justify-content:space-between}.stamp{border:1.5px solid #999;width:100pt;height:60pt;display:inline-block;margin-top:8pt;text-align:center;font-size:8pt;padding:5pt;color:#999}@media print{@page{size:A4;margin:18mm 16mm}}</style>
+<style>body{font-family:'Times New Roman',serif;color:#000;font-size:11pt;line-height:1.55;background:#fff;margin:0}.page{padding:18mm 16mm;max-width:210mm;margin:0 auto}h1{font-size:13pt;text-transform:uppercase;margin:0 0 2pt}h2{font-size:10pt;font-weight:700;text-transform:uppercase;border-bottom:1.5px solid #000;padding-bottom:3pt;margin:14pt 0 7pt}.hdr{border-bottom:2.5px solid #000;padding-bottom:10pt;margin-bottom:8pt;display:flex;justify-content:space-between}.hdr-r{text-align:right;font-size:9pt;color:#444}.sub{font-size:9pt;color:#444;margin:2pt 0}.row{display:flex;gap:6pt;font-size:10pt;margin:3pt 0}.lbl{color:#555;min-width:110pt}table{width:100%;border-collapse:collapse;font-size:10pt;margin:6pt 0 12pt}th{background:#eee;font-weight:700;text-align:left;padding:4pt 7pt;border:1px solid #aaa;font-size:9pt;text-transform:uppercase}td{padding:4pt 7pt;border:1px solid #ccc;vertical-align:top}tr:nth-child(even) td{background:#f9f9f9}.alert{border:1.5px solid #000;border-left:4px solid #000;padding:6pt 10pt;margin:5pt 0}.al{font-size:9pt;font-weight:700;text-transform:uppercase;margin-bottom:2pt}.as{font-size:9pt;color:#555}.footer{border-top:1px solid #999;margin-top:20pt;padding-top:7pt;font-size:8pt;color:#666;display:flex;justify-content:space-between}.stamp{border:1.5px solid #999;width:100pt;height:60pt;display:inline-block;margin-top:8pt;text-align:center;font-size:8pt;padding:5pt;color:#999}.tomtat-giaidoan-t{font-size:10pt;font-weight:700;text-decoration:underline;margin:10pt 0 3pt}.tomtat-giaidoan-ul{margin:0 0 4pt 16pt;padding:0}.tomtat-giaidoan-ul li{margin:2pt 0;font-size:10.5pt;line-height:1.5}@media print{@page{size:A4;margin:18mm 16mm}}</style>
 </head><body><div class="page">
 <div class="hdr"><div><div style="font-size:9pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:4pt">${meta.label}</div><h1>${p.ho_ten}</h1><div class="sub">Số bệnh án: ${p.so_benh_an} | ${p.tuoi} tuổi, ${p.gioi_tinh} | ${p.dia_chi}</div><div class="sub">Ngày sinh: ${p.ngay_sinh} | Vào viện: ${p.ngay_vao_vien} | Ra viện: ${p.ngay_ra_vien}</div></div><div class="hdr-r">In ngày: ${new Date().toLocaleDateString("vi-VN")}<br>MedParcours AI v1.2<br><span style="color:#c00;font-weight:700">Cần bác sĩ xác nhận</span></div></div>
 ${bodyHtml}
@@ -3182,6 +3182,7 @@ function CccdLookupModal({ onClose }) {
   const [file, setFile] = useState(null)
   const [cccdNumber, setCccdNumber] = useState("")
   const [ocrData, setOcrData] = useState(null)
+  const [cardWarning, setCardWarning] = useState(null)
   const [errMsg, setErrMsg] = useState("")
   const fileInputRef = useRef()
 
@@ -3190,7 +3191,7 @@ function CccdLookupModal({ onClose }) {
     setFile(f)
     setStep("ocr_loading")
     mpApi.ekycOcrCccd(f)
-      .then(res => { setOcrData(res.data); setStep("ocr_done") })
+      .then(res => { setOcrData(res.data); setCardWarning(res.card_warning || null); setStep("ocr_done") })
       .catch(err => { setErrMsg(err.message || "Không đọc được ảnh CCCD"); setStep("error") })
   }
 
@@ -3200,19 +3201,21 @@ function CccdLookupModal({ onClose }) {
     // truy cập CSDL đó thật, dù đi từ đường NHẬP SỐ hay QUÉT ẢNH. Bước OCR
     // (đường quét ảnh) vẫn là kết quả THẬT từ ảnh vừa tải lên, không bịa —
     // chỉ riêng bước "tìm thấy hồ sơ liên thông" sau đó là mô phỏng.
-    setTimeout(() => {
-      setStep("success")
-      setTimeout(() => window.dispatchEvent(new CustomEvent("mp-load-demo-patient")), 1200)
-    }, 1500)
+    setTimeout(() => setStep("success"), 1500)
+  }
+
+  const openRecord = (id) => {
+    window.dispatchEvent(new CustomEvent("mp-load-demo-patient", { detail: { id } }))
+    onClose()
   }
 
   return (
     <div className="cfm-ov" onClick={onClose}>
       <div className="cfm sim-modal" onClick={e=>e.stopPropagation()}>
-        <div className="cfm-t"><Icon.Note d={16}/>Tra cứu liên thông CCCD (Đề án 06)</div>
+        <div className="cfm-t"><Icon.Note d={16}/>Tra cứu liên thông CCCD qua VNPT eKYC</div>
         {step === "idle" && (
           <>
-            <p className="sim-desc">Nhập số CCCD, hoặc tải ảnh thẻ lên để tự động trích xuất thông tin (VNPT OCR).</p>
+            <p className="sim-desc">Nhập số CCCD, hoặc tải ảnh thẻ lên để tự động trích xuất thông tin (VNPT eKYC OCR).</p>
             <label className="sim-field-lbl">1. Nhập số CCCD</label>
             <input className="sim-input" value={cccdNumber} onChange={e=>setCccdNumber(e.target.value.replace(/\D/g,""))}
               placeholder="Nhập 12 số CCCD..." maxLength={12} inputMode="numeric"/>
@@ -3221,12 +3224,12 @@ function CccdLookupModal({ onClose }) {
             <div className="sim-or-divider">hoặc</div>
             <label className="sim-field-lbl">2. Quét ảnh CCCD</label>
             <input type="file" accept="image/*" ref={fileInputRef} style={{display:"none"}} onChange={e=>pickFile(e.target.files[0])}/>
-            <button className="sim-upload-btn" onClick={()=>fileInputRef.current.click()}><Icon.Upload d={14} color="#1D6FE8"/>Tải ảnh CCCD (VNPT OCR)</button>
+            <button className="sim-upload-btn" onClick={()=>fileInputRef.current.click()}><Icon.Upload d={14} color="#1D6FE8"/>Tải ảnh CCCD (VNPT eKYC OCR)</button>
             <div className="cfm-actions"><button className="btn-secondary-sm" onClick={onClose}>Hủy</button></div>
           </>
         )}
         {step === "ocr_loading" && (
-          <div className="sim-loading"><span className="chat-mic-spin" style={{width:22,height:22,borderWidth:3}}/>Đang gọi VNPT OCR trích xuất CCCD...</div>
+          <div className="sim-loading"><span className="chat-mic-spin" style={{width:22,height:22,borderWidth:3}}/>Đang gọi VNPT eKYC OCR trích xuất CCCD...</div>
         )}
         {step === "error" && (
           <div className="sim-loading" style={{color:"#DC2626"}}>{errMsg}
@@ -3235,6 +3238,9 @@ function CccdLookupModal({ onClose }) {
         )}
         {step === "ocr_done" && ocrData && (
           <>
+            {cardWarning && (
+              <div className="sim-card-warning"><Icon.Alert d={13} color="#B45309"/>Lưu ý: {cardWarning} — vẫn tiếp tục vì đây có thể là báo động giả, bác sĩ tự kiểm tra lại bằng mắt.</div>
+            )}
             <div className="sim-ocr-result">
               {ocrData.name && <div><b>Họ tên:</b> {ocrData.name}</div>}
               {ocrData.id && <div><b>Số CCCD:</b> {ocrData.id}</div>}
@@ -3252,7 +3258,15 @@ function CccdLookupModal({ onClose }) {
         {step === "success" && (
           <div className="sim-success">
             <Icon.ShieldCheck d={28} color="#059669"/>
-            <div>Truy xuất thành công. Đã tìm thấy và đồng bộ <b>02 hồ sơ cũ</b> của bệnh nhân. Đang mở hồ sơ...</div>
+            <div>Truy xuất thành công. Đã đồng bộ hồ sơ cũ của bệnh nhân — đang mở hồ sơ <b>NGUYỄN VĂN A</b>, số bệnh án <b>25.019647</b>.</div>
+            <div className="sim-record-list">
+              <button className="sim-record-btn" onClick={()=>openRecord("BN-A")}>
+                <Icon.FileText d={14} color="#1D6FE8"/>Truy cập hồ sơ — NGUYỄN VĂN A (BA 25.019647)
+              </button>
+              <button className="sim-record-btn" onClick={()=>openRecord("BN-B")}>
+                <Icon.FileText d={14} color="#1D6FE8"/>Truy cập hồ sơ — NGUYỄN VĂN B (BA 26.007850)
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -3351,7 +3365,7 @@ function BiometricSignatureModal({ onClose, onComplete }) {
           </div>
         )}
         {step === "scanning" && (
-          <div className="sim-loading"><span className="chat-mic-spin" style={{width:22,height:22,borderWidth:3}}/>Đang gọi VNPT Liveness API...</div>
+          <div className="sim-loading"><span className="chat-mic-spin" style={{width:22,height:22,borderWidth:3}}/>Đang gọi VNPT eKYC Liveness API...</div>
         )}
         {step === "error" && (
           <div className="sim-loading" style={{color:"#DC2626"}}>{errMsg}
@@ -3361,7 +3375,7 @@ function BiometricSignatureModal({ onClose, onComplete }) {
         {step === "success" && (
           <div className="sim-success">
             <Icon.ShieldCheck d={28} color="#059669"/>
-            <div>Xác thực thành công. {result?.liveness_msg}. Chữ ký điện tử: <b>BS. Nguyễn Văn X</b>.</div>
+            <div>Xác thực thành công{result?.demo_fallback ? "" : `. ${result?.liveness_msg}`}. Chữ ký điện tử: <b>BS. Nguyễn Văn X</b>.</div>
             <button className="btn-primary" onClick={onComplete}>Hoàn tất tải báo cáo</button>
           </div>
         )}
@@ -3387,7 +3401,6 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
     }
   }, [tab])
   const [viewMode, setViewMode] = useState("clinical")
-  const [compactMode, setCompactMode] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [cccdModalOpen, setCccdModalOpen] = useState(false)
   const [ekycModalOpen, setEkycModalOpen] = useState(false)
@@ -3585,9 +3598,11 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
                   </button>
                 )}
               </>}
-              <IconTip text={compactMode ? "Xem đầy đủ" : "Chế độ xem gọn — thu gọn mọi mục, quét nhanh"} position="top">
-                <button className={`nav-compact-btn${compactMode?" active":""}`} onClick={()=>{const next=!compactMode;setCompactMode(next);mpCards(next)}} aria-label="Chế độ xem gọn">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+              <IconTip text={focusMode ? "Thoát chế độ trình chiếu" : "Chế độ trình chiếu — ẩn thanh bên, tập trung nội dung"} position="top">
+                <button className={`nav-compact-btn${focusMode?" active":""}`} onClick={toggleFocusMode} aria-label="Chế độ trình chiếu">
+                  {focusMode
+                    ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+                    : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>}
                 </button>
               </IconTip>
               <button className="nav-bm-btn" onClick={()=>setTab("bookmarks")} title="Mục đã đánh dấu" aria-label="Mục đã đánh dấu">
@@ -3704,6 +3719,13 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
       {cccdModalOpen && <CccdLookupModal onClose={()=>setCccdModalOpen(false)}/>}
       {ekycModalOpen && <BiometricSignatureModal onClose={()=>setEkycModalOpen(false)}
         onComplete={()=>{ setEkycModalOpen(false); triggerPrint(report, viewMode, docNote, bmList, analysis) }}/>}
+      {focusMode && (
+        <div className="focus-mode-bar">
+          <Icon.Note d={14} color="#fff"/>
+          <span>Đang ở chế độ trình chiếu — đã ẩn thanh bên và các mục nhắc nhanh để tập trung nội dung.</span>
+          <button onClick={toggleFocusMode}>Thoát chế độ trình chiếu</button>
+        </div>
+      )}
     </div>
   )
 }
@@ -6160,15 +6182,27 @@ function pickBestAudioMime() {
   }
   return "" // để trình duyệt tự chọn mặc định nếu không cái nào khớp
 }
-function ChatMicButton({ onTranscribed }) {
+// Lấy đúng constructor SpeechRecognition có tiền tố tùy trình duyệt (Chrome/
+// Edge: webkitSpeechRecognition; 1 số trình duyệt mới: SpeechRecognition
+// chuẩn không tiền tố) — trả về null nếu trình duyệt không hỗ trợ, cho
+// phép rơi về hành vi cũ (chỉ hiện text sau khi ghi âm xong) mà không lỗi.
+function getSpeechRecognitionCtor() {
+  if (typeof window === "undefined") return null
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null
+}
+
+function ChatMicButton({ getCurrentInput, onTextChange }) {
   const [isRecording, setIsRecording] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
+  const recognitionRef = useRef(null)
+  const baseTextRef = useRef("") // text đã có SẴN trong ô input trước khi bắt đầu ghi âm — giữ nguyên, chỉ nối thêm phần mới nói
 
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      baseTextRef.current = (getCurrentInput() || "").trim()
       const mime = pickBestAudioMime()
       const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined)
       chunksRef.current = []
@@ -6181,18 +6215,46 @@ function ChatMicButton({ onTranscribed }) {
         try {
           const res = await mpApi.speechToText(blob, `ghi_am.${ext}`)
           if (res.success && res.text) {
-            onTranscribed(res.text)
-          } else {
-            mpToast("Nhận dạng giọng nói tạm thời không khả dụng. Bạn có thể gõ trực tiếp.", "err")
+            // Kết quả VNPT chính xác hơn nhiều so với ước lượng thời gian
+            // thực của trình duyệt — GHI ĐÈ phần vừa nói bằng bản này.
+            const base = baseTextRef.current
+            onTextChange(base ? `${base} ${res.text}` : res.text)
           }
+          // Nếu VNPT lỗi: KHÔNG báo lỗi ồn ào nữa — ô input đã có sẵn text
+          // ước lượng thời gian thực từ SpeechRecognition (nếu trình duyệt
+          // hỗ trợ), bác sĩ vẫn dùng được, chỉ là kém chính xác hơn 1 chút.
         } catch {
-          mpToast("Nhận dạng giọng nói tạm thời không khả dụng. Bạn có thể gõ trực tiếp.", "err")
+          // Giữ nguyên text đã có từ SpeechRecognition, không ghi đè bằng lỗi.
         } finally {
           setIsProcessing(false)
         }
       }
       mediaRecorderRef.current = mr
       mr.start()
+
+      // Song song: SpeechRecognition của trình duyệt để HIỂN THỊ TRỰC TIẾP
+      // chữ đang nói (interimResults=true) — cập nhật ô input NGAY LẬP TỨC
+      // thay vì phải đợi tới lúc dừng ghi âm mới thấy chữ (trải nghiệm cũ).
+      // Đây CHỈ để hiển thị tạm thời — kết quả VNPT ở trên mới là bản CHÍNH
+      // THỨC ghi đè lên khi ghi âm kết thúc.
+      const Recognition = getSpeechRecognitionCtor()
+      if (Recognition) {
+        const rec = new Recognition()
+        rec.lang = "vi-VN"
+        rec.continuous = true
+        rec.interimResults = true
+        rec.onresult = (e) => {
+          let liveText = ""
+          for (let i = 0; i < e.results.length; i++) liveText += e.results[i][0].transcript
+          liveText = liveText.trim()
+          const base = baseTextRef.current
+          onTextChange(base ? `${base} ${liveText}` : liveText)
+        }
+        rec.onerror = () => {} // im lặng — không phải nguồn chính thức, VNPT vẫn chạy song song
+        try { rec.start() } catch {}
+        recognitionRef.current = rec
+      }
+
       setIsRecording(true)
     } catch {
       mpToast("Không truy cập được micro. Hãy cho phép quyền micro cho trang web rồi thử lại.", "err")
@@ -6200,9 +6262,13 @@ function ChatMicButton({ onTranscribed }) {
   }
   const stopRecording = () => {
     try { mediaRecorderRef.current && mediaRecorderRef.current.stop() } catch {}
+    try { recognitionRef.current && recognitionRef.current.stop() } catch {}
     setIsRecording(false)
   }
-  useEffect(() => () => { try { mediaRecorderRef.current && mediaRecorderRef.current.stop() } catch {} }, [])
+  useEffect(() => () => {
+    try { mediaRecorderRef.current && mediaRecorderRef.current.stop() } catch {}
+    try { recognitionRef.current && recognitionRef.current.stop() } catch {}
+  }, [])
 
   return (
     <button type="button" className={`chat-mic-btn${isRecording ? " recording" : ""}`}
@@ -6232,7 +6298,27 @@ function ChatTab({ report, hoSoText, messages, setMessages, mode }) {
   // FAQ khi đang cần hỏi về bệnh án.
   useEffect(() => { setChatMode("clinical") }, [report?.thong_tin_benh_nhan?.so_benh_an])
   const [attachedFile, setAttachedFile] = useState(null)
+  const [attachedFileText, setAttachedFileText] = useState(null)
+  const [attachExtracting, setAttachExtracting] = useState(false)
   const fileInputRef = useRef()
+  const pickAttachFile = async (f) => {
+    if (!f) return
+    setAttachedFile(f); setAttachedFileText(null)
+    if (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")) {
+      setAttachExtracting(true)
+      try {
+        const text = await extractPdfText(f)
+        setAttachedFileText(text)
+      } catch {
+        mpToast("Không đọc được nội dung file PDF này — vẫn gửi được tin nhắn, chỉ là AI sẽ không thấy nội dung file.", "err")
+      } finally {
+        setAttachExtracting(false)
+      }
+    }
+    // File không phải PDF: giữ tag đính kèm hiển thị nhưng KHÔNG trích nội
+    // dung (chỉ hỗ trợ PDF thật theo đúng yêu cầu — ảnh/Word/Excel cần
+    // luồng OCR/trích khác, chưa làm ở đây).
+  }
   const isFaq = chatMode === "faq"
   const activeMsgs = isFaq ? faqMsgs : messages
   const setActiveMsgs = isFaq ? setFaqMsgs : setMessages
@@ -6241,6 +6327,14 @@ function ChatTab({ report, hoSoText, messages, setMessages, mode }) {
   const send = async (text) => {
     const q = text || input.trim(); if (!q || loading) return
     setInput(""); setActiveMsgs(prev => [...prev, {role:"user", content:q}]); setLoading(true)
+    // Nếu có PDF đính kèm đã trích được text thật, ghép vào nội dung hồ sơ
+    // gửi cho AI — KHÔNG bịa/mock nữa, đây là nội dung THẬT của file vừa
+    // tải lên (dùng đúng extractPdfText đã có sẵn cho luồng Cập nhật hồ sơ).
+    const hoSoVoiFileDinhKem = attachedFileText
+      ? `${hoSoText || JSON.stringify(report)}\n\n--- TÀI LIỆU ĐÍNH KÈM THÊM TỪ BÁC SĨ (${attachedFile?.name}) ---\n${attachedFileText}`
+      : (hoSoText || JSON.stringify(report))
+    const hadAttachment = !!attachedFileText
+    setAttachedFile(null); setAttachedFileText(null)
     if (isFaq) {
       try {
         const res = await mpApi.askFaqBot(q)
@@ -6253,7 +6347,7 @@ function ChatTab({ report, hoSoText, messages, setMessages, mode }) {
     }
     try {
       const res = await fetch(`${API_URL}/chat`, {method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({question:q, ho_so_text:hoSoText||JSON.stringify(report), chat_history:messages.slice(-6), mode:chatMode})})
+        body:JSON.stringify({question:q, ho_so_text:hoSoVoiFileDinhKem, chat_history:messages.slice(-6), mode:chatMode})})
       const data = await res.json()
       // Xem ghi chú ở FloatingChat.send(): fetch không tự throw khi status lỗi
       // nhưng vẫn trả JSON hợp lệ -> phải tự kiểm tra res.ok + data.answer.
@@ -6294,11 +6388,13 @@ function ChatTab({ report, hoSoText, messages, setMessages, mode }) {
       {attachedFile && (
         <div className="chat-attach-tag">
           <Icon.FileText d={12} color="#1D6FE8"/>{attachedFile.name}
-          <button onClick={()=>setAttachedFile(null)} aria-label="Bỏ đính kèm"><Icon.Close d={11} color="#7A96C8"/></button>
+          {attachExtracting && <span className="chat-mic-spin" style={{width:11,height:11,borderWidth:2,marginLeft:2}}/>}
+          {!attachExtracting && attachedFileText && <span style={{color:"#059669",fontSize:10.5}}>· đã đọc nội dung</span>}
+          <button onClick={()=>{ setAttachedFile(null); setAttachedFileText(null) }} aria-label="Bỏ đính kèm"><Icon.Close d={11} color="#7A96C8"/></button>
         </div>
       )}
       <div className="chat-input-row">
-        <input type="file" ref={fileInputRef} style={{display:"none"}} onChange={e=>{ if(e.target.files[0]) setAttachedFile(e.target.files[0]); e.target.value="" }}/>
+        <input type="file" ref={fileInputRef} style={{display:"none"}} onChange={e=>{ pickAttachFile(e.target.files[0]); e.target.value="" }}/>
         <IconTip text="Đính kèm tài liệu (giao diện minh họa)" position="top">
           <button type="button" className="chat-attach-btn" onClick={()=>fileInputRef.current.click()} aria-label="Đính kèm file">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
@@ -6307,7 +6403,7 @@ function ChatTab({ report, hoSoText, messages, setMessages, mode }) {
         <input id="chat-input-field" ref={inputRef} className="chat-input" value={input}
           onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()}
           placeholder="Hỏi về bệnh nhân..."/>
-        <ChatMicButton onTranscribed={text => setInput(prev => prev ? `${prev} ${text}` : text)}/>
+        <ChatMicButton getCurrentInput={()=>input} onTextChange={setInput}/>
         <div className="kbd-hint"><kbd className="kbd">Ctrl</kbd><span>+</span><kbd className="kbd">K</kbd></div>
         <button className="send-btn" onClick={()=>{ send(); setAttachedFile(null) }} disabled={!input.trim()||loading}>
           <Icon.Send d={13} color={input.trim()&&!loading?"white":"#9BB5D8"}/>
@@ -6535,6 +6631,26 @@ function matchKw(text, kws){ const t=(text||"").toLowerCase(); return kws.some(k
 function pickCanhBao(r, kws){ return (r.canh_bao_nguy_co||[]).filter(c=>matchKw(c.mo_ta, kws)) }
 function shortLabel(s){ return ((s||"").split(/[:\-]/)[0]||s||"").trim().slice(0,72) }
 function splitSentences(s){ return (s||"").split(/(?<=[.!?])\s+/).map(x=>x.trim()).filter(x=>x.length>2) }
+// tom_tat_toan_canh do AI sinh ra là 1 ĐOẠN VĂN LIỀN MẠCH có các tiêu đề
+// giai đoạn viết hoa xen giữa — dùng ĐÚNG regex đã kiểm chứng trong
+// SummaryCard (đã từng sửa bug case-insensitive bắt nhầm cụm "giai đoạn"
+// viết thường giữa câu văn) thay vì viết lại pattern mới có nguy cơ lặp
+// lại lỗi cũ. Trước đây bản IN chỉ in 1 khối text dính liền không xuống
+// dòng — trong khi màn hình chính (SummaryCard) đã tách bullet đúng từ
+// trước — hàm này đưa bản IN về cùng chất lượng với màn hình chính.
+function splitTomTatTheoGiaiDoan(text) {
+  const safe = text || ""
+  if (!safe.trim()) return []
+  const re = /GIAI ĐO[AẠ]N (TRƯỚC MỔ|SAU MỔ[^:]*|NGOẠI TRÚ[^:]*|HỒI PHỤC[^:]*):/g
+  const markers = [...safe.matchAll(re)]
+  if (!markers.length) return [{ tieuDe: null, cau: splitSentences(safe) }]
+  return markers.map((m, i) => {
+    const start = m.index + m[0].length
+    const end = i + 1 < markers.length ? markers[i + 1].index : safe.length
+    const tieuDe = m[0].replace(/:$/, "").trim()
+    return { tieuDe, cau: splitSentences(safe.slice(start, end)) }
+  })
+}
 
 // ─── Engine Hội chẩn ảo (Virtual MDT) ─────────────────────────────────────────
 const SPEC_DEFS = [
@@ -7070,7 +7186,7 @@ function ConsultationVoiceSummary() {
     <div className="cvs-card">
       <div className="cvs-head">
         <Icon.Mic d={16} color="#1D6FE8"/>
-        <span>Ghi âm &amp; Tóm tắt Hội chẩn (VNPT AI)</span>
+        <span>Ghi âm &amp; Tóm tắt Hội chẩn (VNPT SmartVoice)</span>
       </div>
 
       {step === "idle" && (
@@ -8619,7 +8735,7 @@ body.theme-dark .mt-chip{background:#141E2C;border-color:#2A3A52}
 body.theme-dark .mt-chip.on{background:rgba(29,111,232,0.18)}
 body.theme-dark .takeaway-txt,body.theme-dark .clin-txt,body.theme-dark .lead,body.theme-dark .desc{color:#D6E2F2}
 .sidebar-item.active svg{opacity:1}
-.upd-ov{position:fixed;inset:0;z-index:145;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
+.upd-ov{position:fixed;inset:0;z-index:215;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
 .upd-panel{background:var(--glass);border-radius:16px;width:440px;max-width:100%;box-shadow:0 24px 60px rgba(15,39,64,.3);overflow:hidden}
 .upd-head{display:flex;align-items:center;gap:9px;padding:14px 18px;border-bottom:1px solid var(--border);font-size:14.5px;font-weight:700;color:var(--navy)}
 .upd-head span{flex:1}
@@ -8639,7 +8755,7 @@ body.theme-dark .upd-head{color:#EAF1FB;border-color:#28364E}
 body.theme-dark .upd-drop{border-color:#2F4368;color:#9FB3CC}
 body.theme-dark .upd-drop:hover{border-color:#5FA8FF;background:rgba(95,168,255,.06)}
 body.theme-dark .upd-staged{border-color:#2F4368;color:#9FB3CC}
-.sh-ov{position:fixed;inset:0;z-index:140;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
+.sh-ov{position:fixed;inset:0;z-index:215;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
 .sh-panel{background:#fff;border-radius:16px;width:432px;max-width:100%;box-shadow:0 24px 60px rgba(15,39,64,.3);overflow:hidden}
 .sh-head{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--border);font-size:14px;font-weight:700;color:var(--navy)}
 .sh-head span{flex:1}
@@ -9057,12 +9173,19 @@ body.theme-dark ::selection{background:rgba(91,149,242,.32)}
 .toast.ok{background:linear-gradient(135deg,#0E9488,#1D6FE8)}
 .toast.err{background:#B91C1C}
 @keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-.cfm-ov{position:fixed;inset:0;z-index:210;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
+.cfm-ov{position:fixed;inset:0;z-index:230;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
 .cfm{background:#fff;border-radius:16px;max-width:380px;width:100%;padding:22px;box-shadow:0 24px 60px rgba(15,39,64,.3)}
-.sim-modal{max-width:420px}
+.sim-modal{max-width:640px;width:92vw}
 .sim-ocr-result{background:#F8FAFC;border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.9;color:var(--navy);margin-bottom:14px}
+.sim-card-warning{display:flex;align-items:flex-start;gap:7px;background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;font-size:12px;line-height:1.6;border-radius:10px;padding:9px 12px;margin-bottom:12px}
+.sim-record-list{display:flex;flex-direction:column;gap:8px;width:100%;margin-top:6px}
+.sim-record-btn{display:flex;align-items:center;gap:9px;background:#EFF6FF;border:1px solid #BFDBFE;color:#1D6FE8;font-size:13px;font-weight:600;padding:11px 16px;border-radius:10px;cursor:pointer;text-align:left;font-family:inherit;transition:background .15s}
+.sim-record-btn:hover{background:#DBEAFE}
 /* ─── Ghi âm & Tóm tắt Hội chẩn ─── */
 .cvs-card{background:var(--glass);border:1px solid var(--border);border-radius:16px;padding:18px 20px;margin:16px 0}
+.focus-mode-bar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:170;display:flex;align-items:center;gap:10px;background:#0F2740;color:#fff;font-size:12.5px;padding:10px 16px;border-radius:999px;box-shadow:0 10px 30px rgba(15,39,64,.35);max-width:calc(100vw - 40px)}
+.focus-mode-bar span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.focus-mode-bar button{flex-shrink:0;background:#fff;color:#0F2740;border:none;border-radius:999px;padding:6px 14px;font-size:11.5px;font-weight:700;cursor:pointer}
 .cvs-head{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:800;color:var(--navy);margin-bottom:14px}
 .cvs-idle-row{display:flex;gap:10px;flex-wrap:wrap}
 .cvs-recording{display:flex;align-items:center;gap:9px;font-size:13.5px;color:#DC2626;font-weight:600}
@@ -9090,7 +9213,7 @@ body.theme-dark .cvs-transcript-card{background:#0F1A2C;border-color:#2A3A52}
 .sim-upload-btn{width:100%;display:flex;align-items:center;justify-content:center;gap:7px;border:1px dashed #BFDBFE;background:#EFF6FF;color:#1D6FE8;font-size:12.5px;font-weight:600;padding:10px;border-radius:10px;cursor:pointer;margin-bottom:6px}
 .sim-loading{display:flex;align-items:center;gap:12px;font-size:13px;color:#475569;padding:20px 4px;line-height:1.5}
 .sim-success{display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;padding:12px 4px;font-size:13.5px;color:#0F2740;line-height:1.6}
-.sim-camera-box{position:relative;width:100%;height:130px;background:#0F1A2C;border-radius:14px;display:flex;align-items:center;justify-content:center;margin:14px 0;overflow:hidden}
+.sim-camera-box{position:relative;width:100%;height:340px;background:#0F1A2C;border-radius:14px;display:flex;align-items:center;justify-content:center;margin:14px 0;overflow:hidden}
 .sim-camera-video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
 .sim-camera-box.scanning{background:#0A2A1F}
 .sim-scan-line{position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,#22C55E,transparent);animation:sim-scan 1.4s ease-in-out infinite}
@@ -9511,7 +9634,7 @@ function UnifiedChatWidget({ report, hoSoText, clinicalMessages, setClinicalMess
               onKeyDown={e=>{ if (e.key === "Enter") send() }}
               disabled={loading}
             />
-            <ChatMicButton onTranscribed={text => setInput(prev => prev ? `${prev} ${text}` : text)}/>
+            <ChatMicButton getCurrentInput={()=>input} onTextChange={setInput}/>
             <button className="cw-send-btn" onClick={()=>send()} disabled={loading || !input.trim()} aria-label="Gửi"><Icon.Send d={14}/></button>
           </div>
         </div>
@@ -9702,12 +9825,14 @@ export default function App() {
     setChatMessages([{role:"assistant", content: modeGreeting("clinical", rpt.thong_tin_benh_nhan && rpt.thong_tin_benh_nhan.ho_ten)}])
   }, [])
   // CCCD lookup mock (mount sâu trong ReportPage) cần điều hướng App() mở
-  // hồ sơ demo Nguyễn Văn A sau khi "tìm thấy hồ sơ liên thông" — dùng
-  // custom event, đúng pattern đã có (mp-open-chat-tab/mp-close-chat-widget).
+  // 1 trong 2 hồ sơ demo "tìm thấy liên thông" — dùng custom event, đúng
+  // pattern đã có (mp-open-chat-tab/mp-close-chat-widget). event.detail.id
+  // chọn đúng hồ sơ ("BN-A" hoặc "BN-B"), mặc định "BN-A" nếu không truyền.
   useEffect(() => {
-    const h = () => {
-      setReport(MOCK_REPORT); setHoSoText(JSON.stringify(MOCK_REPORT)); setAnalysis(null)
-      initChat(MOCK_REPORT); setCurrentId("BN-A"); setState("report")
+    const h = (e) => {
+      const rec = e.detail?.id === "BN-B" ? PATIENT_B : MOCK_REPORT
+      setReport(rec); setHoSoText(JSON.stringify(rec)); setAnalysis(null)
+      initChat(rec); setCurrentId(e.detail?.id === "BN-B" ? "BN-B" : "BN-A"); setState("report")
     }
     window.addEventListener("mp-load-demo-patient", h)
     return () => window.removeEventListener("mp-load-demo-patient", h)

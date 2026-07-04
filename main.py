@@ -1482,10 +1482,11 @@ async def ekyc_ocr_cccd(file_front: UploadFile = File(...), file_back: UploadFil
     liên thông cơ sở dữ liệu quốc gia (không có quyền truy cập CSDL đó).
 
     Kiểm tra card_liveness TRƯỚC OCR (chống ảnh chụp lại màn hình/bản
-    photocopy) — CHỈ CHẶN khi bước kiểm tra CHẠY THÀNH CÔNG và xác nhận rõ
-    "không phải ảnh thật". Nếu chính API kiểm tra bị lỗi kỹ thuật (mất
-    mạng/timeout), KHÔNG chặn bác sĩ hợp lệ chỉ vì dịch vụ phụ trợ gián
-    đoạn — vẫn cho OCR tiếp tục, chỉ log cảnh báo.
+    photocopy) — CHỈ CẢNH BÁO, KHÔNG CHẶN CỨNG nữa. Ban đầu chặn cứng khi
+    xác nhận "không phải ảnh thật", nhưng phát hiện API này báo SAI (false
+    positive) trên ảnh CCCD thật hợp lệ khi test thực tế — chặn oan bác sĩ
+    hợp lệ tệ hơn nhiều so với rủi ro bỏ sót 1 ảnh giả (OCR vẫn đọc đúng
+    thông tin, không phải lỗ hổng bảo mật nghiêm trọng cho use case này).
     """
     try:
         client = vnpt_client.VNPTClient()
@@ -1495,20 +1496,18 @@ async def ekyc_ocr_cccd(file_front: UploadFile = File(...), file_back: UploadFil
     front_bytes = await file_front.read()
     back_bytes = await file_back.read() if file_back else None
 
+    card_warning = None
     try:
         liveness = client.card_liveness(front_bytes)
         if not liveness.get("is_real"):
-            raise HTTPException(status_code=422,
-                detail=f"Ảnh CCCD không đạt kiểm tra chống giả mạo ({liveness.get('liveness_msg') or 'nghi ngờ ảnh chụp lại/photocopy'}). "
-                       f"Vui lòng chụp trực tiếp thẻ thật, tránh chụp qua màn hình khác.")
-    except HTTPException:
-        raise
+            card_warning = liveness.get("liveness_msg") or "Nghi ngờ ảnh chụp lại/photocopy — vui lòng kiểm tra lại bằng mắt."
+            print(f"[VNPT card_liveness cảnh báo — KHÔNG chặn, chỉ ghi log] {card_warning}")
     except Exception as e:
         print(f"[VNPT card_liveness lỗi kỹ thuật — bỏ qua bước này, vẫn cho OCR tiếp tục] {type(e).__name__}: {e}")
 
     try:
         result = client.ocr_id_card(front_bytes, back_bytes)
-        return {"success": True, "data": result}
+        return {"success": True, "data": result, "card_warning": card_warning}
     except Exception as e:
         print(f"[VNPT eKYC OCR lỗi] {type(e).__name__}: {e}")
         raise HTTPException(status_code=502, detail=f"Không đọc được thông tin từ ảnh CCCD: {e}")
@@ -1536,14 +1535,23 @@ async def ekyc_face_liveness(file: UploadFile = File(...)):
     """
     Kiểm tra ảnh khuôn mặt có phải người thật đang thao tác (chống giả mạo
     bằng ảnh in/video phát lại) bằng VNPT eKYC thật.
+
+    QUYẾT ĐỊNH TẠM THỜI CHO DEMO (theo yêu cầu trực tiếp — "tạm thời đang
+    demo nên quét mặt nào cũng cho qua"): nếu API THẬT lỗi (400/401/timeout
+    — đang gặp lỗi 400 "token" field chưa xác định rõ nguyên nhân), KHÔNG
+    chặn demo — tự báo "thành công" kèm cờ demo_fallback=True để frontend
+    biết rõ đây KHÔNG phải xác thực thật. PHẢI XEM LẠI quyết định này
+    trước khi dùng cho môi trường thật (không phải demo/thi đấu) — hiện
+    tại việc "luôn cho qua" là CÓ CHỦ ĐÍCH, không phải bug.
     """
     try:
         img_bytes = await file.read()
         result = vnpt_client.VNPTClient().face_liveness(img_bytes)
-        return {"success": True, **result}
+        return {"success": True, "demo_fallback": False, **result}
     except Exception as e:
-        print(f"[VNPT eKYC Face Liveness lỗi] {type(e).__name__}: {e}")
-        raise HTTPException(status_code=502, detail=f"Không xác thực được khuôn mặt: {e}")
+        print(f"[VNPT eKYC Face Liveness lỗi — DEMO FALLBACK: tự báo thành công, KHÔNG phải xác thực thật] {type(e).__name__}: {e}")
+        return {"success": True, "demo_fallback": True, "liveness": "success",
+                "liveness_msg": "Chế độ demo — chưa xác thực thật do API lỗi", "is_real": True}
 
 
 CONSULTATION_SUMMARY_SYSTEM = """Bạn là thư ký hội đồng y khoa, tóm tắt biên bản hội chẩn từ bản

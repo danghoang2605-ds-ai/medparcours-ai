@@ -467,10 +467,17 @@ def test_ekyc_face_liveness_thanh_cong(client, monkeypatch):
     assert resp.json()["is_real"] is True
 
 
-def test_ekyc_face_liveness_loi_tra_502(client):
+def test_ekyc_face_liveness_loi_vnpt_tra_ve_demo_fallback(client):
+    """Quyết định TẠM THỜI cho demo: nếu API thật lỗi (400/timeout...),
+    KHÔNG chặn — tự báo thành công kèm cờ demo_fallback=True để frontend
+    biết rõ đây không phải xác thực thật."""
     with patch("vnpt_client.VNPTClient.face_liveness", side_effect=RuntimeError("VNPT timeout")):
         resp = client.post("/ekyc/face-liveness", files={"file": ("face.jpg", _valid_png_b64_bytes(), "image/jpeg")})
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["demo_fallback"] is True
+    assert data["is_real"] is True
 
 
 # ─── Tóm tắt hội chẩn bằng giọng nói (VNPT + Claude fallback) ─────────────
@@ -522,15 +529,20 @@ def test_consultation_summarize_ca_2_buoc_deu_loi_tra_502(client, monkeypatch):
     assert resp.status_code == 502
 
 
-def test_ekyc_ocr_bi_chan_khi_the_khong_that(client, monkeypatch):
-    """card_liveness xác nhận rõ ảnh KHÔNG phải thẻ thật -> phải chặn OCR,
-    trả 422, không đọc thông tin từ ảnh không đáng tin."""
+def test_ekyc_ocr_khong_bi_chan_khi_the_khong_that_chi_canh_bao(client, monkeypatch):
+    """Bug thật đã sửa: card_liveness báo SAI (false positive) trên ảnh
+    thật hợp lệ khi test thực tế -> đổi từ chặn cứng sang CHỈ cảnh báo,
+    OCR vẫn chạy tiếp bình thường."""
     monkeypatch.setenv("VNPT_TOKEN_ID", "tid")
     monkeypatch.setenv("VNPT_TOKEN_KEY", "tkey")
     monkeypatch.setenv("VNPT_ACCESS_TOKEN", "tok")
-    with patch("vnpt_client.VNPTClient.card_liveness", return_value={"is_real": False, "liveness_msg": "Nghi ngờ ảnh chụp lại"}):
+    with patch("vnpt_client.VNPTClient.card_liveness", return_value={"is_real": False, "liveness_msg": "Nghi ngờ ảnh chụp lại"}), \
+         patch("vnpt_client.VNPTClient.ocr_id_card", return_value={"id": "001099012345", "name": "NGUYEN VAN A"}):
         resp = client.post("/ekyc/ocr-cccd", files={"file_front": ("cccd.jpg", _valid_png_b64_bytes(), "image/jpeg")})
-    assert resp.status_code == 422
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["data"]["name"] == "NGUYEN VAN A"
+    assert data["card_warning"] == "Nghi ngờ ảnh chụp lại"
 
 
 def test_ekyc_ocr_van_chay_khi_card_liveness_loi_ky_thuat(client, monkeypatch):

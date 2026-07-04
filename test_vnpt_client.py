@@ -486,3 +486,68 @@ class TestBoTokenRiengTomTat:
             c.summarize_meeting_audio(b"fake-audio")
         assert captured["headers"]["Token-id"] == "sum-id-rieng"
         assert captured["headers"]["Authorization"] == "Bearer sum-token-rieng"
+
+
+class TestEkycOAuth:
+    def test_khong_co_username_password_dung_access_token_tinh(self, monkeypatch):
+        """Chưa cấu hình username/password -> rơi về access_token tĩnh cũ,
+        không ép buộc OAuth."""
+        vnpt_client._EKYC_OAUTH_CACHE.clear()
+        _set_env(monkeypatch)
+        c = vnpt_client.VNPTClient()
+        assert c._get_ekyc_oauth_token() == c.ekyc_access_token
+
+    def test_co_username_password_goi_oauth_lay_token_moi(self, monkeypatch):
+        """Bug thật đã xác nhận qua log thực tế (401 'No permission to
+        access api'): eKYC cần access_token lấy qua OAuth (username/
+        password), KHÁC access_token tĩnh dùng cho SmartReader/TTS/STT."""
+        vnpt_client._EKYC_OAUTH_CACHE.clear()
+        _set_env(monkeypatch, VNPT_EKYC_USERNAME="bs@benhvien.vn", VNPT_EKYC_PASSWORD="matkhau123")
+        c = vnpt_client.VNPTClient()
+        oauth_resp = MagicMock()
+        oauth_resp.raise_for_status = lambda: None
+        oauth_resp.json.return_value = {"access_token": "token-that-tu-oauth", "expires_in": 3600}
+        with patch.object(vnpt_client.requests, "post", return_value=oauth_resp) as mock_post:
+            token = c._get_ekyc_oauth_token()
+        assert token == "token-that-tu-oauth"
+        assert mock_post.call_args.args[0] == f"{c.domain}/auth/oauth/token"
+        assert mock_post.call_args.kwargs["json"]["username"] == "bs@benhvien.vn"
+
+    def test_token_duoc_cache_khong_goi_oauth_lai_ngay(self, monkeypatch):
+        vnpt_client._EKYC_OAUTH_CACHE.clear()
+        _set_env(monkeypatch, VNPT_EKYC_USERNAME="bs@benhvien.vn", VNPT_EKYC_PASSWORD="matkhau123")
+        c = vnpt_client.VNPTClient()
+        oauth_resp = MagicMock()
+        oauth_resp.raise_for_status = lambda: None
+        oauth_resp.json.return_value = {"access_token": "token-lan-dau", "expires_in": 3600}
+        with patch.object(vnpt_client.requests, "post", return_value=oauth_resp) as mock_post:
+            c._get_ekyc_oauth_token()
+            c._get_ekyc_oauth_token()  # gọi lần 2 ngay -> phải dùng cache, không gọi OAuth lại
+        assert mock_post.call_count == 1
+
+    def test_oauth_dung_de_goi_thuc_su_trong_ocr_id_card(self, monkeypatch):
+        """Xác nhận token từ OAuth THẬT SỰ được dùng khi gọi ocr_id_card,
+        không chỉ tồn tại trong _get_ekyc_oauth_token() mà không áp dụng."""
+        vnpt_client._EKYC_OAUTH_CACHE.clear()
+        _set_env(monkeypatch, VNPT_EKYC_USERNAME="bs@benhvien.vn", VNPT_EKYC_PASSWORD="matkhau123")
+        c = vnpt_client.VNPTClient()
+        oauth_resp = MagicMock()
+        oauth_resp.raise_for_status = lambda: None
+        oauth_resp.json.return_value = {"access_token": "token-oauth-that", "expires_in": 3600}
+        upload_resp = MagicMock()
+        upload_resp.raise_for_status = lambda: None
+        upload_resp.json.return_value = {"hash": "idg-hash"}
+        ocr_resp = MagicMock()
+        ocr_resp.raise_for_status = lambda: None
+        ocr_resp.json.return_value = {"object": {"name": "NGUYEN VAN A"}}
+        captured = {}
+        def fake_post(url, headers=None, **kwargs):
+            if url.endswith("/auth/oauth/token"):
+                return oauth_resp
+            if "addFile" in url:
+                return upload_resp
+            captured["headers"] = headers
+            return ocr_resp
+        with patch.object(vnpt_client.requests, "post", side_effect=fake_post):
+            c.ocr_id_card(b"fake-cccd-bytes")
+        assert captured["headers"]["Authorization"] == "Bearer token-oauth-that"
