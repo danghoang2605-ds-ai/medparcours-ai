@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MedParcours AI</title>
+  <!--
+    KHÔNG override window.MEDIFLOW_API_URL ở đây — App.jsx đã có sẵn default
+    trỏ đúng Hugging Face Space (xem dòng đầu App.jsx). File này CHỈ dùng cho
+    bản deploy GitHub Pages thật; bản Docker local dùng index.html riêng ở
+    docker_setup/ (có override localhost:8000).
+  -->
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="./mount.js"></script>
+</body>
+</html>
