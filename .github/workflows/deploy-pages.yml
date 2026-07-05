@@ -36,6 +36,8 @@ jobs:
       - name: Install dependencies
         run: npm install esbuild@0.27.7 react@19.2.6 react-dom@19.2.6
         env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           NODE_OPTIONS: "--no-deprecation"
       - name: Prepare build folder
         run: |
