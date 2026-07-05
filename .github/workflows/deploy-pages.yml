@@ -34,7 +34,7 @@ jobs:
         with:
           node-version: "22" # Nâng lên Node 22 để fix dứt điểm cảnh báo Deprecation của Node 20
       - name: Install dependencies
-        run: npm install esbuild@0.27.7 react@19.2.6 react-dom@19.2.6
+        run: npm install esbuild@0.27.7 react@19.2.6 react-dom@19.2.6 @supabase/supabase-js
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
@@ -50,6 +50,15 @@ jobs:
         run: |
           mkdir -p dist
           npx esbuild build/mount.jsx --bundle --loader:.jsx=jsx --jsx=automatic --format=esm --outfile=dist/mount.js --minify
+      - name: Create runtime env file
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          cat > dist/env.js <<EOF
+          window.SUPABASE_URL = "${VITE_SUPABASE_URL}";
+          window.SUPABASE_ANON_KEY = "${VITE_SUPABASE_ANON_KEY}";
+          EOF
       - name: Copy index.html
         run: cp index.html dist/index.html
       - name: Copy logos folder
