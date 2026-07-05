@@ -1,119 +1,129 @@
-# MedParcours AI
+# 🩺 MedParcours AI
 
-**Trợ lý AI phân tích hồ sơ bệnh án tiếng Việt cho bác sĩ — chuyển 1 bộ hồ sơ giấy/PDF dài thành báo cáo có cấu trúc, cảnh báo rủi ro lâm sàng và hỗ trợ hỏi đáp trong ~30 giây.**
+**Trợ lý Lâm sàng Thông minh (Clinical Decision Support System) cho bác sĩ Việt Nam — biến 1 bộ hồ sơ giấy/PDF dày hàng chục trang thành báo cáo có cấu trúc, cảnh báo rủi ro lâm sàng và hỗ trợ hỏi đáp trong ~30 giây.**
 
-Team **UN1SVENGERS** · Vietnamese Student HackAIthon 2026 · Bảng B Challenger · Đề tài 5: Y tế
+**Team UN1SVENGERS** · Vietnamese Student HackAIthon 2026 · Bảng B Challenger · Đề tài 5: Y tế
 
 ---
 
-## 1. Vấn đề & giải pháp
+## 1. 🌟 Tầm nhìn & Tiêu điểm sản phẩm
 
-Bác sĩ tại bệnh viện tuyến tỉnh/huyện thường phải đọc hồ sơ bệnh án dài hàng chục trang trong thời gian rất ngắn giữa các ca khám, dễ bỏ sót cảnh báo lâm sàng quan trọng (tương tác thuốc, ngưỡng chống đông sai theo loại van tim, xu hướng xét nghiệm bất thường...).
+**Vấn đề y tế thực tế**: Đứt gãy thông tin bệnh án liên viện, bác sĩ tuyến tỉnh/huyện quá tải bởi hồ sơ giấy/PDF thô trong thời gian khám cực ngắn, dễ bỏ sót cảnh báo lâm sàng quan trọng (tương tác thuốc, ngưỡng chống đông sai theo loại van tim, xu hướng xét nghiệm bất thường).
 
-MedParcours AI đọc toàn bộ hồ sơ (PDF/DOCX/XLSX/PPTX/ảnh scan), trích xuất có cấu trúc bằng Claude, sau đó chạy qua **bộ luật lâm sàng tất định (deterministic rule engine)** để tính toán các chỉ số an toàn — **không giao phó việc tính toán y khoa cho LLM**, chỉ dùng LLM để đọc hiểu văn bản và diễn giải theo ngữ cảnh.
+**Giải pháp**: MedParcours AI kết hợp **Generative AI (Claude)** để đọc hiểu văn bản tự do, với **Hệ luật Lâm sàng Quyết định (CDE v2 — Deterministic Rule Engine)** để tính toán mọi chỉ số có ý nghĩa y khoa. Đây là lựa chọn kiến trúc có chủ đích, không phải giới hạn kỹ thuật.
 
-## 2. Tính năng chính
+> *"LLM giỏi đọc hiểu ngôn ngữ tự nhiên, nhưng không nên là nơi duy nhất quyết định 1 con số y khoa. Claude ở đây đóng vai trò người đọc hồ sơ và diễn giải ngữ cảnh — mọi phép tính (ngưỡng INR, eGFR, thang điểm nguy cơ) đều chạy qua code Python tất định, có thể kiểm tra, có thể viết test, không đổi khác giữa 2 lần chạy cùng 1 dữ liệu."*
 
-**Phân tích hồ sơ**
-- Đọc PDF/DOCX/XLSX/PPTX (trích text trực tiếp) và ảnh scan (OCR qua VNPT SmartReader, tự động rơi về Claude Vision nếu lỗi)
-- Tóm tắt diễn biến theo 3 giai đoạn (trước mổ / hậu phẫu / ngoại trú), phát hiện cảnh báo nguy cơ, biện luận lâm sàng đa biến
-- Cập nhật hồ sơ đã lưu (gộp tài liệu tái khám mới, không ghi đè)
+## 2. 🧠 Kiến trúc công nghệ — Hybrid AI kháng ảo giác
 
-**Rule engine lâm sàng (`cde/`)** — tất định, không suy đoán từ LLM
-- Phân loại 10 nhóm bệnh cảnh theo ICD-10 hệ tuần hoàn, mỗi nhóm gắn đúng thang điểm khuyến nghị
-- Ngưỡng INR mục tiêu theo ESC/EACTS 2021 + AHA/ACC 2020, phân tầng đầy đủ theo **vị trí van** (động mạch chủ/hai lá/ba lá) × **thế hệ van** × **yếu tố nguy cơ** — phân biệt rõ van cơ học và van sinh học dù cùng tên thương hiệu (vd "St Jude" có cả 2 dòng sản phẩm)
-- TTR (Time in Therapeutic Range), CHA2DS2-VASc, HAS-BLED, eGFR (CKD-EPI 2021), an toàn thuốc theo chức năng thận
-- Cảnh báo rõ khi TTR đo trong giai đoạn hậu phẫu (liều chưa ổn định) — chỉ mang tính tham khảo
+Điểm khác biệt cốt lõi so với 1 chatbot y tế thông thường:
 
-**Điện tâm đồ**: số hóa ảnh ECG thành tín hiệu, ước lượng nhịp tim qua khoảng R-R, bác sĩ xác nhận đúng chuyển đạo đã chụp (mặc định Lead II theo quy ước lâm sàng cho dải nhịp)
+| Lớp | Vai trò | Vị trí trong code |
+|---|---|---|
+| **LLM (Claude)** | Đọc hồ sơ tự do (PDF/ảnh/scan), trích xuất có cấu trúc, viết narrative lâm sàng | `main.py` (REPORT_SYSTEM) |
+| **CDE v2 (Rule Engine)** | Tính eGFR (CKD-EPI 2021), CHA2DS2-VASc, HAS-BLED, ngưỡng INR theo ESC/EACTS 2021 + AHA/ACC 2020, TTR | `cde/` — Python thuần, tất định 100%, **không đi qua LLM** |
 
-**Trợ lý hội thoại MedAmi**: hỏi đáp theo đúng ngữ cảnh hồ sơ đang mở, lưu lịch sử theo từng bệnh nhân; tách riêng FAQ hệ thống (Smartbot)
+**Chuẩn hóa văn phong lâm sàng Việt Nam** — theo phản hồi trực tiếp từ chuyên gia y tế (Tấn, Ngân — Đại học Y Hà Nội), đã đưa thành luật bắt buộc trong system prompt:
+- Việt hóa 100% thuật ngữ (cấm `post-op`, `over-diuresis`... phải dùng `sau phẫu thuật`, `lợi tiểu quá mức`) — chỉ giữ nguyên tên thuốc và ký hiệu xét nghiệm quốc tế (CRP, NT-proBNP, INR)
+- Khách quan, không khẳng định tuyệt đối: bắt buộc dùng `"có thể"`, `"ghi nhận"` thay vì `"đã hồi phục hoàn toàn"`, `"do X gây ra"`
+- Chẩn đoán chính lấy **nguyên văn** hồ sơ gốc, cấm tự diễn giải viết tắt y khoa (rủi ro hiểu sai nghiêm trọng nếu đoán sai)
 
-**Hội chẩn AI (Virtual MDT)**: mời đúng chuyên khoa theo vấn đề, tổng hợp thảo luận; ghi âm hội chẩn → tóm tắt có cấu trúc (VNPT iSense, tự rơi về Claude tóm tắt từ transcript thật nếu lỗi — không bịa nội dung)
+## 3. 🏛️ Tích hợp hệ sinh thái VNPT — đã gọi API thật, không chỉ giao diện minh họa
 
-**Giọng nói (VNPT SmartVoice)**: đọc to cảnh báo bằng giọng Việt thật, ghi âm câu hỏi bằng micro — luôn có phương án dự phòng bằng Web Speech API của trình duyệt nếu API lỗi
+| Tính năng | Sản phẩm VNPT | Trạng thái |
+|---|---|---|
+| **OCR bệnh án** (ảnh scan + PDF không có text layer) | SmartReader | ✅ API thật, tự rơi về Claude Vision nếu lỗi |
+| **Đọc cảnh báo bằng giọng nói** | SmartVoice (TTS) | ✅ API thật, fallback Web Speech API |
+| **Ghi âm câu hỏi, hiển thị chữ theo thời gian thực** | SmartVoice (STT) | ✅ API thật + hiển thị tức thời qua trình duyệt song song |
+| **Tóm tắt biên bản hội chẩn từ giọng nói** | SmartVoice (iSense) | ✅ API thật, fallback Claude tóm tắt từ transcript thật (không bịa nội dung) nếu lỗi |
+| **OCR thông tin CCCD** | eKYC | ✅ API thật (đọc đúng thông tin từ ảnh thẻ) |
+| **Kiểm tra chống ảnh CCCD giả mạo** | eKYC | ✅ API thật — chỉ cảnh báo, không chặn cứng (phát hiện tỷ lệ báo sai trên ảnh thật khi kiểm thử) |
+| **Xác thực khuôn mặt trước khi ký duyệt báo cáo** | eKYC (Face Liveness) | ⚠️ Đang chờ VNPT xác nhận quyền API — tạm thời fallback demo, có ghi chú rõ trong code |
+| **Tra cứu liên thông hồ sơ liên viện** | Đề án 06 | 🔶 Mô phỏng — không có quyền truy cập CSDL quốc gia thật (bước OCR đọc thẻ vẫn là dữ liệu thật, chỉ riêng bước "tìm hồ sơ cũ" là minh họa) |
 
-**Định danh điện tử (VNPT eKYC)**: OCR thông tin CCCD (có kiểm tra chống ảnh giả mạo/photocopy trước khi đọc), xác thực khuôn mặt bằng camera thật trước khi ký duyệt xuất báo cáo
+> *"Chúng tôi ưu tiên nói đúng cái gì là thật, cái gì là minh họa — hơn là làm đẹp demo. Với 1 sản phẩm y tế, sự trung thực về năng lực hệ thống quan trọng hơn con số ấn tượng."*
 
-**Quản lý hồ sơ**: tìm kiếm, lọc theo loại bệnh/thời gian, ghim ưu tiên, xóa có hoàn tác, so sánh xét nghiệm giữa các lần khám, bookmark widget lâm sàng
+## 4. 🔬 Luồng trải nghiệm của bác sĩ
 
-## 3. Kiến trúc & công nghệ
+1. **Tiếp nhận** — Quét CCCD hoặc tải hồ sơ cũ → hệ thống dựng dòng thời gian 3 giai đoạn (Tiền phẫu → Hậu phẫu nội trú → Ngoại trú)
+2. **Phân tích** — AI trích xuất xét nghiệm, tự vẽ xu hướng biến thiên (sparkline theo 4 mốc lâm sàng), CDE v2 tính cảnh báo tương tác thuốc/ngưỡng chống đông, chỉ ra "Khoảng trống Guideline" nếu dữ liệu chưa đủ để áp dụng 1 khuyến nghị
+3. **Hội chẩn & Hỏi đáp** — Chatbot MedAmi trả lời theo đúng ngữ cảnh hồ sơ đang mở (tự chuyển về chế độ lâm sàng khi mở hồ sơ mới), tách riêng FAQ hệ thống; ghi âm hội chẩn đa chuyên khoa → tóm tắt tự động
+4. **Quyết định & Xuất báo cáo** — Bác sĩ rà soát, có thể xuất báo cáo dành riêng cho bệnh nhân (ngôn ngữ phổ thông, không thuật ngữ), ký duyệt bằng sinh trắc học trước khi xuất bản chính thức
+
+## 5. 🛠️ Công nghệ sử dụng
 
 | Lớp | Công nghệ |
 |---|---|
-| Frontend | React (1 file `App.jsx`, esbuild, không phụ thuộc UI framework ngoài) |
+| Frontend | React (1 file `App.jsx`), esbuild — không dùng framework CSS ngoài (CSS-in-JS thuần) |
 | Backend | FastAPI (Python), Uvicorn |
-| AI trích xuất & hội thoại | Claude (Anthropic API), Prompt Caching cho system prompt dài |
-| Rule engine lâm sàng | Python thuần, tất định 100%, tách biệt hoàn toàn khỏi LLM (`cde/`) |
-| OCR / Voice / eKYC | VNPT SmartReader, SmartVoice (TTS/STT/Tóm tắt), eKYC (OCR CCCD/Liveness/Face Compare) |
-| Lưu trữ | Turso (libSQL) |
-| Triển khai | Docker (2 service: backend + frontend), GitHub Pages (frontend tĩnh) |
+| AI trích xuất & hội thoại | Claude (Anthropic API — `claude-haiku-4-5`), Prompt Caching |
+| Rule engine lâm sàng | Python thuần, tất định 100% (`cde/`) |
+| OCR / Voice / eKYC | VNPT SmartReader, SmartVoice, eKYC |
+| Lưu trữ & xác thực bác sĩ | **Supabase** (đang tích hợp — xem mục 8) |
+| Triển khai | Docker, GitHub Pages (CI/CD qua GitHub Actions chính thức, tự thử lại khi deploy lỗi tạm thời) |
 
-**Nguyên tắc thiết kế cốt lõi**: mọi phép tính có ý nghĩa lâm sàng (ngưỡng INR, TTR, eGFR, thang điểm nguy cơ...) nằm trong `cde/`, KHÔNG viết trong prompt LLM — Claude chỉ đọc hiểu văn bản và diễn giải, không tự suy ra ngưỡng y khoa. Mọi tích hợp VNPT có fallback an toàn khi lỗi (SmartReader → Claude Vision, TTS/STT → Web Speech API, tóm tắt hội chẩn → Claude từ transcript thật) — không bao giờ crash, không bao giờ bịa dữ liệu lâm sàng.
-
-## 4. Chạy nhanh (1 lệnh)
+## 6. 🚀 Hướng dẫn trải nghiệm nhanh cho BGK
 
 ```bash
-cp .env.example .env         # điền ANTHROPIC_API_KEY (bắt buộc) + các biến khác (tùy chọn)
-docker-compose up --build
+git clone https://github.com/danghoang2605-ds-ai/medparcours-ai.git
+cd medparcours-ai
+cp .env.example .env   # điền ANTHROPIC_API_KEY (bắt buộc — mọi biến khác đều tùy chọn)
+pip install -r requirements.txt --break-system-packages
+pip install -r requirements-dev.txt --break-system-packages
+npm install esbuild@0.27.7 react@19.2.6 react-dom@19.2.6
 ```
+Chi tiết đầy đủ (chạy backend/frontend riêng, Docker, script test tự động): xem **`HUONG_DAN_TEST_VA_CHAY.md`**.
 
-- Backend: `http://localhost:8000` (docs: `/docs`)
-- Frontend: `http://localhost:8080`
+**Gợi ý thao tác nhanh khi chấm demo**:
+- Bấm **"Tra cứu CCCD"** trên header → thử tải ảnh CCCD thật để xem OCR thật hoạt động
+- Bấm **"Ký duyệt & Xuất báo cáo"** → trải nghiệm luồng xác thực sinh trắc học trước khi xuất PDF
+- Vào tab **"Hội chẩn AI"** → thử ghi âm ngắn để xem tóm tắt hội chẩn tự động
+- Bấm mic ở khung chat MedAmi → nói thử để thấy chữ hiện theo thời gian thực
 
-Biến môi trường bắt buộc: `ANTHROPIC_API_KEY`. Các biến còn lại (Turso, VNPT SmartReader/SmartVoice/eKYC) đều **tùy chọn** — thiếu biến nào, tính năng tương ứng tự rơi về fallback an toàn, không chặn ứng dụng chạy. Xem đầy đủ trong `.env.example`.
-
-## 5. Kiểm thử
+## 7. 🧪 Kiểm thử
 
 ```bash
-./run_tests.sh          # hoặc: pytest test_main.py cde/ test_main_patient_endpoints.py test_database.py test_ecg_engine.py test_vnpt_client.py -v
+bash run_tests.sh
 ```
+**224 test tự động**, hoàn toàn không gọi mạng thật (mock Claude API + VNPT API) — chạy được ngay cả khi chưa cấu hình `.env`. Bao phủ: rule engine lâm sàng, toàn bộ endpoint API (kể cả nhánh lỗi/fallback), tích hợp VNPT, CRUD hồ sơ, ECG.
 
-213 test tự động, bao phủ: rule engine lâm sàng (INR/TTR/ICD-10/CHA2DS2-VASc/HAS-BLED), toàn bộ endpoint API (kể cả các nhánh lỗi/fallback), tích hợp VNPT (mock, không gọi API thật khi test), CRUD hồ sơ, ECG.
+## 8. 🔐 Lưu trữ & Xác thực — đang chuyển đổi sang Supabase
 
-## 6. Cấu trúc thư mục
+Hệ thống đang chuyển từ Turso sang **Supabase**, đồng thời bổ sung **hệ thống đăng ký/đăng nhập cho bác sĩ** (trước đây chưa có xác thực người dùng multi-account). Phần này do thành viên khác trong team phát triển, đang trong quá trình rà soát tích hợp — README sẽ cập nhật chi tiết endpoint/schema khi hoàn tất.
+
+Nguyên tắc thiết kế giữ nguyên: tính năng lưu trữ/xác thực (phụ trợ) **không được phép** làm sập tính năng phân tích hồ sơ (chính) — nếu database lỗi kết nối, hệ thống chỉ hiện lịch sử trống, bác sĩ vẫn phân tích được hồ sơ mới bình thường.
+
+## 9. 📂 Cấu trúc thư mục
 
 ```
 ├── App.jsx                    # Toàn bộ frontend (1 file, React + esbuild)
 ├── main.py                    # FastAPI — endpoint, pipeline trích xuất, fallback
-├── database.py                # Turso (libSQL) — CRUD hồ sơ, lịch sử chat, feedback
+├── database.py                # Lưu trữ hồ sơ + xác thực (đang chuyển sang Supabase)
 ├── vnpt_client.py             # SDK gọi API VNPT (SmartReader/SmartVoice/eKYC)
 ├── ecg_engine.py               # Số hóa ECG, luật an toàn hiển thị
-├── clinical_rules.py           # Luật lâm sàng nền (TTR, sàng lọc ưu tiên...)
+├── clinical_rules.py           # Luật lâm sàng nền
 ├── document_extract.py         # Trích text từ PDF/DOCX/XLSX/PPTX
-├── cde/                        # Rule engine lâm sàng tất định (Layer 1-5)
+├── cde/                        # Rule engine lâm sàng tất định
 │   ├── engine.py                   # Điểm vào chính (evaluate_v2)
 │   ├── disease_classifier.py       # Nhận diện bệnh cảnh + subtype
 │   ├── icd_groups.py               # 10 nhóm ICD-10 hệ tuần hoàn
 │   ├── anticoagulation_targets.py  # Ngưỡng INR theo van + ESC/AHA
-│   ├── indicators.py               # CHA2DS2-VASc, HAS-BLED, TTR...
-│   └── test_*.py                   # Test riêng từng module
+│   ├── indicators.py               # CHA2DS2-VASc, HAS-BLED, TTR
+│   └── test_*.py
 ├── docker_setup/                # Dockerfile backend + frontend
-├── docker-compose.yml
-├── requirements.txt
-└── test_*.py                    # Test tầng API/database/ECG/VNPT client
+├── run_tests.sh                  # Chạy toàn bộ test, in kết luận rõ ràng
+├── HUONG_DAN_TEST_VA_CHAY.md     # Hướng dẫn cài đặt/chạy/test chi tiết
+└── test_*.py
 ```
 
-## 7. API chính (23 endpoint)
+## 10. ⚠️ Giới hạn đã biết (nói thật, không giấu)
 
-| Nhóm | Endpoint |
-|---|---|
-| Phân tích hồ sơ | `POST /analyze`, `POST /analyze_text` |
-| Quản lý hồ sơ | `POST /patient/save`, `GET /patient`, `GET/PATCH /patient/{sba}`, `POST /patient/update[_file]`, `GET /patient/{sba}/history` |
-| Hội thoại | `POST /chat`, `POST /faq-bot`, `GET/POST /patient/{sba}/chat` |
-| Giọng nói | `POST /voice/tts`, `POST /voice/stt`, `POST /consultation/summarize-audio` |
-| eKYC | `POST /ekyc/ocr-cccd`, `POST /ekyc/face-liveness`, `POST /ekyc/face-compare` |
-| ECG | `POST /ecg`, `GET /ecg/synthetic` |
-| Khác | `GET /health`, `POST /feedback` |
+- ECG: chỉ số hóa được 1 chuyển đạo mỗi lần quét, chưa tự tách 12 chuyển đạo từ 1 ảnh đầy đủ
+- Tra cứu liên thông CCCD (Đề án 06): mô phỏng, không có quyền CSDL quốc gia thật
+- `face_compare` (so khớp mặt bác sĩ với CCCD): có endpoint, chưa gắn giao diện
+- eKYC Face Liveness: đang chờ VNPT xác nhận quyền API, tạm fallback demo
+- Hệ thống đăng ký/đăng nhập bác sĩ qua Supabase: mới bổ sung, đang hoàn thiện
 
-Chi tiết đầy đủ tại `/docs` (Swagger UI tự sinh) khi backend đang chạy.
-
-## 8. Giới hạn đã biết
-
-- ECG: chỉ số hóa được **1 chuyển đạo mỗi lần quét** (bác sĩ tự xác nhận đúng chuyển đạo), chưa tự động tách 12 chuyển đạo từ 1 ảnh trang đầy đủ.
-- Tra cứu liên thông CCCD (Đề án 06) và tra cứu CSDL quốc gia: **mô phỏng** — không có quyền truy cập CSDL thật, riêng phần OCR đọc thông tin trên ảnh thẻ vẫn là dữ liệu thật.
-- VNPT SmartVoice/eKYC cần token cấu hình đúng (xem `.env.example`) — thiếu token, tính năng tự ẩn/rơi về fallback trình duyệt, không lỗi ứng dụng.
-
-## 9. Đội ngũ
+## 11. 👥 Đội ngũ
 
 Đăng (Tech Lead) · Đức Thành (Tech Co-Lead) · Tấn, Ngân (Cố vấn lâm sàng — Đại học Y Hà Nội) · An (Business/GTM)
