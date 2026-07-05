@@ -42,6 +42,8 @@ jobs:
           mkdir -p build
           cp App.jsx build/App.jsx
           cp docker_setup/mount.jsx build/mount.jsx
+          cp supabaseClient.js build/supabaseClient.js
+          cp api.js build/api.js
       - name: Build bundle with esbuild
         run: |
           mkdir -p dist
