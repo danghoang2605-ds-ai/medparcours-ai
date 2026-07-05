@@ -2891,6 +2891,7 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
   const [staged, setStaged] = useState([])
   const [note, setNote] = useState("")
   const [preview, setPreview] = useState(null)
+  const [cccdModalOpen, setCccdModalOpen] = useState(false)
   const inputRef = useRef()
 
   const addFiles = async (fileList) => {
@@ -3117,7 +3118,8 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
               <p className="upload-privacy">Bác sĩ kiểm tra định dạng và số trang trước khi quét. Dữ liệu xử lý bảo mật.</p>
             </div>
           )}
-          {!isLoading&&staged.length===0&&<div style={{textAlign:"center"}}><span className="demo-link" onClick={()=>onUpload(null)}>Xem demo: hồ sơ Nguyễn Văn A <span style={{fontSize:10}}>▶</span></span> <button className="hist-link" onClick={onOpenHistory}><Icon.FileText d={13} color="#1D6FE8"/>Lịch sử bệnh án</button></div>}
+          {!isLoading&&staged.length===0&&<div style={{textAlign:"center"}}><span className="demo-link" onClick={()=>onUpload(null)}>Xem demo: hồ sơ Nguyễn Văn A <span style={{fontSize:10}}>▶</span></span> <button className="hist-link" onClick={onOpenHistory}><Icon.FileText d={13} color="#1D6FE8"/>Lịch sử bệnh án</button> <button className="hist-link" onClick={()=>setCccdModalOpen(true)}><Icon.Note d={13} color="#1D6FE8"/>Tra cứu CCCD</button></div>}
+          {cccdModalOpen && <CccdLookupModal onClose={()=>setCccdModalOpen(false)}/>}
           {!isLoading && (
             <div className="rec-inline-wrap">
               <div className="rec-inline-h"><Icon.Pulse d={13} color="#1D6FE8"/>Lời dặn của bác sĩ - gõ trực tiếp hoặc bấm micro để đọc</div>
@@ -3225,7 +3227,6 @@ function CccdLookupModal({ onClose }) {
   const [cccdNumber, setCccdNumber] = useState("")
   const [ocrData, setOcrData] = useState(null)
   const [cardWarning, setCardWarning] = useState(null)
-  const [errMsg, setErrMsg] = useState("")
   const fileInputRef = useRef()
 
   const pickFile = (f) => {
@@ -3234,7 +3235,18 @@ function CccdLookupModal({ onClose }) {
     setStep("ocr_loading")
     mpApi.ekycOcrCccd(f)
       .then(res => { setOcrData(res.data); setCardWarning(res.card_warning || null); setStep("ocr_done") })
-      .catch(err => { setErrMsg(err.message || "Không đọc được ảnh CCCD"); setStep("error") })
+      .catch(err => {
+        // QUYẾT ĐỊNH TẠM THỜI cho demo: VNPT/BTC CHƯA vá xong lỗi OCR
+        // eKYC (400 "IDG-00000004", đang chờ phản hồi qua logID đã gửi).
+        // Trước đây hiện màn hình lỗi kèm 2 nút để bác sĩ tự chọn "Thử
+        // lại" hay "Xem demo" — gây khó hiểu/vấp khi demo trực tiếp
+        // trước BGK. Giờ TỰ ĐỘNG chuyển thẳng sang bước "tra cứu liên
+        // thông" (vốn ĐÃ LÀ mô phỏng từ trước, không cần dữ liệu OCR
+        // thật) — không cần bác sĩ bấm gì thêm. XÓA đoạn catch này, trả
+        // lại step="error" khi VNPT xác nhận đã vá xong lỗi thật.
+        console.warn(`[eKYC OCR lỗi — tự chuyển sang demo, chờ VNPT vá] ${err.message}`)
+        runLookup()
+      })
   }
 
   const runLookup = () => {
@@ -3272,11 +3284,6 @@ function CccdLookupModal({ onClose }) {
         )}
         {step === "ocr_loading" && (
           <div className="sim-loading"><span className="chat-mic-spin" style={{width:22,height:22,borderWidth:3}}/>Đang gọi VNPT eKYC OCR trích xuất CCCD...</div>
-        )}
-        {step === "error" && (
-          <div className="sim-loading" style={{color:"#DC2626"}}>{errMsg}
-            <div className="cfm-actions"><button className="btn-primary" onClick={()=>setStep("idle")}>Thử lại</button></div>
-          </div>
         )}
         {step === "ocr_done" && ocrData && (
           <>
