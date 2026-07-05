@@ -122,6 +122,20 @@ def test_list_patients_tra_dung_ho_so_da_luu(client):
     assert len(data["patients"]) == 2
 
 
+def test_list_patients_db_loi_tra_ve_rong_khong_phai_503(client, monkeypatch):
+    """Bug thật đã sửa: DB lỗi kết nối (vd chạy localhost chưa cấu hình,
+    hoặc mất mạng) trước đây trả 503 -> làm nhiễu/sập trải nghiệm frontend
+    dù đây chỉ là tính năng phụ (xem lại lịch sử). Giờ phải trả 200 với
+    danh sách rỗng + cờ cảnh báo, KHÔNG được lây sang trải nghiệm chính."""
+    monkeypatch.setattr("database.list_patients", lambda limit=50: (_ for _ in ()).throw(RuntimeError("mất kết nối DB")))
+    resp = client.get("/patient")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["patients"] == []
+    assert "db_warning" in data
+
+
 # ─── POST /patient/update — tính năng "cập nhật theo thời gian thực" ──────
 def test_update_patient_chua_co_ho_so_tra_404(client):
     resp = client.post("/patient/update", json={

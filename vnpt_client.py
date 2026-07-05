@@ -101,8 +101,10 @@ class VNPTClient:
     DEFAULT_DOMAIN = "https://api.idg.vnpt.vn"
     # Thời gian tối đa chờ SmartReader xử lý xong 1 file trước khi coi là
     # timeout và ném lỗi cho main.py rơi về Claude Vision — không để bác sĩ
-    # chờ vô thời hạn.
-    POLL_TIMEOUT_SECONDS = 60
+    # chờ vô thời hạn. Tăng từ 60s lên 240s: bệnh án thật nhiều trang/bảng
+    # phức tạp cần nhiều thời gian xử lý hơn ảnh đơn giản — 60s trước đây
+    # dễ timeout oan cho hồ sơ dài, rơi về Claude Vision không cần thiết.
+    POLL_TIMEOUT_SECONDS = 240
     POLL_INTERVAL_SECONDS = 2
 
     def __init__(self):

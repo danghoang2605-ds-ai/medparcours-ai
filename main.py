@@ -1199,12 +1199,21 @@ async def get_chat_history_endpoint(so_benh_an: str, limit: int = 100):
 @app.get("/patient")
 async def list_patients_endpoint(limit: int = 50):
     """Danh sách hồ sơ đã lưu, mới cập nhật gần nhất lên đầu — dùng cho màn
-    "Lịch sử bệnh án" trên frontend (thay 2 hồ sơ demo hard-code cũ)."""
+    "Lịch sử bệnh án" trên frontend (thay 2 hồ sơ demo hard-code cũ).
+
+    THIẾT KẾ CÓ CHỦ ĐÍCH: nếu database lưu trữ lâu dài (Turso/Supabase) lỗi
+    kết nối (vd chưa cấu hình khi chạy localhost, hoặc mất mạng), endpoint
+    này KHÔNG được trả lỗi cứng (503) — chỉ trả về DANH SÁCH RỖNG kèm cờ
+    cảnh báo. Lý do: đây là tính năng PHỤ (xem lại hồ sơ cũ), không nên
+    lây lan làm hỏng trải nghiệm phân tích hồ sơ MỚI (/analyze, /chat —
+    hoàn toàn không phụ thuộc database lâu dài). Bác sĩ vẫn phân tích được
+    hồ sơ mới bình thường dù mục "Lịch sử bệnh án" tạm thời trống.
+    """
     try:
         return {"success": True, "patients": database.list_patients(limit=limit)}
     except Exception as e:
-        raise HTTPException(status_code=503,
-                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+        print(f"[GET /patient — DB lỗi, trả danh sách rỗng thay vì 503 để không kéo sập trải nghiệm chính] {type(e).__name__}: {e}")
+        return {"success": True, "patients": [], "db_warning": "Chưa kết nối được tới hệ thống lưu trữ lâu dài — lịch sử hồ sơ tạm thời trống, phân tích hồ sơ mới không bị ảnh hưởng."}
 
 
 class UpdatePatientRequest(BaseModel):

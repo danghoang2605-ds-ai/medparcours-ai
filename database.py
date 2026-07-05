@@ -32,6 +32,7 @@ TÍNH NĂNG "CẬP NHẬT HỒ SƠ THEO THỜI GIAN THỰC":
 """
 import os
 import json
+import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -39,6 +40,52 @@ try:
     import libsql_client
 except ImportError:
     libsql_client = None  # cho phép import module này dù chưa cài lib (vd môi trường test cũ)
+
+
+class _LocalSqliteResult:
+    """Bọc kết quả sqlite3.Cursor cho GIỐNG HỆT interface rs.rows của
+    libsql_client (list các tuple, index bằng số row[0]/row[1]...) — để
+    TOÀN BỘ phần còn lại của file này (get_patient, list_patients, v.v.)
+    không cần sửa dù đổi thư viện kết nối bên dưới."""
+    def __init__(self, cursor):
+        self.rows = cursor.fetchall()
+
+
+class _LocalSqliteClient:
+    """
+    Thay thế libsql_client CHỈ cho trường hợp chạy local/dev (không có
+    TURSO_DATABASE_URL) — dùng module sqlite3 CÓ SẴN TRONG PYTHON, không
+    cần cài thêm gói nào, không cần binary Rust native.
+
+    LÝ DO SỬA (bug thật): libsql_client cần biên dịch/cài đặt 1 binary
+    native (Rust) — dù kết nối tới Turso thật hay chỉ mở 1 file SQLite cục
+    bộ, đây LÀ CÙNG 1 gói Python, cùng yêu cầu native extension. Khi Ban
+    Giám khảo chạy trên máy cá nhân (Windows/Mac khác nhau, không phải môi
+    trường Docker/HF Space đã kiểm chứng), bước "pip install libsql-client"
+    dễ lỗi cài đặt (thiếu Visual C++ Build Tools trên Windows, kiến trúc
+    CPU không khớp wheel có sẵn...) — làm HỎNG TOÀN BỘ tính năng lưu hồ sơ
+    ngay từ bước khởi động, dù đây chỉ là tính năng phụ.
+
+    sqlite3 là module CHUẨN đi kèm mọi bản cài Python (không cần pip
+    install gì thêm) — loại bỏ hoàn toàn rủi ro cài đặt trên máy BGK.
+    Cú pháp SQL không đổi (libSQL vốn là fork của SQLite, tương thích
+    100% với các câu lệnh CREATE TABLE/SELECT/INSERT/UPDATE/DELETE đang
+    dùng trong file này).
+    """
+    def __init__(self, path: str):
+        # check_same_thread=False: FastAPI có thể gọi từ thread khác nhau
+        # giữa các request — an toàn vì mỗi lời gọi get_client() đều tạo
+        # kết nối MỚI, đóng ngay sau khi dùng xong (xem docstring get_client).
+        self._conn = sqlite3.connect(path, check_same_thread=False)
+
+    def execute(self, sql: str, params=None):
+        cur = self._conn.cursor()
+        cur.execute(sql, params or [])
+        self._conn.commit()
+        return _LocalSqliteResult(cur)
+
+    def close(self):
+        self._conn.close()
 
 
 # ─── Kết nối — Turso (production) hoặc SQLite file local (dev/test) ──────────
@@ -74,8 +121,12 @@ def _get_auth_token() -> Optional[str]:
 def get_client():
     """Tạo 1 client mới mỗi lần gọi — đơn giản, an toàn cho FastAPI sync
     handler (không cần quản lý connection pool phức tạp cho quy mô hackathon).
-    Trả None nếu thiếu thư viện libsql_client (báo lỗi rõ ràng ở nơi gọi,
-    không silent fail).
+    Trả None nếu thiếu thư viện libsql_client KHI THẬT SỰ CẦN (chỉ khi có
+    cấu hình TURSO_DATABASE_URL trỏ tới Turso thật) — báo lỗi rõ ràng ở nơi
+    gọi, không silent fail. Trường hợp chạy local KHÔNG cấu hình Turso,
+    dùng sqlite3 built-in (xem _LocalSqliteClient ở trên), KHÔNG cần
+    libsql_client/binary native — đây là đường chạy chính khi BGK/dev test
+    trên máy cá nhân.
 
     BUG NGHIÊM TRỌNG ĐÃ SỬA (xác nhận qua log thật trên Hugging Face Space):
     libsql_client TỰ ĐỘNG đổi tiền tố "libsql://" thành "wss://" (WebSocket
@@ -92,14 +143,18 @@ def get_client():
     WebSocket (xem libsql_client/http.py — class riêng cho giao thức HTTP).
     HTTP ổn định hơn nhiều trong container có proxy/network sandbox hạn chế.
     """
+    url = _get_db_url()
+    if url.startswith("file:"):
+        # Local/dev/test — KHÔNG dùng libsql_client (native binary), dùng
+        # sqlite3 built-in để BGK chạy trên máy cá nhân không gặp lỗi cài
+        # đặt thư viện. Path thật nằm sau tiền tố "file:".
+        path = url[len("file:"):]
+        return _LocalSqliteClient(path)
     if libsql_client is None:
         raise RuntimeError(
             "Thiếu thư viện libsql_client — chạy: pip install libsql-client --break-system-packages"
         )
-    url = _get_db_url()
     token = _get_auth_token()
-    if url.startswith("file:"):
-        return libsql_client.create_client_sync(url)
     if url.startswith("libsql://"):
         url = "https://" + url[len("libsql://"):]
     return libsql_client.create_client_sync(url, auth_token=token)

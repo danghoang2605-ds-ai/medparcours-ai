@@ -259,3 +259,25 @@ def test_update_patient_tinh_lai_nhom_benh(temp_db):
         nguon_tai_lieu="tai_kham",
     )
     assert db.list_patients()[0]["nhom_benh"] == "Rung nhĩ"
+
+
+class TestLocalSqliteClient:
+    def test_khong_can_libsql_client_van_hoat_dong(self, tmp_path, monkeypatch):
+        """Bug thật đã sửa: chạy local không nên phụ thuộc libsql_client
+        (cần binary native, dễ lỗi cài đặt trên máy BGK) — dùng sqlite3
+        built-in thay thế, tương thích hoàn toàn với API .execute()/.rows
+        đang dùng xuyên suốt file."""
+        db_path = tmp_path / "test_local.db"
+        monkeypatch.setenv("TURSO_DATABASE_URL", "")
+        monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
+        # Giả lập _get_db_url() trả về đúng path tạm này thay vì path mặc định
+        monkeypatch.setattr(db, "_get_db_url", lambda: f"file:{db_path}")
+        client = db.get_client()
+        client.execute("CREATE TABLE IF NOT EXISTS test_tbl (id INTEGER PRIMARY KEY, name TEXT)")
+        client.execute("INSERT INTO test_tbl (name) VALUES (?)", ["hello"])
+        rs = client.execute("SELECT name FROM test_tbl WHERE id = ?", [1])
+        assert rs.rows[0][0] == "hello"
+        client.close()
+        # Xác nhận KHÔNG có bất kỳ tham chiếu nào tới libsql_client thật —
+        # dùng đúng _LocalSqliteClient (sqlite3 thuần).
+        assert isinstance(client, db._LocalSqliteClient)
