@@ -26,7 +26,6 @@ from pydantic import BaseModel
 from pypdf import PdfReader
 import anthropic
 import clinical_rules
-import ecg_engine
 import vnpt_client
 import document_extract
 import database
@@ -620,8 +619,18 @@ def _extract_report_step1_from_upload(filename: str, content: bytes) -> dict:
             os.unlink(tmp_path)
         text = extracted["text"]
         if len(text.strip()) < MIN_TOTAL_CHARS:
-            raise ValueError("Không có đủ nội dung text để phân tích. File có thể là bản scan "
-                              "(ảnh chụp) không có lớp text — hãy thử tải lên dưới dạng ảnh (.png/.jpg).")
+            # PDF không có (đủ) text layer -> khả năng là bản scan. Trước
+            # đây báo lỗi ngay, giờ THỬ SmartReader OCR trước khi bỏ cuộc —
+            # xác nhận thật SmartReader nhận PDF làm input trực tiếp (không
+            # chỉ ảnh). Nếu SmartReader cũng lỗi/chưa cấu hình, rơi về
+            # thông báo lỗi cũ, KHÔNG để lộ lỗi VNPT thô cho bác sĩ.
+            try:
+                text = vnpt_client.VNPTClient().extract_clinical_table(content, filename or "document.pdf")
+                print(f"[PDF scan -> SmartReader OCR thành công] {filename}")
+            except Exception as e:
+                print(f"[PDF scan -> SmartReader OCR cũng lỗi, báo lỗi cho bác sĩ] {type(e).__name__}: {e}")
+                raise ValueError("Không có đủ nội dung text để phân tích. File có thể là bản scan "
+                                  "(ảnh chụp) không có lớp text — hãy thử tải lên dưới dạng ảnh (.png/.jpg).")
         raw = call_claude(system=REPORT_SYSTEM, user_message=f"Hồ sơ bệnh nhân:\n\n{text}",
                            max_tokens=16000, cache_system=True)
         return _parse_report_json(raw)
@@ -1971,122 +1980,3 @@ async def consultation_summarize_audio(file: UploadFile = File(...)):
         raise HTTPException(status_code=502, detail=f"Giải băng thành công nhưng không tóm tắt được: {e}")
 
     return {"success": True, "transcript": transcript, "summary": structured, "source": "CLAUDE_FALLBACK"}
-
-
-# ─── ECG (Mức 1: số hóa + vẽ lại) ────────────────────────────────────────────
-# ĐỊNH VỊ AN TOÀN: chỉ trực quan hóa hỗ trợ, KHÔNG chẩn đoán. Không trả bất kỳ
-# nhãn lâm sàng nào (không "AFib", không "nhịp chậm"...). FE hiển thị PHẢI kèm
-# nhãn "cần bác sĩ xác nhận" cho mọi nội dung từ endpoint này.
-
-class EcgDigitizeRequest(BaseModel):
-    image_base64: str  # Ảnh ECG (PNG/JPG) đã encode base64, có hoặc không kèm data URI prefix
-    lead_name: str = "II"  # Chuyển đạo bác sĩ xác nhận đã cắt/tải lên — mặc định
-                            # "II" vì đây là chuyển đạo chuẩn cho dải nhịp theo quy
-                            # ước lâm sàng (không phải suy đoán của hệ thống).
-
-
-@app.post("/ecg")
-async def ecg_digitize(request: EcgDigitizeRequest):
-    """
-    Nhận ảnh ECG (base64) -> số hóa Mức 1 (signal[]) + Mức 2 (ước lượng nhịp
-    tim qua khoảng R-R) -> trả cho FE vẽ lại bằng SVG.
-    KHÔNG xử lý ảnh ở client (OpenCV.js quá nặng, phá kiến trúc single-file FE) -
-    mọi xử lý ảnh đều ở backend.
-
-    MỨC 2 LUÔN LÀ ƯỚC LƯỢNG (uoc_luong=True trong heart_rate): tỉ lệ pixel/mm
-    được tự suy ra từ lưới ảnh (estimate_px_per_mm), không phải đo trực tiếp.
-    Nếu không tìm được lưới rõ, bpm_avg sẽ là None kèm warning rõ — KHÔNG bao
-    giờ tự đoán đại 1 số để có vẻ "có kết quả".
-    """
-    img = ecg_engine.decode_base64_image(request.image_base64)
-    if img is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Không đọc được ảnh. Kiểm tra lại định dạng base64 (PNG/JPG)."
-        )
-    # 12 chuyển đạo chuẩn theo hệ thống ghi ECG quốc tế — validate để tránh
-    # giá trị rác hiện ra trong disclaimer/báo cáo (vd chuỗi rỗng, gõ nhầm).
-    VALID_LEADS = {"I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"}
-    lead_name = request.lead_name if request.lead_name in VALID_LEADS else "II"
-
-    result = ecg_engine.digitize_ecg_image(img)
-    calib = ecg_engine.estimate_px_per_mm(img)
-    r_peaks = ecg_engine.detect_r_peaks(result["signal"], px_per_mm=calib["px_per_mm"])
-    heart_rate = ecg_engine.compute_heart_rate(r_peaks["rr_intervals_px"], calib["px_per_mm"])
-
-    # MỨC 3 — LUẬT CỨNG AN TOÀN LÂM SÀNG (theo yêu cầu cố vấn y khoa).
-    # Ảnh tải lên thật KHÔNG qua bước AI đọc kết luận lâm sàng (chưa có prompt
-    # Claude Vision cho ECG — xem ghi chú trong ecg_engine.py), nên "findings"
-    # luôn rỗng ở nhánh này. Vẫn áp luật để: (1) redflags phản ánh đúng chất
-    # lượng tín hiệu đã biết chắc từ chính thuật toán (không suy đoán thêm),
-    # (2) confidence_level/source_of_truth nhất quán với dữ liệu demo, để FE
-    # dùng chung 1 bộ badge cho cả 2 nguồn dữ liệu.
-    redflags = []
-    if calib.get("do_tin_cay") == "thap":
-        redflags.append("Ảnh mờ hoặc lưới không rõ (chất lượng ảnh thấp)")
-    if r_peaks.get("warning"):
-        redflags.append("Nhiễu cơ hoặc không dò được đỉnh R rõ ràng")
-    if heart_rate.get("warning"):
-        redflags.append(heart_rate["warning"])
-    # Chuyển đạo I/aVR/aVL/aVF/V1 thường KHÔNG dùng để đánh giá nhịp trên lâm
-    # sàng (biên độ QRS thấp hơn, khó dò đỉnh R ổn định) — cảnh báo rõ thay vì
-    # âm thầm trả số liệu như thể mọi chuyển đạo đều đáng tin như nhau.
-    if lead_name not in ("II", "V2", "V3", "V4", "V5"):
-        redflags.append(
-            f"Chuyển đạo {lead_name} không phải chuyển đạo khuyến nghị cho dải nhịp "
-            f"(nên dùng Lead II hoặc V2-V5) — số liệu nhịp tim có thể kém tin cậy hơn."
-        )
-
-    safety = ecg_engine.apply_ecg_safety_rules(n_leads=1, redflags=redflags, findings=[])
-
-    return {
-        "success": True,
-        **result,
-        "lead_name": lead_name,
-        "calibration": calib,
-        "r_peaks": r_peaks,
-        "heart_rate": heart_rate,
-        "confidence_level": safety["confidence_level"],
-        "source_of_truth": "AI đo từ waveform",
-        "redflags": redflags,
-        "ghi_de_toan_bo": safety["ghi_de_toan_bo"],
-        "permanent_disclaimer": ecg_engine.ecg_permanent_disclaimer(lead_name),
-        "disclaimer": "Kết quả số hóa và ước tính nhịp tim chỉ mang tính trực quan "
-                       "hóa hỗ trợ, cần bác sĩ xác nhận. Không phải kết luận chẩn đoán. "
-                       "Tỉ lệ pixel/mm được tự suy ra từ lưới ảnh — luôn là ƯỚC LƯỢNG, "
-                       "không phải đo trực tiếp từ thước chuẩn.",
-    }
-
-
-@app.get("/ecg/synthetic")
-async def ecg_synthetic_test(heart_rate_bpm: float = 75.0):
-    """
-    Sinh 1 ảnh ECG TỔNG HỢP (giả, không phải dữ liệu bệnh nhân thật) + số hóa
-    + ước tính nhịp tim, để FE/Postman test pipeline /ecg trong lúc CHƯA CÓ
-    ảnh thật từ anh Tấn. Trả cả ảnh (base64, để FE hiển thị "ảnh gốc") và kết
-    quả số hóa + nhịp tim.
-
-    heart_rate_bpm: nhịp tim mong muốn mô phỏng (mặc định 75 — nhịp xoang
-    bình thường). Dùng để test xem pipeline Mức 2 có tính ra đúng số không
-    (vd ?heart_rate_bpm=100 để test nhịp nhanh).
-    """
-    img = ecg_engine.generate_synthetic_ecg(heart_rate_bpm=heart_rate_bpm)
-    img_b64 = ecg_engine.encode_image_to_base64_png(img)
-    if img_b64 is None:
-        raise HTTPException(status_code=500, detail="Không tạo được ảnh test.")
-    result = ecg_engine.digitize_ecg_image(img)
-    calib = ecg_engine.estimate_px_per_mm(img)
-    r_peaks = ecg_engine.detect_r_peaks(result["signal"], px_per_mm=calib["px_per_mm"])
-    heart_rate = ecg_engine.compute_heart_rate(r_peaks["rr_intervals_px"], calib["px_per_mm"])
-    return {
-        "success": True,
-        "is_synthetic": True,
-        "synthetic_target_bpm": heart_rate_bpm,
-        "image_base64": img_b64,
-        **result,
-        "calibration": calib,
-        "r_peaks": r_peaks,
-        "heart_rate": heart_rate,
-        "disclaimer": "Đây là ảnh ECG TỔNG HỢP (giả) dùng để test pipeline, "
-                       "không phải dữ liệu bệnh nhân thật.",
-    }
