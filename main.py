@@ -16,7 +16,8 @@ try:
     load_dotenv()
 except Exception:
     pass
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Query
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -26,7 +27,9 @@ from pypdf import PdfReader
 import anthropic
 import clinical_rules
 import ecg_engine
+import vnpt_client
 import document_extract
+import database
 from cde.engine import evaluate_v2
 from auth import get_current_user
 from db import (
@@ -38,7 +41,24 @@ from db import (
     save_analysis_result,
 )
 
-app = FastAPI(title="MediFlow AI", version="1.0.0")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Khởi tạo bảng database lúc app start — KHÔNG làm sập app nếu lỗi
+    (vd chưa cấu hình TURSO_DATABASE_URL/TURSO_AUTH_TOKEN, hoặc Turso tạm
+    thời không phản hồi). Các endpoint cũ (/analyze, /chat...) không phụ
+    thuộc database, phải tiếp tục hoạt động bình thường dù phần lưu trữ
+    lâu dài tạm thời không khả dụng — đúng nguyên tắc không gây gián đoạn
+    sản phẩm đang chạy ổn khi thêm tính năng mới."""
+    try:
+        database.init_db()
+    except Exception as e:
+        print(f"[CẢNH BÁO] Không khởi tạo được database lưu trữ lâu dài: {e}. "
+              f"Tính năng 'Lưu hồ sơ' / 'Cập nhật hồ sơ' sẽ báo lỗi rõ ràng khi "
+              f"được gọi, nhưng các tính năng phân tích hồ sơ khác vẫn hoạt động bình thường.")
+    yield
+
+
+app = FastAPI(title="MediFlow AI", version="1.0.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -59,7 +79,7 @@ QUY TẮC BẮT BUỘC:
 3. Cảnh báo phải có căn cứ rõ từ hồ sơ
 4. Giữ nguyên số liệu y khoa, không làm tròn
 5. Trả về JSON THUẦN TÚY — không markdown, không text bên ngoài JSON
-6. Nếu một chỉ số có kết quả ở NHIỀU NGÀY KHÁC NHAU: CHỈ lấy kết quả của ngày GẦN NHẤT (ngày lớn nhất). Ghi rõ ngày đó vào field "ngay" trong mỗi item xet_nghiem_key.
+6. Nếu một chỉ số có kết quả ở NHIỀU NGÀY KHÁC NHAU: field "ngay" LUÔN LUÔN chỉ ghi ngày của kết quả GẦN NHẤT (ngày lớn nhất) — dùng để hiển thị giá trị hiện tại. Nếu chỉ số đó có từ 2 lần đo trở lên (mảng "trend" có từ 2 phần tử), BẮT BUỘC điền thêm "trendDates" với NGÀY CỦA TỪNG LẦN ĐO tương ứng theo đúng thứ tự trong "trend" — đây là dữ liệu để vẽ biểu đồ xu hướng có ngày, khác với "ngay" (chỉ 1 ngày duy nhất).
 7. Nếu một chỉ số KHÔNG CÓ trong hồ sơ: điền null, không bịa số liệu.
 8. xet_nghiem_key là danh sách ĐỘNG — chỉ đưa vào các chỉ số THỰC SỰ CÓ trong hồ sơ, không hardcode cấu trúc cố định.
 9. SIÊU ÂM TIM: liệt kê TẤT CẢ các lượt siêu âm trong mảng sieu_am_tim.lan_kham, mỗi lượt BẮT BUỘC ghi rõ ngày. Sắp xếp theo thời gian tăng dần. Đánh dấu latest:true cho lượt có ngày gần nhất. Đánh dấu canh_bao:true nếu lượt đó có bất thường nguy hiểm (EF giảm nặng, dịch màng tim ép buồng tim...). Điền phase phù hợp: truoc_mo (trước phẫu thuật), sau_mo (ngay sau mổ), hoi_phuc (đang hồi phục), tai_kham (tái khám ổn định).
@@ -100,7 +120,8 @@ Schema bắt buộc:
       "status": "normal|high|low",
       "ngay": "Ngày xét nghiệm gần nhất",
       "phase": "truoc_mo|sau_mo|tai_kham",
-      "trend": [/* mảng rawVal theo thời gian từ cũ đến mới, nếu có nhiều lần đo */]
+      "trend": [/* mảng rawVal theo thời gian từ cũ đến mới, nếu có nhiều lần đo */],
+      "trendDates": [/* mảng ngày (dd/mm) tương ứng TỪNG điểm trong "trend", CÙNG SỐ LƯỢNG và CÙNG THỨ TỰ với "trend". Nếu "trend" có 3 điểm thì trendDates phải có đúng 3 ngày tương ứng. */]
     }
   ],
   "sieu_am_tim": {
@@ -207,7 +228,35 @@ TƯ DUY LÂM SÀNG VÀ DÒNG THỜI GIAN (BẮT BUỘC - cực kỳ quan trọng
 24. HÀNH ĐỘNG ƯU TIÊN (hanh_dong_uu_tien): các việc cụ thể cần làm ở lần khám tới, đánh số
     ưu tiên, kèm lý do HIỆN TẠI (không viện dẫn yếu tố đã kết thúc như kháng sinh ngắn ngày).
 25. Tất cả field ở mục 20 đến 24 là TÙY hồ sơ: nếu hồ sơ không đủ dữ liệu cho field nào thì
-    để mảng rỗng hoặc bỏ qua, KHÔNG bịa."""
+    để mảng rỗng hoặc bỏ qua, KHÔNG bịa.
+
+LUẬT VĂN PHONG Y KHOA (BẮT BUỘC — feedback trực tiếp từ chuyên gia y tế, áp dụng cho MỌI
+field văn bản tự do trong schema trên, đặc biệt tom_tat_toan_canh, ly_luan_lam_sang,
+clinical_takeaway, ket_luan_giai_doan):
+26. VIỆT HÓA 100%: TUYỆT ĐỐI không dùng từ tiếng Anh xen kẽ vào câu văn tiếng Việt.
+    Ví dụ bắt buộc dịch: "post-op" -> "sau phẫu thuật"; "alkalosis" -> "nhiễm kiềm";
+    "infection" -> "nhiễm trùng"; "over-diuresis" -> "lợi tiểu quá mức". NGOẠI LỆ DUY NHẤT:
+    giữ nguyên tên thuốc quốc tế và tên xét nghiệm/chỉ số viết tắt quốc tế đã chuẩn hóa
+    (CRP, NT-proBNP, EF, INR, eGFR...) — đây KHÔNG phải từ tiếng Anh xen kẽ, mà là danh
+    pháp y khoa quốc tế không có bản dịch tương đương dùng trong thực hành lâm sàng Việt Nam.
+27. KHÁCH QUAN, KHÔNG SUY DIỄN NGUYÊN NHÂN: bạn là AI tóm tắt hồ sơ, KHÔNG phải bác sĩ điều
+    trị — KHÔNG được khẳng định nguyên nhân hay kết quả điều trị như thể đã chắc chắn.
+    - CẤM dùng các cách diễn đạt khẳng định: "phẫu thuật thành công", "tiến triển ổn định",
+      "đã hồi phục", hoặc gán thẳng nguyên nhân kiểu "men gan tăng do tổn thương cơ tim".
+    - PHẢI dùng cách diễn đạt khách quan, để ngỏ: "ghi nhận...", "hiện tại sinh hiệu...",
+      "đã cải thiện" (mô tả xu hướng số liệu, không phải kết luận kết cục), "có thể liên
+      quan đến...".
+    - Ví dụ đúng: "Men gan tăng hậu phẫu, có thể liên quan phẫu thuật, tình trạng huyết
+      động, thuốc hoặc nhiễm trùng; cần theo dõi xu hướng." — nêu NHIỀU khả năng, không
+      chốt 1 nguyên nhân duy nhất, và luôn kèm khuyến nghị theo dõi tiếp thay vì kết luận
+      dứt điểm.
+28. CHẨN ĐOÁN CHÍNH (chan_doan_chinh) PHẢI LẤY NGUYÊN VĂN: bốc đúng nguyên văn cách viết
+    chẩn đoán như trong hồ sơ gốc (kể cả viết tắt), TUYỆT ĐỐI KHÔNG tự diễn giải/dịch nghĩa
+    chữ viết tắt sang dạng đầy đủ do AI tự suy đoán (ví dụ: hồ sơ ghi "HL" thì PHẢI giữ
+    nguyên "HL" trong chan_doan_chinh — CẤM tự ý dịch thành "động mạch chủ + động mạch
+    phổi" hay bất kỳ cách diễn giải nào khác mà hồ sơ không ghi rõ, vì viết tắt y khoa có
+    thể mang nhiều nghĩa khác nhau tùy khoa/bệnh viện, tự suy diễn sai sẽ gây hiểu lầm nghiêm
+    trọng cho bác sĩ đọc báo cáo)."""
 
 CHAT_SYSTEM = """Bạn là trợ lý y tế hỗ trợ bác sĩ Việt Nam. Bạn có đầy đủ hồ sơ bệnh nhân.
 
@@ -528,6 +577,147 @@ def select_relevant_text(full_text: str, budget: int):
 MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8MB - giới hạn an toàn cho ảnh chụp/scan hồ sơ
 
 
+def _parse_report_json(raw: str) -> dict:
+    """Bóc JSON chắc chắn từ text trả về của Claude: bỏ code fence, lấy từ
+    '{' đầu tiên đến '}' cuối cùng. Dùng chung cho các luồng MỚI (endpoint
+    cập nhật hồ sơ đa định dạng) — các luồng /analyze* cũ giữ nguyên bản
+    khắc trực tiếp của họ, không đụng vào để tránh rủi ro hồi quy.
+    Ném json.JSONDecodeError nếu không parse được — nơi gọi tự xử lý."""
+    json_text = raw.strip()
+    if "```json" in json_text:
+        json_text = json_text.split("```json")[1].split("```")[0]
+    elif "```" in json_text:
+        json_text = json_text.split("```")[1].split("```")[0]
+    json_text = json_text.strip()
+    start, end = json_text.find("{"), json_text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        json_text = json_text[start:end + 1]
+    return json.loads(json_text)
+
+
+def _extract_report_step1_from_upload(filename: str, content: bytes) -> dict:
+    """
+    Bước 1 (LLM Extraction) CHO 1 FILE BẤT KỲ — tái dùng đúng logic phân
+    loại định dạng của /analyze (PDF/.docx/.xlsx/.pptx/ảnh), nhưng CHỈ chạy
+    Bước 1 (không chạy rule engine/diễn giải) — dùng cho endpoint "cập nhật
+    hồ sơ" khi cần gộp report_moi vào report cũ trước khi tính lại toàn bộ
+    trên dữ liệu ĐÃ GỘP (xem _merge_and_reevaluate).
+
+    Ném ValueError với thông báo tiếng Việt rõ nghĩa khi không trích được
+    nội dung hoặc định dạng chưa hỗ trợ — nơi gọi (endpoint) bắt lại và trả
+    JSONResponse success=False, KHÔNG để lộ traceback thô cho bác sĩ.
+    """
+    filename_lower = (filename or "").lower()
+    ext = "." + filename_lower.rsplit(".", 1)[-1] if "." in filename_lower else ""
+
+    if ext == ".pdf":
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            extracted = extract_text_from_pdf(tmp_path)
+        finally:
+            os.unlink(tmp_path)
+        text = extracted["text"]
+        if len(text.strip()) < MIN_TOTAL_CHARS:
+            raise ValueError("Không có đủ nội dung text để phân tích. File có thể là bản scan "
+                              "(ảnh chụp) không có lớp text — hãy thử tải lên dưới dạng ảnh (.png/.jpg).")
+        raw = call_claude(system=REPORT_SYSTEM, user_message=f"Hồ sơ bệnh nhân:\n\n{text}",
+                           max_tokens=16000, cache_system=True)
+        return _parse_report_json(raw)
+
+    if ext in document_extract.EXTRACTORS:
+        text, warning, _ = document_extract.extract_from_filename(filename, content)
+        if not text.strip():
+            raise ValueError(warning or f"Không trích được nội dung từ file {ext}.")
+        raw = call_claude(system=REPORT_SYSTEM, user_message=f"Hồ sơ bệnh nhân:\n\n{text}",
+                           max_tokens=16000, cache_system=True)
+        return _parse_report_json(raw)
+
+    if ext in (".png", ".jpg", ".jpeg"):
+        if len(content) > MAX_IMAGE_BYTES:
+            raise ValueError(f"Ảnh quá lớn ({len(content)//1024//1024}MB). "
+                              f"Giới hạn {MAX_IMAGE_BYTES//1024//1024}MB.")
+        image_b64 = base64.b64encode(content).decode("ascii")
+        media_type = "image/png" if ext == ".png" else "image/jpeg"
+        raw = call_claude_with_image(
+            system=REPORT_SYSTEM,
+            user_text="Đây là ảnh chụp/scan tài liệu MỚI bổ sung cho hồ sơ đã có. Hãy đọc và trích "
+                      "xuất đúng theo format JSON đã quy định. Nếu chữ viết tay khó đọc ở vài chỗ, "
+                      "ưu tiên để trống/null cho phần đó hơn là đoán bừa.",
+            image_b64=image_b64, media_type=media_type,
+        )
+        return _parse_report_json(raw)
+
+    if ext in document_extract.UNSUPPORTED_BUT_LISTED_IN_UI:
+        raise ValueError(f"Định dạng {ext} (phiên bản cũ) chưa được hỗ trợ. "
+                          f"Vui lòng lưu lại dưới định dạng mới (.docx/.xlsx/.pptx) rồi tải lên.")
+
+    raise ValueError(f"Không nhận diện được định dạng file {ext or '(không có đuôi)'}. "
+                      f"Hỗ trợ: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), ảnh (.png/.jpg).")
+
+
+def _merge_and_reevaluate(so_benh_an: str, report_moi: dict, nguon_tai_lieu: str) -> dict:
+    """
+    Gộp report_moi vào hồ sơ đã lưu (database.update_patient_with_new_document),
+    rồi chạy Bước 2-3 TRÊN REPORT ĐÃ GỘP — tách thành helper dùng chung cho
+    cả /patient/update (text) và /patient/update_file (đa định dạng), tránh
+    lặp lại ~35 dòng logic build response giống hệt nhau ở 2 nơi.
+
+    Ném HTTPException(503) nếu lỗi kết nối lưu trữ, HTTPException(409) nếu
+    gộp thất bại (vd không tìm thấy hồ sơ — dù nơi gọi thường đã check trước).
+    """
+    try:
+        result = database.update_patient_with_new_document(so_benh_an, report_moi, nguon_tai_lieu)
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+    if not result.get("success"):
+        raise HTTPException(status_code=409, detail=result.get("message", "Lỗi không xác định"))
+
+    merged_report = result["report"]
+    engine = evaluate_v2(merged_report)
+    trend_summary = ""
+    if engine["trend_facts"]:
+        try:
+            trend_summary = call_claude(
+                system=TREND_SYSTEM,
+                user_message="Các mốc chênh lệch chỉ số (chỉ diễn đạt, không bịa thêm):\n"
+                             + json.dumps(engine["trend_facts"], ensure_ascii=False),
+                max_tokens=400
+            ).strip()
+        except Exception:
+            trend_summary = ""
+
+    return {
+        "success": True,
+        "so_benh_an": so_benh_an,
+        "so_lan_cap_nhat": result["so_lan_cap_nhat"],
+        "report": merged_report,
+        "analysis": {
+            "egfr": engine["egfr"],
+            "egfr_detail": engine.get("egfr_detail"),
+            "priority_findings": engine["priority_findings"],
+            "drug_safety": engine["drug_safety"],
+            "trend_summary": trend_summary,
+            "risk_scores": engine.get("risk_scores"),
+            "ttr": engine.get("ttr"),
+            "care_gaps": engine.get("care_gaps"),
+            "active_profiles": engine.get("active_profiles", []),
+            "indicators_applicable": engine.get("indicators_applicable", []),
+            "anticoagulant_status": engine.get("anticoagulant_status"),
+            "inr_target_detail": engine.get("inr_target_detail"),
+            "ttr_khong_tinh_duoc_ly_do": engine.get("ttr_khong_tinh_duoc_ly_do"),
+            "active_icd_groups": engine.get("active_icd_groups", []),
+            "vital_signs": engine.get("vital_signs"),
+            "risk_factors": engine.get("risk_factors"),
+            "baseline_labs": engine.get("baseline_labs"),
+            "score2_applicability": engine.get("score2_applicability"),
+            "antithrombotic_priority": engine.get("antithrombotic_priority"),
+        },
+    }
+
+
 def run_analysis_pipeline_from_image(image_bytes: bytes, media_type: str,
                                        filename: str = "") -> JSONResponse:
     """
@@ -553,16 +743,34 @@ def run_analysis_pipeline_from_image(image_bytes: bytes, media_type: str,
     image_b64 = base64.b64encode(image_bytes).decode("ascii")
     raw = ""
     try:
-        # ─── BƯỚC 1 (LLM Extraction từ ẢNH): Claude Vision đọc -> JSON thuần ──
-        raw = call_claude_with_image(
-            system=REPORT_SYSTEM,
-            user_text="Đây là ảnh chụp/scan hồ sơ bệnh án. Hãy đọc và trích "
-                      "xuất đúng theo format JSON đã quy định. Nếu chữ viết "
-                      "tay khó đọc ở vài chỗ, ưu tiên để trống/null cho phần "
-                      "đó hơn là đoán bừa — KHÔNG suy luận số liệu không đọc rõ.",
-            image_b64=image_b64,
-            media_type=media_type,
-        )
+        # ─── BƯỚC 1 (LLM Extraction từ ẢNH): "Động cơ kép" ─────────────────
+        # Ưu tiên VNPT SmartReader (OCR -> text) rồi đẩy text vào ĐÚNG pipeline
+        # trích xuất JSON dạng text (call_claude + REPORT_SYSTEM) đang dùng
+        # cho luồng PDF/Word/Excel — không viết lại bước này.
+        # Bất kỳ lỗi nào (thiếu cấu hình, lỗi mạng, timeout, SmartReader báo
+        # lỗi xử lý...) đều bị bắt và LOG RA CONSOLE cho dev biết, sau đó rơi
+        # ngay về Claude Vision (call_claude_with_image, cách hiện tại) —
+        # bác sĩ ở frontend KHÔNG được biết VNPT vừa lỗi, chỉ thấy kết quả.
+        try:
+            vnpt = vnpt_client.VNPTClient()
+            ocr_text = vnpt.extract_clinical_table(image_bytes, filename or "ho_so.jpg")
+            print(f"[VNPT SmartReader] OCR thành công, {len(ocr_text)} ký tự, dùng làm nguồn trích xuất chính.")
+            raw = call_claude(
+                system=REPORT_SYSTEM,
+                user_message=f"Đây là văn bản đã OCR từ ảnh hồ sơ bệnh án (qua VNPT SmartReader). "
+                              f"Hãy đọc và trích xuất đúng theo format JSON đã quy định:\n\n{ocr_text}",
+            )
+        except Exception as vnpt_err:
+            print(f"[VNPT SmartReader lỗi — rơi về Claude Vision] {type(vnpt_err).__name__}: {vnpt_err}")
+            raw = call_claude_with_image(
+                system=REPORT_SYSTEM,
+                user_text="Đây là ảnh chụp/scan hồ sơ bệnh án. Hãy đọc và trích "
+                          "xuất đúng theo format JSON đã quy định. Nếu chữ viết "
+                          "tay khó đọc ở vài chỗ, ưu tiên để trống/null cho phần "
+                          "đó hơn là đoán bừa — KHÔNG suy luận số liệu không đọc rõ.",
+                image_b64=image_b64,
+                media_type=media_type,
+            )
 
         json_text = raw.strip()
         if "```json" in json_text:
@@ -760,8 +968,9 @@ def run_analysis_pipeline(ho_so_text: str, pages: int = 0,
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ─── SUPABASE AUTH + LỊCH SỬ PHÂN TÍCH ─────────────────────────────────────
 async def _persist_analysis_response(response: JSONResponse, user: dict) -> JSONResponse:
-    """Lưu một kết quả phân tích thành công rồi gắn phan_tich_id vào response.
+    """Lưu một kết quả phân tích thành công vào Supabase rồi gắn phan_tich_id vào response.
 
     Nếu Supabase tạm lỗi, không làm mất báo cáo AI vừa tạo; frontend vẫn nhận báo
     cáo và được cảnh báo rõ rằng lịch sử chưa được lưu.
@@ -942,14 +1151,336 @@ async def analyze_text(
     return await _persist_analysis_response(response, user)
 
 
+# ─── LƯU TRỮ HỒ SƠ LÂU DÀI + CẬP NHẬT THEO THỜI GIAN THỰC ────────────────────
+# Tính năng mới: bệnh nhân đã quét 1 lần, lần sau có thêm tài liệu (tái khám,
+# xét nghiệm mới...) -> bác sĩ tải thêm, hệ thống GỘP vào hồ sơ cũ thay vì
+# tạo bản ghi tách biệt. Dùng database.py (Turso/libSQL) để lưu lâu dài, độc
+# lập với vòng đời container Hugging Face Space.
+
+class SavePatientRequest(BaseModel):
+    report: dict
+
+
+@app.post("/patient/save")
+async def save_patient(req: SavePatientRequest):
+    """Lưu hồ sơ MỚI lần đầu cho 1 bệnh nhân (theo số bệnh án trong report).
+    Nếu số bệnh án đã có hồ sơ lưu trữ -> báo lỗi rõ, không ghi đè ngầm
+    (tránh mất dữ liệu cũ do nhầm lẫn 'mới' với 'cập nhật')."""
+    try:
+        result = database.save_new_patient(req.report)
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+    if not result.get("success"):
+        raise HTTPException(status_code=409, detail=result.get("message", result.get("error", "Lỗi không xác định")))
+    return result
+
+
+@app.get("/patient/{so_benh_an}")
+async def get_patient(so_benh_an: str):
+    """Lấy hồ sơ đã lưu theo số bệnh án — kèm TÍNH LẠI analysis qua rule
+    engine hiện tại (KHÔNG lưu analysis cũ trong database — xem lý do đầy đủ
+    trong database.py: analysis luôn tính lại được từ report, tự động hưởng
+    lợi nếu sau này rule engine được mở rộng)."""
+    try:
+        data = database.get_patient(so_benh_an)
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"Chưa có hồ sơ lưu trữ cho số bệnh án {so_benh_an}.")
+    analysis = evaluate_v2(data["report"])
+    return {
+        "success": True,
+        "report": data["report"],
+        "analysis": analysis,
+        "so_lan_cap_nhat": data["so_lan_cap_nhat"],
+        "tao_luc": data["tao_luc"],
+        "cap_nhat_luc": data["cap_nhat_luc"],
+    }
+
+
+@app.delete("/patient/{so_benh_an}")
+async def delete_patient_endpoint(so_benh_an: str):
+    """
+    Xóa vĩnh viễn 1 hồ sơ đã lưu (không áp dụng cho 2 hồ sơ demo hard-code —
+    chúng không đi qua database nên không tồn tại ở đây để xóa). Frontend
+    bắt buộc xác nhận qua hộp thoại trước khi gọi endpoint này.
+    """
+    try:
+        result = database.delete_patient(so_benh_an)
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("message", "Không tìm thấy hồ sơ."))
+    return result
+
+
+class RenamePatientRequest(BaseModel):
+    ten_moi: str
+
+
+@app.patch("/patient/{so_benh_an}/ten")
+async def rename_patient_endpoint(so_benh_an: str, req: RenamePatientRequest):
+    """
+    Đổi TÊN HIỂN THỊ (không phải ho_ten do AI trích xuất) cho 1 hồ sơ đã lưu
+    — mục đích cá nhân hóa quản lý trong danh sách Lịch sử. Gửi ten_moi rỗng
+    để bỏ tên tùy chỉnh, quay về hiển thị tên gốc.
+    """
+    try:
+        result = database.rename_patient(so_benh_an, req.ten_moi)
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("message", "Không tìm thấy hồ sơ."))
+    return result
+
+
+class FeedbackRequest(BaseModel):
+    so_benh_an: str = ""
+    muc: str
+    noi_dung: str
+    ghi_chu: str = ""
+
+
+@app.post("/feedback")
+async def feedback_endpoint(req: FeedbackRequest):
+    """
+    Ghi nhận 1 phản hồi 'báo sai/góp ý' từ bác sĩ trên 1 nhận định cụ thể
+    của hệ thống — CHỈ lưu lại để rà soát thủ công sau, KHÔNG tự động sửa
+    gì. Lỗi lưu trữ không được chặn trải nghiệm — vẫn báo thành công nhẹ
+    nhàng cho bác sĩ, chỉ log lỗi ra console cho dev.
+    """
+    try:
+        database.save_feedback(req.so_benh_an, req.muc, req.noi_dung, req.ghi_chu)
+    except Exception as e:
+        print(f"[Feedback lỗi lưu trữ, không chặn UI] {type(e).__name__}: {e}")
+    return {"success": True}
+
+
+@app.get("/patient/{so_benh_an}/history")
+async def patient_history_endpoint(so_benh_an: str, limit: int = 5):
+    """
+    Trả về các bản ghi report_json TRƯỚC lần gộp gần nhất — dùng cho tính
+    năng so sánh thuốc/chẩn đoán giữa 2 lần cập nhật ở frontend.
+    """
+    try:
+        return {"success": True, "history": database.get_patient_history(so_benh_an, limit=limit)}
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+
+
+class ChatMessageRequest(BaseModel):
+    role: str
+    content: str
+
+
+@app.post("/patient/{so_benh_an}/chat")
+async def save_chat_message_endpoint(so_benh_an: str, req: ChatMessageRequest):
+    """
+    Lưu 1 tin nhắn chat lâm sàng vào đúng hồ sơ bệnh nhân — gọi ngay sau mỗi
+    câu hỏi/trả lời để không mất lịch sử khi tải lại trang/đổi thiết bị.
+    Lỗi lưu trữ KHÔNG được chặn cuộc trò chuyện đang diễn ra — vẫn báo
+    thành công nhẹ nhàng, chỉ log lỗi ra console cho dev.
+    """
+    try:
+        database.save_chat_message(so_benh_an, req.role, req.content)
+    except Exception as e:
+        print(f"[Lưu chat lỗi, không chặn hội thoại] {type(e).__name__}: {e}")
+    return {"success": True}
+
+
+@app.get("/patient/{so_benh_an}/chat")
+async def get_chat_history_endpoint(so_benh_an: str, limit: int = 100):
+    """Lấy lại lịch sử chat lâm sàng đã lưu của 1 bệnh nhân, theo đúng thứ
+    tự thời gian — dùng để khôi phục hội thoại khi mở lại hồ sơ đã lưu."""
+    try:
+        return {"success": True, "messages": database.get_chat_history(so_benh_an, limit=limit)}
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+
+
+@app.get("/patient")
+async def list_patients_endpoint(limit: int = 50):
+    """Danh sách hồ sơ đã lưu. Nếu database lưu trữ lâu dài chưa sẵn sàng,
+    trả danh sách rỗng để không chặn luồng phân tích/demo."""
+    try:
+        return {
+            "success": True,
+            "patients": database.list_patients(limit=limit),
+            "storage_available": True,
+        }
+    except Exception as e:
+        print(f"[DB /patient lỗi - demo fallback] {type(e).__name__}: {e}")
+        return {
+            "success": True,
+            "patients": [],
+            "storage_available": False,
+            "storage_error": str(e),
+        }
+
+
+class UpdatePatientRequest(BaseModel):
+    so_benh_an: str
+    ho_so_text: str  # text tài liệu MỚI (chưa qua Bước 1) — giống /analyze_text
+    pages: int = 0
+    nguon_tai_lieu: str = ""  # tên file tài liệu mới, để log vào patient_history
+
+
+@app.post("/patient/update")
+async def update_patient(req: UpdatePatientRequest):
+    """
+    Tính năng "cập nhật hồ sơ theo thời gian thực": bác sĩ tải thêm 1 tài
+    liệu mới cho bệnh nhân ĐÃ CÓ hồ sơ lưu trữ (theo so_benh_an). Tài liệu
+    mới đi qua ĐÚNG Bước 1 (LLM Extraction) như luồng phân tích bình thường,
+    sau đó GỘP vào report cũ (database.merge_reports) thay vì phân tích độc
+    lập rồi ghi đè.
+
+    KHÔNG TÁI SỬ DỤNG run_analysis_pipeline() ở đây — vì hàm đó chạy Bước
+    2-3 (rule engine + LLM diễn giải) trên 1 report ĐỘC LẬP. Endpoint này
+    cần Bước 1 RIÊNG (chỉ trích xuất report_moi thô), rồi GỘP, rồi MỚI chạy
+    Bước 2-3 trên report ĐÃ GỘP — thứ tự khác nhau quan trọng: nếu chạy rule
+    engine trên report_moi riêng rồi mới gộp kết quả, các thang điểm cần dữ
+    liệu tích lũy (vd xu hướng nhiều lần xét nghiệm) sẽ SAI vì chỉ thấy dữ
+    liệu của tài liệu mới, không thấy toàn bộ lịch sử.
+    """
+    existing = None
+    try:
+        existing = database.get_patient(req.so_benh_an)
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+    if existing is None:
+        raise HTTPException(status_code=404,
+                             detail=f"Chưa có hồ sơ lưu trữ cho số bệnh án {req.so_benh_an}. "
+                                    f"Dùng /patient/save để lưu hồ sơ mới trước.")
+
+    # ─── Bước 1 RIÊNG cho tài liệu mới (không chạy Bước 2-3 ở đây) ──────────
+    raw = call_claude(system=REPORT_SYSTEM, user_message=req.ho_so_text)
+    json_text = raw.strip()
+    if "```json" in json_text:
+        json_text = json_text.split("```json")[1].split("```")[0]
+    elif "```" in json_text:
+        json_text = json_text.split("```")[1].split("```")[0]
+    json_text = json_text.strip()
+    start, end = json_text.find("{"), json_text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        json_text = json_text[start:end + 1]
+    try:
+        report_moi = json.loads(json_text)
+    except json.JSONDecodeError:
+        return JSONResponse({
+            "success": False,
+            "error": "Không đọc được rõ nội dung tài liệu mới để tạo JSON. "
+                     "Hãy thử lại hoặc kiểm tra định dạng tài liệu.",
+        }, status_code=200)
+
+    try:
+        result = database.update_patient_with_new_document(req.so_benh_an, report_moi, req.nguon_tai_lieu)
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+    if not result.get("success"):
+        raise HTTPException(status_code=409, detail=result.get("message", "Lỗi không xác định"))
+
+    # ─── Bước 2-3 chạy TRÊN REPORT ĐÃ GỘP (không phải report_moi riêng) ─────
+    merged_report = result["report"]
+    engine = evaluate_v2(merged_report)
+    trend_summary = ""
+    if engine["trend_facts"]:
+        try:
+            trend_summary = call_claude(
+                system=TREND_SYSTEM,
+                user_message="Các mốc chênh lệch chỉ số (chỉ diễn đạt, không bịa thêm):\n"
+                             + json.dumps(engine["trend_facts"], ensure_ascii=False),
+                max_tokens=400
+            ).strip()
+        except Exception:
+            trend_summary = ""
+
+    return {
+        "success": True,
+        "so_benh_an": req.so_benh_an,
+        "so_lan_cap_nhat": result["so_lan_cap_nhat"],
+        "report": merged_report,
+        "analysis": {
+            "egfr": engine["egfr"],
+            "egfr_detail": engine.get("egfr_detail"),
+            "priority_findings": engine["priority_findings"],
+            "drug_safety": engine["drug_safety"],
+            "trend_summary": trend_summary,
+            "risk_scores": engine.get("risk_scores"),
+            "ttr": engine.get("ttr"),
+            "care_gaps": engine.get("care_gaps"),
+            "active_profiles": engine.get("active_profiles", []),
+            "indicators_applicable": engine.get("indicators_applicable", []),
+            "anticoagulant_status": engine.get("anticoagulant_status"),
+            "inr_target_detail": engine.get("inr_target_detail"),
+            "ttr_khong_tinh_duoc_ly_do": engine.get("ttr_khong_tinh_duoc_ly_do"),
+            "active_icd_groups": engine.get("active_icd_groups", []),
+            "vital_signs": engine.get("vital_signs"),
+            "risk_factors": engine.get("risk_factors"),
+            "baseline_labs": engine.get("baseline_labs"),
+            "score2_applicability": engine.get("score2_applicability"),
+            "antithrombotic_priority": engine.get("antithrombotic_priority"),
+        },
+    }
+
+
+@app.post("/patient/update_file")
+async def update_patient_file(
+    so_benh_an: str = Form(...),
+    nguon_tai_lieu: str = Form(""),
+    file: UploadFile = File(...),
+):
+    """
+    Bản mở rộng của /patient/update: nhận trực tiếp FILE (multipart) thay vì
+    text đã bóc sẵn — hỗ trợ ĐÚNG các định dạng như /analyze (PDF, Word,
+    Excel, PowerPoint, ảnh chụp/scan), để bác sĩ tải thêm tài liệu tái khám
+    dưới bất kỳ định dạng nào, không chỉ PDF bóc chữ ở client.
+
+    /patient/update (text) VẪN GIỮ NGUYÊN, không xóa — vẫn cần cho luồng PDF
+    lớn bóc chữ ở trình duyệt (pdf.js) để tránh giới hạn dung lượng upload.
+    """
+    existing = None
+    try:
+        existing = database.get_patient(so_benh_an)
+    except Exception as e:
+        raise HTTPException(status_code=503,
+                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+    if existing is None:
+        raise HTTPException(status_code=404,
+                             detail=f"Chưa có hồ sơ lưu trữ cho số bệnh án {so_benh_an}. "
+                                    f"Dùng /patient/save để lưu hồ sơ mới trước.")
+
+    content = await file.read()
+    try:
+        report_moi = _extract_report_step1_from_upload(file.filename, content)
+    except ValueError as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=200)
+    except json.JSONDecodeError:
+        return JSONResponse({
+            "success": False,
+            "error": "Không đọc được rõ nội dung tài liệu mới để tạo JSON. "
+                     "Hãy thử lại hoặc kiểm tra định dạng tài liệu.",
+        }, status_code=200)
+
+    nguon = nguon_tai_lieu or file.filename or ""
+    return _merge_and_reevaluate(so_benh_an, report_moi, nguon)
+
+
 class ChatRequest(BaseModel):
     question: str
     # Clinical cần hồ sơ; Hỗ trợ hệ thống không cần. Để mặc định rỗng nhằm
-    # giữ chung route /chat đã chạy ổn định ở bản cũ.
+    # giữ chung route /chat đã chạy ổn định.
     ho_so_text: str = ""
     chat_history: list = []
     mode: str | None = None
-    assistant_type: str = "clinical"  # clinical = Claude, system = VNPT SmartBot
+    assistant_type: str = "clinical"  # clinical = Claude, system = VNPT FAQ SmartBot
     sender_id: str = "user_test"
 
 
@@ -958,10 +1489,10 @@ class FaqBotRequest(BaseModel):
     sender_id: str = "user_test"
 
 
-SMARTBOT_DEFAULT_API_URL = "https://assistant-stream.vnpt.vn/v1/conversation"
+VNPT_FAQ_DEFAULT_API_URL = "https://assistant-stream.vnpt.vn/v1/conversation"
 
 # MedAmi là trợ lý LÂM SÀNG và luôn dùng Claude qua endpoint /chat.
-# VNPT SmartBot chỉ đảm nhiệm HỖ TRỢ HỆ THỐNG qua endpoint /faq-bot.
+# VNPT SmartBot chỉ đảm nhiệm HỖ TRỢ HỆ THỐNG qua /chat assistant_type="system" hoặc /faq-bot.
 SUPPORT_SYSTEM = """Bạn là trợ lý Hỗ trợ hệ thống của MedParcours.
 
 NHIỆM VỤ:
@@ -972,12 +1503,12 @@ NHIỆM VỤ:
 GIỚI HẠN BẮT BUỘC:
 - Không đóng vai bác sĩ lâm sàng.
 - Không phân tích, chẩn đoán hoặc đưa khuyến nghị điều trị cho bệnh nhân.
-- Nếu câu hỏi thuộc nội dung lâm sàng, hướng người dùng sang tab \"Bác sĩ (Lâm sàng)\" của MedAmi.
+- Nếu câu hỏi thuộc nội dung lâm sàng, hướng người dùng sang tab "Bác sĩ (Lâm sàng)" của MedAmi.
 - Không bịa tính năng chưa có trong hệ thống."""
 
 
-def _require_smartbot_env(name: str) -> str:
-    """Lấy biến môi trường SmartBot và báo lỗi rõ nếu chưa cấu hình."""
+def _require_vnpt_faq_env(name: str) -> str:
+    """Lấy biến môi trường VNPT FAQ và báo lỗi rõ nếu chưa cấu hình."""
     value = (os.environ.get(name) or "").strip()
     if not value:
         raise RuntimeError(f"{name} chưa được cấu hình")
@@ -1016,13 +1547,13 @@ def _extract_text_from_smartbot_card(answer_parts: list[str], value) -> None:
             _extract_text_from_smartbot_card(answer_parts, value.get(key))
 
 
-def call_smartbot(prompt: str, sender_id: str, session_id: str) -> str:
-    """Gọi VNPT SmartBot và ghép nội dung text từ luồng SSE card_data."""
-    api_url = (os.environ.get("SMARTBOT_API_URL") or SMARTBOT_DEFAULT_API_URL).strip()
-    access_token = _require_smartbot_env("SMARTBOT_ACCESS_TOKEN")
-    token_id = _require_smartbot_env("SMARTBOT_TOKEN_ID")
-    token_key = _require_smartbot_env("SMARTBOT_TOKEN_KEY")
-    bot_id = _require_smartbot_env("SMARTBOT_BOT_ID")
+def call_vnpt_faq_bot(prompt: str, sender_id: str, session_id: str) -> str:
+    """Gọi VNPT SmartBot FAQ và ghép nội dung text từ luồng SSE card_data."""
+    api_url = (os.environ.get("VNPT_FAQ_API_URL") or VNPT_FAQ_DEFAULT_API_URL).strip()
+    access_token = _require_vnpt_faq_env("VNPT_FAQ_ACCESS_TOKEN")
+    token_id = _require_vnpt_faq_env("VNPT_FAQ_TOKEN_ID")
+    token_key = _require_vnpt_faq_env("VNPT_FAQ_TOKEN_KEY")
+    bot_id = _require_vnpt_faq_env("VNPT_FAQ_BOT_ID")
 
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -1050,9 +1581,7 @@ def call_smartbot(prompt: str, sender_id: str, session_id: str) -> str:
         ) as response:
             if response.status_code != 200:
                 body = response.text[:500]
-                raise RuntimeError(
-                    f"VNPT SmartBot trả HTTP {response.status_code}: {body}"
-                )
+                raise RuntimeError(f"VNPT SmartBot trả HTTP {response.status_code}: {body}")
 
             answer_parts: list[str] = []
             event_count = 0
@@ -1063,15 +1592,12 @@ def call_smartbot(prompt: str, sender_id: str, session_id: str) -> str:
             for line in response.iter_lines(decode_unicode=True):
                 if not line:
                     continue
-
                 line = line.strip()
                 if not line.startswith("data:"):
                     continue
-
                 data = line[5:].strip()
                 if not data or data in {"[DONE]", "DONE"}:
                     continue
-
                 try:
                     parsed = json.loads(data)
                 except json.JSONDecodeError:
@@ -1098,7 +1624,7 @@ def call_smartbot(prompt: str, sender_id: str, session_id: str) -> str:
                     "VNPT SmartBot đã nhận request nhưng không tạo nội dung trả lời "
                     f"(SSE events={event_count}, intent_name={last_intent!r}, "
                     f"card_total={last_card_total!r}, status={last_card_status!r}). "
-                    "Kiểm tra đúng SMARTBOT_BOT_ID, bot đã publish, và cấu hình "
+                    "Kiểm tra đúng VNPT_FAQ_BOT_ID, bot đã publish, và cấu hình "
                     "intent/fallback/GenAI trên cổng VNPT SmartBot."
                 )
 
@@ -1154,11 +1680,9 @@ async def chat(
     _user: dict = Depends(get_current_user),
 ):
     """
-    Một route mạng duy nhất, giữ tương thích với bản cũ đã chạy:
+    Một route mạng duy nhất:
     - assistant_type="clinical": MedAmi lâm sàng dùng Claude.
-    - assistant_type="system": Hỗ trợ hệ thống dùng VNPT SmartBot.
-
-    Hai nhánh provider tách hoàn toàn; nhánh VNPT không fallback sang Claude.
+    - assistant_type="system": Hỗ trợ hệ thống dùng VNPT FAQ SmartBot.
     """
     question = request.question.strip()
     if not question:
@@ -1167,46 +1691,27 @@ async def chat(
     assistant_type = (request.assistant_type or "clinical").strip().lower()
 
     if assistant_type == "system":
-        sender = re.sub(
-            r"[^a-zA-Z0-9_-]",
-            "-",
-            (request.sender_id or "user_test").strip(),
-        )[:80] or uuid.uuid4().hex
-        # SmartBot dùng field text để phân loại intent. Gửi nguyên câu hỏi
-        # người dùng; vai trò/phạm vi hỗ trợ phải cấu hình trên cổng VNPT.
-        prompt = question
+        sender = re.sub(r"[^a-zA-Z0-9_-]", "-", (request.sender_id or "user_test").strip())[:80] or uuid.uuid4().hex
         request_id = uuid.uuid4().hex
-
-        print(f"[CHAT ROUTE] /chat assistant_type=system -> VNPT SmartBot | sender={sender}")
+        print(f"[CHAT ROUTE] /chat assistant_type=system -> VNPT FAQ SmartBot | sender={sender}")
         try:
             answer = await asyncio.to_thread(
-                call_smartbot,
-                prompt,
+                call_vnpt_faq_bot,
+                question,
                 f"medparcours-support-user-{request_id}",
                 f"medparcours-support-session-{request_id}",
             )
         except RuntimeError as exc:
-            print(f"[VNPT SMARTBOT ERROR] {exc}")
+            print(f"[VNPT FAQ SMARTBOT ERROR] {exc}")
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except Exception as exc:
-            print(f"[VNPT SMARTBOT ERROR] {type(exc).__name__}: {exc}")
-            raise HTTPException(
-                status_code=502,
-                detail=f"Lỗi không xác định khi gọi VNPT SmartBot: {exc}",
-            ) from exc
+            print(f"[VNPT FAQ SMARTBOT ERROR] {type(exc).__name__}: {exc}")
+            raise HTTPException(status_code=502, detail=f"Lỗi không xác định khi gọi VNPT SmartBot: {exc}") from exc
 
-        print("[VNPT SMARTBOT OK] Đã nhận câu trả lời từ VNPT SmartBot")
-        return {
-            "answer": answer,
-            "provider": "vnpt-smartbot",
-            "tokens_used": None,
-        }
+        return {"answer": answer, "provider": "vnpt-smartbot", "tokens_used": None}
 
     if assistant_type != "clinical":
-        raise HTTPException(
-            status_code=400,
-            detail='assistant_type chỉ nhận "clinical" hoặc "system"',
-        )
+        raise HTTPException(status_code=400, detail='assistant_type chỉ nhận "clinical" hoặc "system"')
 
     if not request.ho_so_text.strip():
         raise HTTPException(status_code=400, detail="Chưa có hồ sơ bệnh nhân để hỏi")
@@ -1221,42 +1726,29 @@ async def chat(
         f"- Chế độ giao diện hiện tại: {mode_text}.\n\n"
         f"---\nHỒ SƠ BỆNH NHÂN:\n{context}"
     )
-
     messages = _normalise_claude_history(request.chat_history)
     messages.append({"role": "user", "content": question})
 
     print("[CHAT ROUTE] /chat assistant_type=clinical -> Claude")
-    answer, tokens_used = await asyncio.to_thread(
-        _chat_via_claude,
-        system_with_context,
-        messages,
-    )
-    return {
-        "answer": answer,
-        "provider": "claude",
-        "tokens_used": tokens_used,
-        "context_meta": context_meta,
-    }
+    answer, tokens_used = await asyncio.to_thread(_chat_via_claude, system_with_context, messages)
+    return {"answer": answer, "provider": "claude", "tokens_used": tokens_used, "context_meta": context_meta}
 
 
 def _safe_smartbot_sender_id(sender_id: str) -> str:
-    """Chuẩn hóa sender_id frontend để dùng ổn định cho phiên hỗ trợ hệ thống."""
     clean = re.sub(r"[^a-zA-Z0-9_-]", "-", (sender_id or "").strip())[:80]
     return clean or uuid.uuid4().hex
 
 
 @app.get("/chatbot-status")
-def chatbot_status():
+def chatbot_status(_user: dict = Depends(get_current_user)):
     """Chỉ trả trạng thái cấu hình, tuyệt đối không trả giá trị token/key."""
-    smartbot_env = {
-        name: bool((os.environ.get(name) or "").strip())
-        for name in (
-            "SMARTBOT_ACCESS_TOKEN",
-            "SMARTBOT_TOKEN_ID",
-            "SMARTBOT_TOKEN_KEY",
-            "SMARTBOT_BOT_ID",
-        )
-    }
+    env_names = (
+        "VNPT_FAQ_ACCESS_TOKEN",
+        "VNPT_FAQ_TOKEN_ID",
+        "VNPT_FAQ_TOKEN_KEY",
+        "VNPT_FAQ_BOT_ID",
+    )
+    faq_env = {name: bool((os.environ.get(name) or "").strip()) for name in env_names}
     return {
         "status": "ok",
         "clinical_chat": {
@@ -1269,9 +1761,9 @@ def chatbot_status():
             "endpoint": "/chat",
             "assistant_type": "system",
             "provider": "vnpt-smartbot",
-            "configured": all(smartbot_env.values()),
-            "environment": smartbot_env,
-            "api_url": (os.environ.get("SMARTBOT_API_URL") or SMARTBOT_DEFAULT_API_URL).strip(),
+            "configured": all(faq_env.values()),
+            "environment": faq_env,
+            "api_url": (os.environ.get("VNPT_FAQ_API_URL") or VNPT_FAQ_DEFAULT_API_URL).strip(),
         },
     }
 
@@ -1281,7 +1773,7 @@ async def faq_bot(
     request: FaqBotRequest,
     _user: dict = Depends(get_current_user),
 ):
-    """Hỗ trợ hệ thống: gọi trực tiếp VNPT SmartBot, không dùng hồ sơ bệnh nhân."""
+    """Hỗ trợ hệ thống: gọi trực tiếp VNPT FAQ SmartBot, không dùng hồ sơ bệnh nhân."""
     question = request.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Câu hỏi không được để trống")
@@ -1295,29 +1787,190 @@ async def faq_bot(
 
 Hãy trả lời trực tiếp bằng tiếng Việt."""
 
-    print(f"[CHAT ROUTE] /faq-bot -> VNPT SmartBot | sender={sender}")
+    print(f"[CHAT ROUTE] /faq-bot -> VNPT FAQ SmartBot | sender={sender}")
     try:
         answer = await asyncio.to_thread(
-            call_smartbot,
+            call_vnpt_faq_bot,
             prompt,
             f"medparcours-support-{sender}",
             f"medparcours-support-{sender}",
         )
     except RuntimeError as exc:
-        print(f"[VNPT SMARTBOT ERROR] {exc}")
+        print(f"[VNPT FAQ SMARTBOT ERROR] {exc}")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
-        print(f"[VNPT SMARTBOT ERROR] {type(exc).__name__}: {exc}")
-        raise HTTPException(
-            status_code=502,
-            detail=f"Lỗi không xác định khi gọi VNPT SmartBot: {exc}",
-        ) from exc
+        print(f"[VNPT FAQ SMARTBOT ERROR] {type(exc).__name__}: {exc}")
+        raise HTTPException(status_code=502, detail=f"Lỗi không xác định khi gọi VNPT SmartBot: {exc}") from exc
 
-    print("[VNPT SMARTBOT OK] Đã nhận câu trả lời từ VNPT SmartBot")
-    return {
-        "text": answer,
-        "provider": "vnpt-smartbot",
-    }
+    return {"text": answer, "provider": "vnpt-smartbot"}
+
+
+class TtsRequest(BaseModel):
+    text: str
+
+
+@app.post("/voice/tts")
+async def voice_tts(request: TtsRequest, _user: dict = Depends(get_current_user)):
+    try:
+        audio_bytes = vnpt_client.VNPTClient().text_to_speech(request.text)
+        return Response(content=audio_bytes, media_type="audio/wav")
+    except Exception as e:
+        print(f"[VNPT TTS lỗi/chưa sẵn sàng] {type(e).__name__}: {e}")
+        return {"success": False, "use_local_tts": True, "message": "VNPT TTS failed"}
+
+
+@app.post("/voice/stt")
+async def voice_stt(file: UploadFile = File(...), _user: dict = Depends(get_current_user)):
+    try:
+        audio_bytes = await file.read()
+        text = vnpt_client.VNPTClient().speech_to_text(audio_bytes, file.filename or "recording.wav")
+        return {"success": True, "text": text}
+    except Exception as e:
+        print(f"[VNPT STT lỗi/chưa sẵn sàng] {type(e).__name__}: {e}")
+        return {"success": False, "text": "", "error_code": "STT_FALLBACK"}
+
+
+# ─── EKYC (OCR CCCD + nhận diện khuôn mặt) ──────────────────────────────────
+# KHÁC với TTS/STT — đây là bước LIÊN QUAN TỚI XÁC THỰC, không nên âm thầm
+# rơi về "giả thành công" khi lỗi. Lỗi phải trả success=false rõ ràng, để
+# frontend báo đúng cho bác sĩ, không tạo cảm giác an toàn giả.
+
+@app.post("/ekyc/ocr-cccd")
+async def ekyc_ocr_cccd(file_front: UploadFile = File(...), file_back: UploadFile = File(None)):
+    """
+    OCR trích xuất thông tin IN TRÊN ảnh CCCD/CMND (họ tên, số định danh,
+    ngày sinh...) bằng VNPT eKYC thật. CHỈ đọc chữ trên ảnh — KHÔNG tra cứu
+    liên thông cơ sở dữ liệu quốc gia (không có quyền truy cập CSDL đó).
+
+    Kiểm tra card_liveness TRƯỚC OCR (chống ảnh chụp lại màn hình/bản
+    photocopy) — CHỈ CẢNH BÁO, KHÔNG CHẶN CỨNG nữa. Ban đầu chặn cứng khi
+    xác nhận "không phải ảnh thật", nhưng phát hiện API này báo SAI (false
+    positive) trên ảnh CCCD thật hợp lệ khi test thực tế — chặn oan bác sĩ
+    hợp lệ tệ hơn nhiều so với rủi ro bỏ sót 1 ảnh giả (OCR vẫn đọc đúng
+    thông tin, không phải lỗ hổng bảo mật nghiêm trọng cho use case này).
+    """
+    try:
+        client = vnpt_client.VNPTClient()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"VNPT eKYC chưa được cấu hình đúng: {e}")
+
+    front_bytes = await file_front.read()
+    back_bytes = await file_back.read() if file_back else None
+
+    card_warning = None
+    try:
+        liveness = client.card_liveness(front_bytes)
+        if not liveness.get("is_real"):
+            card_warning = liveness.get("liveness_msg") or "Nghi ngờ ảnh chụp lại/photocopy — vui lòng kiểm tra lại bằng mắt."
+            print(f"[VNPT card_liveness cảnh báo — KHÔNG chặn, chỉ ghi log] {card_warning}")
+    except Exception as e:
+        print(f"[VNPT card_liveness lỗi kỹ thuật — bỏ qua bước này, vẫn cho OCR tiếp tục] {type(e).__name__}: {e}")
+
+    try:
+        result = client.ocr_id_card(front_bytes, back_bytes)
+        return {"success": True, "data": result, "card_warning": card_warning}
+    except Exception as e:
+        print(f"[VNPT eKYC OCR lỗi] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=502, detail=f"Không đọc được thông tin từ ảnh CCCD: {e}")
+
+
+@app.post("/ekyc/face-compare")
+async def ekyc_face_compare(file_cccd: UploadFile = File(...), file_face: UploadFile = File(...)):
+    """
+    So khớp khuôn mặt vừa chụp (camera) với ảnh chân dung trên CCCD —
+    xác nhận ĐÚNG NGƯỜI đang ký duyệt là chủ thẻ (khác face-liveness, chỉ
+    xác nhận "có người thật", không xác nhận đúng ai).
+    """
+    try:
+        cccd_bytes = await file_cccd.read()
+        face_bytes = await file_face.read()
+        result = vnpt_client.VNPTClient().face_compare(cccd_bytes, face_bytes)
+        return {"success": True, **result}
+    except Exception as e:
+        print(f"[VNPT eKYC Face Compare lỗi] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=502, detail=f"Không so khớp được khuôn mặt: {e}")
+
+
+@app.post("/ekyc/face-liveness")
+async def ekyc_face_liveness(file: UploadFile = File(...)):
+    """
+    Kiểm tra ảnh khuôn mặt có phải người thật đang thao tác (chống giả mạo
+    bằng ảnh in/video phát lại) bằng VNPT eKYC thật.
+
+    QUYẾT ĐỊNH TẠM THỜI CHO DEMO (theo yêu cầu trực tiếp — "tạm thời đang
+    demo nên quét mặt nào cũng cho qua"): nếu API THẬT lỗi (400/401/timeout
+    — đang gặp lỗi 400 "token" field chưa xác định rõ nguyên nhân), KHÔNG
+    chặn demo — tự báo "thành công" kèm cờ demo_fallback=True để frontend
+    biết rõ đây KHÔNG phải xác thực thật. PHẢI XEM LẠI quyết định này
+    trước khi dùng cho môi trường thật (không phải demo/thi đấu) — hiện
+    tại việc "luôn cho qua" là CÓ CHỦ ĐÍCH, không phải bug.
+    """
+    try:
+        img_bytes = await file.read()
+        result = vnpt_client.VNPTClient().face_liveness(img_bytes)
+        return {"success": True, "demo_fallback": False, **result}
+    except Exception as e:
+        print(f"[VNPT eKYC Face Liveness lỗi — DEMO FALLBACK: tự báo thành công, KHÔNG phải xác thực thật] {type(e).__name__}: {e}")
+        return {"success": True, "demo_fallback": True, "liveness": "success",
+                "liveness_msg": "Chế độ demo — chưa xác thực thật do API lỗi", "is_real": True}
+
+
+CONSULTATION_SUMMARY_SYSTEM = """Bạn là thư ký hội đồng y khoa, tóm tắt biên bản hội chẩn từ bản
+giải băng (transcript) cuộc họp. Bản giải băng có thể có lỗi nhận dạng giọng nói (từ sai/thiếu
+dấu) — cố gắng hiểu đúng ý dựa vào ngữ cảnh y khoa, KHÔNG bịa thêm nội dung không có trong
+transcript.
+
+Trả về JSON THUẦN TÚY (không markdown, không text ngoài JSON) đúng cấu trúc:
+{
+  "tom_tat_ca_benh": "Tóm tắt ngắn gọn tình trạng bệnh nhân được thảo luận",
+  "y_kien_hoi_chan": ["Từng ý kiến/nhận định chính của các bác sĩ tham gia, mỗi ý 1 câu"],
+  "huong_xu_tri": ["Các quyết định/hành động tiếp theo đã thống nhất, mỗi ý 1 câu"]
+}
+
+Nếu transcript không đủ rõ để trích xuất phần nào, để mảng rỗng cho phần đó — KHÔNG bịa nội
+dung để có vẻ đầy đủ."""
+
+
+@app.post("/consultation/summarize-audio")
+async def consultation_summarize_audio(file: UploadFile = File(...)):
+    """
+    Nhận file ghi âm hội chẩn -> tóm tắt có cấu trúc.
+
+    LUẬT FALLBACK: thử VNPT (STT + tóm tắt gộp 1 API) trước. Nếu lỗi ->
+    chạy STT thật riêng (đã có, ổn định hơn vì audio ngắn dễ xử lý hơn),
+    rồi lấy ĐÚNG transcript đó đưa cho Claude tóm tắt — KHÔNG bao giờ trả
+    nội dung lâm sàng bịa đặt không liên quan tới cuộc họp thật, kể cả khi
+    mọi bước đều lỗi (lúc đó trả lỗi rõ ràng thay vì bịa).
+    """
+    audio_bytes = await file.read()
+    filename = file.filename or "meeting.wav"
+    client = vnpt_client.VNPTClient()
+
+    try:
+        summary_text = client.summarize_meeting_audio(audio_bytes, filename)
+        return {"success": True, "summary_raw": summary_text, "source": "VNPT_AI"}
+    except Exception as e:
+        print(f"[VNPT tóm tắt hội chẩn lỗi — chuyển Claude fallback] {type(e).__name__}: {e}")
+
+    # ── Fallback: STT thật rồi Claude tóm tắt từ ĐÚNG transcript đó ─────────
+    try:
+        transcript = client.speech_to_text(audio_bytes, filename, timeout=60)
+    except Exception as e:
+        print(f"[STT fallback cũng lỗi] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=502,
+            detail="Không giải băng được file ghi âm (cả VNPT và STT dự phòng đều lỗi). "
+                   "Kiểm tra lại định dạng file hoặc thử lại sau.")
+
+    try:
+        raw = call_claude(system=CONSULTATION_SUMMARY_SYSTEM,
+                           user_message=f"Bản giải băng cuộc hội chẩn:\n\n{transcript}",
+                           max_tokens=2000)
+        structured = _parse_report_json(raw)
+    except Exception as e:
+        print(f"[Claude tóm tắt hội chẩn lỗi] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=502, detail=f"Giải băng thành công nhưng không tóm tắt được: {e}")
+
+    return {"success": True, "transcript": transcript, "summary": structured, "source": "CLAUDE_FALLBACK"}
 
 
 # ─── ECG (Mức 1: số hóa + vẽ lại) ────────────────────────────────────────────
@@ -1327,13 +1980,13 @@ Hãy trả lời trực tiếp bằng tiếng Việt."""
 
 class EcgDigitizeRequest(BaseModel):
     image_base64: str  # Ảnh ECG (PNG/JPG) đã encode base64, có hoặc không kèm data URI prefix
+    lead_name: str = "II"  # Chuyển đạo bác sĩ xác nhận đã cắt/tải lên — mặc định
+                            # "II" vì đây là chuyển đạo chuẩn cho dải nhịp theo quy
+                            # ước lâm sàng (không phải suy đoán của hệ thống).
 
 
 @app.post("/ecg")
-async def ecg_digitize(
-    request: EcgDigitizeRequest,
-    _user: dict = Depends(get_current_user),
-):
+async def ecg_digitize(request: EcgDigitizeRequest):
     """
     Nhận ảnh ECG (base64) -> số hóa Mức 1 (signal[]) + Mức 2 (ước lượng nhịp
     tim qua khoảng R-R) -> trả cho FE vẽ lại bằng SVG.
@@ -1351,16 +2004,53 @@ async def ecg_digitize(
             status_code=400,
             detail="Không đọc được ảnh. Kiểm tra lại định dạng base64 (PNG/JPG)."
         )
+    # 12 chuyển đạo chuẩn theo hệ thống ghi ECG quốc tế — validate để tránh
+    # giá trị rác hiện ra trong disclaimer/báo cáo (vd chuỗi rỗng, gõ nhầm).
+    VALID_LEADS = {"I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"}
+    lead_name = request.lead_name if request.lead_name in VALID_LEADS else "II"
+
     result = ecg_engine.digitize_ecg_image(img)
     calib = ecg_engine.estimate_px_per_mm(img)
-    r_peaks = ecg_engine.detect_r_peaks(result["signal"])
+    r_peaks = ecg_engine.detect_r_peaks(result["signal"], px_per_mm=calib["px_per_mm"])
     heart_rate = ecg_engine.compute_heart_rate(r_peaks["rr_intervals_px"], calib["px_per_mm"])
+
+    # MỨC 3 — LUẬT CỨNG AN TOÀN LÂM SÀNG (theo yêu cầu cố vấn y khoa).
+    # Ảnh tải lên thật KHÔNG qua bước AI đọc kết luận lâm sàng (chưa có prompt
+    # Claude Vision cho ECG — xem ghi chú trong ecg_engine.py), nên "findings"
+    # luôn rỗng ở nhánh này. Vẫn áp luật để: (1) redflags phản ánh đúng chất
+    # lượng tín hiệu đã biết chắc từ chính thuật toán (không suy đoán thêm),
+    # (2) confidence_level/source_of_truth nhất quán với dữ liệu demo, để FE
+    # dùng chung 1 bộ badge cho cả 2 nguồn dữ liệu.
+    redflags = []
+    if calib.get("do_tin_cay") == "thap":
+        redflags.append("Ảnh mờ hoặc lưới không rõ (chất lượng ảnh thấp)")
+    if r_peaks.get("warning"):
+        redflags.append("Nhiễu cơ hoặc không dò được đỉnh R rõ ràng")
+    if heart_rate.get("warning"):
+        redflags.append(heart_rate["warning"])
+    # Chuyển đạo I/aVR/aVL/aVF/V1 thường KHÔNG dùng để đánh giá nhịp trên lâm
+    # sàng (biên độ QRS thấp hơn, khó dò đỉnh R ổn định) — cảnh báo rõ thay vì
+    # âm thầm trả số liệu như thể mọi chuyển đạo đều đáng tin như nhau.
+    if lead_name not in ("II", "V2", "V3", "V4", "V5"):
+        redflags.append(
+            f"Chuyển đạo {lead_name} không phải chuyển đạo khuyến nghị cho dải nhịp "
+            f"(nên dùng Lead II hoặc V2-V5) — số liệu nhịp tim có thể kém tin cậy hơn."
+        )
+
+    safety = ecg_engine.apply_ecg_safety_rules(n_leads=1, redflags=redflags, findings=[])
+
     return {
         "success": True,
         **result,
+        "lead_name": lead_name,
         "calibration": calib,
         "r_peaks": r_peaks,
         "heart_rate": heart_rate,
+        "confidence_level": safety["confidence_level"],
+        "source_of_truth": "AI đo từ waveform",
+        "redflags": redflags,
+        "ghi_de_toan_bo": safety["ghi_de_toan_bo"],
+        "permanent_disclaimer": ecg_engine.ecg_permanent_disclaimer(lead_name),
         "disclaimer": "Kết quả số hóa và ước tính nhịp tim chỉ mang tính trực quan "
                        "hóa hỗ trợ, cần bác sĩ xác nhận. Không phải kết luận chẩn đoán. "
                        "Tỉ lệ pixel/mm được tự suy ra từ lưới ảnh — luôn là ƯỚC LƯỢNG, "
@@ -1369,10 +2059,7 @@ async def ecg_digitize(
 
 
 @app.get("/ecg/synthetic")
-async def ecg_synthetic_test(
-    heart_rate_bpm: float = 75.0,
-    _user: dict = Depends(get_current_user),
-):
+async def ecg_synthetic_test(heart_rate_bpm: float = 75.0):
     """
     Sinh 1 ảnh ECG TỔNG HỢP (giả, không phải dữ liệu bệnh nhân thật) + số hóa
     + ước tính nhịp tim, để FE/Postman test pipeline /ecg trong lúc CHƯA CÓ
@@ -1389,7 +2076,7 @@ async def ecg_synthetic_test(
         raise HTTPException(status_code=500, detail="Không tạo được ảnh test.")
     result = ecg_engine.digitize_ecg_image(img)
     calib = ecg_engine.estimate_px_per_mm(img)
-    r_peaks = ecg_engine.detect_r_peaks(result["signal"])
+    r_peaks = ecg_engine.detect_r_peaks(result["signal"], px_per_mm=calib["px_per_mm"])
     heart_rate = ecg_engine.compute_heart_rate(r_peaks["rr_intervals_px"], calib["px_per_mm"])
     return {
         "success": True,

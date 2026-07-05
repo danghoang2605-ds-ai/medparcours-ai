@@ -1,50 +1,39 @@
-import React, { useState, useRef, useEffect, useCallback, Component } from "react";
-import { supabase, supabaseConfigured } from "./supabaseClient";
-import { callApi } from "./api";
-// API backend và Bearer token được quản lý tập trung trong api.js.
+import React, { useState, useRef, useEffect, useCallback, useMemo, Component } from "react"
+import { supabase, supabaseConfigured } from "./supabaseClient"
+import { callApi } from "./api"
+
+// API_URL: trỏ tới backend trên Hugging Face Spaces.
+// SAU KHI tạo Space, thay URL bên dưới bằng URL thật, dạng:
+//   https://<tên-tài-khoản-HF>-mediflow-ai.hf.space   (chữ thường, dùng dấu gạch ngang)
+// Có thể ghi đè bằng window.MEDIFLOW_API_URL trong index.html mà không cần sửa file này.
+const API_URL = (typeof window !== "undefined" && window.MEDIFLOW_API_URL) || "https://danghoang2605-mediflow-ai.hf.space"
+
 // ─── Lớp gọi Backend (Hugging Face Spaces) ───────────────────────────────────
 // analyzeText/analyze: phân tích hồ sơ. mdt/teaching: lấy biên bản hội chẩn và
 // bài giảng từ medparcours_modes_backend.py. Mọi lỗi sẽ ném ra để nơi gọi fallback.
-async function mpFetchJSON(path, body, ms=45000){
+async function mpFetchJSON(path, body, ms=45000, method="POST"){
   const ctrl = new AbortController()
   const timer = setTimeout(()=>ctrl.abort(), ms)
   try {
-    const res = await callApi(path, {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body:JSON.stringify(body),
-      signal:ctrl.signal,
-    })
-
-    // Đọc body đúng 1 lần để giữ được lỗi thật do FastAPI/VNPT trả về.
-    const raw = await res.text()
-    let data = null
-    if(raw){
-      try { data = JSON.parse(raw) }
-      catch { data = { detail: raw } }
+    const opts = { method, signal: ctrl.signal }
+    if (method !== "GET" && method !== "DELETE") {
+      opts.headers = { "Content-Type":"application/json" }
+      opts.body = JSON.stringify(body)
     }
-
-    if(!res.ok){
-      const detail = typeof data?.detail === "string"
-        ? data.detail
-        : data?.detail
-          ? JSON.stringify(data.detail)
-          : raw || `HTTP ${res.status}`
-      const error = new Error(`HTTP ${res.status}: ${detail}`)
-      error.status = res.status
-      error.payload = data
-      throw error
+    const res = await callApi(path, opts)
+    if(!res.ok) {
+      // Cố đọc detail lỗi từ backend (vd "đã tồn tại", "chưa có hồ sơ") thay
+      // vì chỉ ném mã số chung chung — các endpoint /patient/* trả lỗi rõ
+      // nghĩa qua HTTPException(detail=...), nên cần giữ lại để hiện đúng
+      // cho bác sĩ thay vì "API 409" khó hiểu.
+      let detail = ""
+      try { detail = (await res.json()).detail || "" } catch {}
+      const err = new Error(detail || ("API "+res.status))
+      err.status = res.status
+      throw err
     }
-
-    return data || {}
-  } catch(error) {
-    if(error?.name === "AbortError") {
-      throw new Error(`Quá thời gian chờ phản hồi từ ${path}`)
-    }
-    throw error
-  } finally {
-    clearTimeout(timer)
-  }
+    return await res.json()
+  } finally { clearTimeout(timer) }
 }
 const mpApi = {
   analyzeText: (ho_so_text, pages=0) => mpFetchJSON("/analyze_text", { ho_so_text, pages }),
@@ -54,19 +43,99 @@ const mpApi = {
     if(!res.ok) throw new Error("API "+res.status)
     return res.json()
   },
-  mdt: (report) => mpFetchJSON("/mdt", { report }),
-  teaching: (report) => mpFetchJSON("/teaching", { report }),
-  // Hai chatbot dùng chung route /chat đã hoạt động ổn định từ bản cũ.
-  // Backend phân luồng bằng assistant_type, không dùng endpoint mạng mới.
-  askSystemBot: (question, senderId="user_test") =>
-    mpFetchJSON("/chat", {
+  // mdt/teaching: đã bỏ (xem ghi chú trong MDTView/TeachingView) — endpoint
+  // /mdt và /teaching (phẳng) chưa từng được ghép vào main.py.
+  // ─── Lưu trữ hồ sơ lâu dài (tính năng "cập nhật hồ sơ theo thời gian
+  // thực") — KHÔNG đụng gì tới các hàm trên, hồ sơ demo/luồng phân tích
+  // 1 lần vẫn hoạt động y hệt cũ dù backend chưa cấu hình Turso (4 hàm này
+  // chỉ được gọi khi bác sĩ chủ động bấm "Lưu hồ sơ"/"Cập nhật hồ sơ").
+  savePatient: (report) => mpFetchJSON("/patient/save", { report }),
+  getPatient: (soBenhAn) => mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}`, null, 45000, "GET"),
+  listPatients: () => mpFetchJSON("/patient", null, 45000, "GET"),
+  deletePatient: (soBenhAn) => mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}`, null, 45000, "DELETE"),
+  renamePatient: (soBenhAn, tenMoi) =>
+    mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}/ten`, { ten_moi: tenMoi }, 45000, "PATCH"),
+  // ─── FAQ Bot & SmartVoice (VNPT) — độc lập với MedAmi lâm sàng ─────────
+  askFaqBot: async (question, senderId="user_test") => {
+    const data = await mpFetchJSON("/chat", {
       question,
       assistant_type:"system",
       sender_id:senderId,
       ho_so_text:"",
       chat_history:[],
       mode:"system_support",
-    }, 90000),
+    }, 90000)
+    return { text: data.answer || data.text || "", provider: data.provider }
+  },
+  sendFeedback: (soBenhAn, muc, noiDung, ghiChu="") =>
+    mpFetchJSON("/feedback", { so_benh_an: soBenhAn||"", muc, noi_dung: noiDung, ghi_chu: ghiChu }, 15000),
+  getPatientHistory: (soBenhAn, limit=5) =>
+    mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}/history?limit=${limit}`, null, 20000, "GET"),
+  saveChatMessage: (soBenhAn, role, content) =>
+    mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}/chat`, { role, content }, 15000),
+  getChatHistory: (soBenhAn, limit=100) =>
+    mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}/chat?limit=${limit}`, null, 20000, "GET"),
+  ekycOcrCccd: async (fileFront) => {
+    const fd = new FormData()
+    fd.append("file_front", fileFront)
+    const res = await callApi("/ekyc/ocr-cccd", { method: "POST", body: fd })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data?.detail || "Không đọc được thông tin từ ảnh CCCD")
+    return data
+  },
+  ekycFaceLiveness: async (fileFace) => {
+    const fd = new FormData()
+    fd.append("file", fileFace)
+    const res = await callApi("/ekyc/face-liveness", { method: "POST", body: fd })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data?.detail || "Không xác thực được khuôn mặt")
+    return data
+  },
+  summarizeConsultationAudio: async (audioFile) => {
+    const fd = new FormData()
+    fd.append("file", audioFile, audioFile.name || "meeting.wav")
+    const res = await callApi("/consultation/summarize-audio", { method: "POST", body: fd })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data?.detail || "Không tóm tắt được bản ghi âm")
+    return data
+  },
+  textToSpeech: async (text) => {
+    const res = await callApi("/voice/tts", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text })
+    })
+    const ct = res.headers.get("content-type") || ""
+    if (ct.includes("audio")) return { success: true, blob: await res.blob() }
+    return await res.json()  // {success:false, use_local_tts:true, ...}
+  },
+  speechToText: async (audioBlob, filename) => {
+    // Tên file PHẢI khớp định dạng THẬT của blob — backend đoán MIME type
+    // gửi VNPT dựa vào đuôi file (mimetypes.guess_type), không phải dựa
+    // vào audioBlob.type — filename sai đuôi sẽ khai báo sai định dạng.
+    const fd = new FormData(); fd.append("file", audioBlob, filename || "ghi_am.webm")
+    const res = await callApi("/voice/stt", { method:"POST", body: fd })
+    return await res.json()  // luôn 200, xem error_code nếu success=false
+  },
+  updatePatient: (soBenhAn, hoSoText, pages, nguonTaiLieu) =>
+    mpFetchJSON("/patient/update", { so_benh_an: soBenhAn, ho_so_text: hoSoText, pages, nguon_tai_lieu: nguonTaiLieu }, 90000),
+  updatePatientFile: async (soBenhAn, file, nguonTaiLieu) => {
+    const fd = new FormData()
+    fd.append("so_benh_an", soBenhAn)
+    fd.append("nguon_tai_lieu", nguonTaiLieu || file.name || "")
+    fd.append("file", file)
+    const ctrl = new AbortController()
+    const timer = setTimeout(()=>ctrl.abort(), 90000)
+    try {
+      const res = await callApi("/patient/update_file", { method:"POST", body: fd, signal: ctrl.signal })
+      if (!res.ok) {
+        let detail = ""
+        try { detail = (await res.json()).detail || "" } catch {}
+        const err = new Error(detail || ("API "+res.status))
+        err.status = res.status
+        throw err
+      }
+      return await res.json()
+    } finally { clearTimeout(timer) }
+  },
 }
 
 // ─── Bóc chữ PDF NGAY TRONG TRÌNH DUYỆT (pdf.js từ CDN) ───────────────────────
@@ -261,6 +330,18 @@ const CSS = `
   .feat-item{display:flex;align-items:center;gap:11px;font-size:14.5px;color:var(--navy3)}
   .feat-icon{width:27px;height:27px;border-radius:9px;background:rgba(29,111,232,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0}
   .stats-row{display:flex;gap:14px}
+  .icd-groups-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+  .icd-group-tile{background:var(--page-bg,#F8FAFC);border:1px solid var(--border);border-radius:12px;padding:11px 13px}
+  .icd-group-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px}
+  .icd-group-name{font-size:13px;font-weight:700;color:var(--navy)}
+  .icd-group-range{font-size:10.5px;font-weight:700;color:#8CA0C2;font-family:monospace}
+  .icd-group-subtype{font-size:11.5px;color:var(--muted);margin-bottom:7px}
+  .icd-group-scores{display:flex;flex-wrap:wrap;gap:5px}
+  .icd-score-tag{font-size:10.5px;font-weight:600;color:#1D4ED8;background:#EFF6FF;border:1px solid #DBEAFE;border-radius:6px;padding:2px 8px}
+  .icd-groups-note{font-size:11px;color:var(--muted);font-style:italic;margin-top:10px;padding-top:9px;border-top:1px dashed var(--border)}
+  body.theme-dark .icd-group-tile{background:#0F1A2C;border-color:#2A3A52}
+  body.theme-dark .icd-group-range{color:#64748B}
+  body.theme-dark .icd-score-tag{background:#16243A;color:#7DA6F5;border-color:#2A3A52}
   .stat-block{flex:1;padding:16px 18px;background:rgba(255,255,255,0.72);border:1px solid var(--border);border-radius:18px;backdrop-filter:blur(8px)}
   .stat-n{font-size:27px;font-weight:700;color:var(--blue);letter-spacing:-.03em;margin:4px 0 2px}
   .stat-label{font-size:13.5px;font-weight:700;color:var(--navy2)}
@@ -287,6 +368,17 @@ const CSS = `
   .upload-err-x{width:22px;height:22px;border-radius:6px;border:none;background:rgba(254,202,202,0.5);cursor:pointer;display:flex;align-items:center;justify-content:center}
   .upload-err-msg{font-size:12px;color:#7F1D1D;line-height:1.5;margin-top:6px}
   .fmt-row{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:16px}
+  .upload-side-panels{display:flex;gap:14px;flex-wrap:wrap;max-width:560px;margin:18px auto 0}
+  .upload-recent{flex:1;min-width:200px;padding:14px 16px;background:var(--glass);border:1px solid var(--border);border-radius:14px;display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+  .upload-attention{flex:1;min-width:200px;margin-top:0;padding:14px 16px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:14px;display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+  .upload-attention-lbl{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:#92400E;text-transform:uppercase;letter-spacing:.04em}
+  .upload-attention-chip{font-size:12.5px;font-weight:600;color:#92400E;background:#fff;border:1px solid #FDE68A;border-radius:999px;padding:6px 14px;cursor:pointer;font-family:inherit;transition:background .15s}
+  .upload-attention-chip:hover{background:#FEF3C7}
+  .upload-recent-lbl{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:.04em}
+  .upload-recent-chips{display:flex;flex-wrap:wrap;gap:7px;justify-content:flex-start}
+  .upload-recent-chip{font-size:12.5px;font-weight:600;color:#1D6FE8;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:999px;padding:6px 14px;cursor:pointer;font-family:inherit;transition:background .15s}
+  .upload-recent-chip:hover{background:#DBEAFE}
+  @media(max-width:600px){.upload-side-panels{flex-direction:column}}
   .fmt-lbl{font-size:11px;color:#94A3B8}
   .fmt-chips{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;max-width:320px}
   .fmt-chip{font-size:10px;font-weight:700;padding:3px 9px;border-radius:999px}
@@ -648,7 +740,6 @@ const CSS = `
   .med-item{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;background:rgba(235,244,255,0.5);border:1px solid rgba(200,220,255,0.35);border-radius:14px}
   .med-icon{width:32px;height:32px;border-radius:10px;background:rgba(29,111,232,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0}
   .med-name{font-size:13px;font-weight:600;color:var(--navy);line-height:1.3}
-  .med-nhom{font-size:11px;font-weight:600;color:var(--blue);margin-top:2px}
   .med-dose{font-size:11px;color:var(--muted2);margin-top:2px}
 
   /* MED GANTT */
@@ -697,7 +788,7 @@ const CSS = `
   .summary-phase-title{font-size:13px;font-weight:700;letter-spacing:.2px;line-height:1.4}
   .reason-list{display:flex;flex-direction:column;gap:10px}
   .reason-filters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
-  .reason-bullets{margin:9px 0 0;padding:9px 0 0 4px;border-top:1px dashed rgba(200,220,255,0.5);display:flex;flex-direction:column;gap:5px}
+  .reason-bullets{margin:9px 0 0;padding:9px 0 0 4px;border-top:1px dashed rgba(200,220,255,0.5);display:flex;flex-direction:column;gap:5px;list-style:none}
   .reason-bullets li{position:relative;padding-left:16px;font-size:12.5px;color:var(--navy2);line-height:1.55}
   .reason-bullets li::before{content:"";position:absolute;left:2px;top:7px;width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.55}
   .echo-note-bullets{margin:0;padding-left:15px;display:flex;flex-direction:column;gap:2px;text-align:left}
@@ -806,39 +897,21 @@ const CSS = `
   .scroll-top.hidden{opacity:0;pointer-events:none;transform:translateY(8px)}
 
   /* FLOATING CHAT (Messenger-style) */
-  .fab-chat{position:fixed;bottom:24px;right:24px;z-index:200;width:56px;height:56px;border-radius:50%;border:none;cursor:pointer;background:linear-gradient(135deg,#1D6FE8,#06B6D4);box-shadow:0 8px 24px rgba(29,111,232,0.4);display:flex;align-items:center;justify-content:center;transition:transform .15s}
-  .fab-chat:hover{transform:scale(1.07)}
   .fab-badge{position:absolute;top:-2px;right:-2px;min-width:20px;height:20px;border-radius:999px;background:#EF4444;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 5px;border:2px solid #fff}
-  .fc-panel{position:fixed;bottom:24px;right:24px;z-index:200;width:370px;max-width:calc(100vw - 32px);height:540px;max-height:calc(100vh - 48px);background:#fff;border-radius:18px;box-shadow:0 16px 48px rgba(15,42,94,0.28);display:flex;flex-direction:column;overflow:hidden;border:1px solid rgba(200,220,255,0.5)}
-  .fc-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:linear-gradient(120deg,#1A3F8F,var(--blue))}
-  .fc-head-l{display:flex;align-items:center;gap:9px}
-  .fc-avatar{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,0.2);display:flex;align-items:center;justify-content:center;overflow:hidden}
-  .fc-title{font-size:13px;font-weight:700;color:#fff}
-  .fc-sub{font-size:11px;color:rgba(200,225,255,0.8)}
-  .fc-head-r{display:flex;gap:4px}
-  .fc-mode-tabs{display:flex;gap:5px;padding:8px 10px;background:#EEF5FF;border-bottom:1px solid rgba(200,220,255,0.6)}
-  .fc-mode-tab{flex:1;border:1px solid transparent;border-radius:999px;padding:7px 9px;background:transparent;color:#6682A8;font-family:inherit;font-size:11.5px;font-weight:700;cursor:pointer;transition:all .15s}
-  .fc-mode-tab:hover{background:#fff;color:#1D6FE8}
-  .fc-mode-tab.active{background:#fff;color:#1D6FE8;border-color:#CFE0F8;box-shadow:0 2px 7px rgba(29,111,232,0.12)}
-  .fc-provider{font-size:10px;color:rgba(220,235,255,0.82);margin-top:1px}
-  .fc-icon-btn{width:28px;height:28px;border-radius:8px;border:none;background:rgba(255,255,255,0.15);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s}
-  .fc-icon-btn:hover{background:rgba(255,255,255,0.28)}
-  .fc-msgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:9px;background:rgba(248,251,255,0.7)}
-  .bot-avatar.sm{width:22px;height:22px}
-  .bubble.sm{font-size:12.5px;padding:8px 11px;max-width:80%}
   .fc-sug{display:flex;gap:6px;overflow-x:auto;padding:8px 12px 0;scrollbar-width:none}
   .fc-sug::-webkit-scrollbar{display:none}
   .fc-sug button{flex-shrink:0;font-size:11px;font-weight:500;padding:5px 11px;border-radius:999px;border:1px solid rgba(200,220,255,0.6);background:#fff;color:var(--navy3);cursor:pointer;white-space:nowrap;font-family:inherit}
   .fc-sug button:hover{border-color:var(--blue);color:var(--blue)}
   .fc-sug button:disabled{opacity:0.5}
-  .fc-input{display:flex;align-items:center;gap:8px;padding:10px 12px;border-top:1px solid rgba(200,220,255,0.4)}
-  .fc-input input{flex:1;border:1px solid rgba(200,220,255,0.6);border-radius:999px;padding:8px 14px;font-size:13px;font-family:inherit;outline:none;color:var(--navy)}
-  .fc-input input:focus{border-color:var(--blue)}
-  .send-btn.sm{width:32px;height:32px;flex-shrink:0}
 
   /* CHAT */
   .chat-page{max-width:960px;margin:0 auto;padding:16px 24px}
   .chat-wrap{display:flex;flex-direction:column;height:calc(100vh - 130px)}
+  .chat-mode-toggle{display:flex;gap:3px;background:#F1F5F9;border-radius:999px;padding:3px;margin:0 auto 14px;width:fit-content}
+  .chat-mode-btn{border:none;background:transparent;border-radius:999px;padding:7px 16px;font-size:12.5px;font-weight:700;color:#94A3B8;cursor:pointer;transition:background .15s,color .15s}
+  .chat-mode-btn.active{background:#fff;color:#1D6FE8;box-shadow:0 1px 4px rgba(29,111,232,.18)}
+  body.theme-dark .chat-mode-toggle{background:#0B1526}
+  body.theme-dark .chat-mode-btn.active{background:#1C2E4A;color:#7DB4FF}
   .chat-msgs{flex:1;overflow-y:auto;padding-bottom:16px;display:flex;flex-direction:column;gap:10px}
   .chat-suggestions{display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px;padding:0 2px 8px;scrollbar-width:none}
   .chat-suggestions::-webkit-scrollbar{display:none}
@@ -848,7 +921,8 @@ const CSS = `
   .msg-row{display:flex;align-items:flex-end;gap:8px}
   .msg-row.user{justify-content:flex-end}
   .bot-avatar{width:28px;height:28px;border-radius:10px;background:linear-gradient(135deg,var(--blue),var(--cyan));display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden}
-  .bubble{max-width:78%;border-radius:18px;padding:11px 15px;font-size:13px;line-height:1.6;text-align:left}
+  .bubble{max-width:78%;border-radius:18px;padding:11px 15px;font-size:13px;line-height:1.6;text-align:left;display:flex;flex-direction:column}
+  .bubble .icon-tip{align-self:flex-end;margin-top:4px}
   .bubble.user{background:linear-gradient(135deg,var(--blue),var(--cyan));color:#fff;box-shadow:0 3px 12px rgba(29,111,232,0.22)}
   .bubble.bot{background:rgba(255,255,255,0.82);color:var(--navy2);border:1px solid rgba(200,220,255,0.45);backdrop-filter:blur(10px)}
   .bubble.bot ul{padding-left:18px;margin:5px 0;list-style:disc}
@@ -863,9 +937,19 @@ const CSS = `
   .typing span:nth-child(3){animation-delay:.3s}
   @keyframes bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-6px)}}
   .chat-input-row{display:flex;align-items:center;gap:10px;padding:10px 16px;background:rgba(255,255,255,0.82);border:1px solid rgba(200,220,255,0.5);border-radius:18px;backdrop-filter:blur(12px);box-shadow:0 2px 16px rgba(30,80,200,0.07)}
+  .chat-attach-btn{flex-shrink:0;width:28px;height:28px;border-radius:50%;border:1px solid rgba(200,220,255,0.6);background:transparent;color:#7A96C8;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,color .15s}
+  .chat-attach-btn:hover{background:#EFF6FF;color:#1D6FE8}
+  .chat-attach-tag{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:#1D6FE8;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:999px;padding:5px 10px;width:fit-content;margin:0 auto 8px}
+  .chat-attach-tag button{background:transparent;border:none;cursor:pointer;display:flex;padding:0;margin-left:2px}
   .chat-input{flex:1;border:none;outline:none;background:transparent;font-size:13px;color:var(--navy);font-family:inherit}
   .chat-input::placeholder{color:var(--muted)}
   .send-btn{width:34px;height:34px;border-radius:10px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;background:linear-gradient(135deg,var(--blue),var(--cyan))}
+  .chat-mic-btn{width:32px;height:32px;border-radius:50%;border:1px solid var(--border);background:var(--glass);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s,border-color .15s}
+  .chat-mic-btn:hover{background:#EFF6FF;border-color:#BFDBFE}
+  .chat-mic-btn.recording{background:#DC2626;border-color:#DC2626;animation:mp-mic-pulse 1.3s ease-in-out infinite}
+  .chat-mic-btn:disabled{opacity:.6;cursor:not-allowed}
+  .chat-mic-spin{width:13px;height:13px;border:2px solid #BFDBFE;border-top-color:#1D6FE8;border-radius:50%;animation:mp-spin .7s linear infinite}
+  @keyframes mp-mic-pulse{0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.45)}50%{box-shadow:0 0 0 7px rgba(220,38,38,0)}}
   .send-btn:disabled{background:rgba(200,220,255,0.4);cursor:default}
   .send-btn:not(:disabled):hover{transform:translateY(-1px)}
   .kbd-hint{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px}
@@ -898,6 +982,10 @@ const Icon = {
   Print:      p => <Svg {...p}><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></Svg>,
   Back:       p => <Svg {...p}><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></Svg>,
   Send:       p => <Svg {...p}><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></Svg>,
+  HelpCircle: p => <Svg {...p}><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></Svg>,
+  Mic:        p => <Svg {...p}><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></Svg>,
+  Pin:        p => <Svg {...p}><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17z"/></Svg>,
+  Speaker:    p => <Svg {...p}><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></Svg>,
   Robot:      p => <Svg {...p}><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></Svg>,
   Heart:      p => <Svg {...p}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></Svg>,
   Pulse:      p => <Svg {...p}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></Svg>,
@@ -959,9 +1047,14 @@ const MEDAMI_AVATAR = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAI
 function MedAmiAvatar({ robotSize = 13 }) {
   const [err, setErr] = useState(false)
   if (err) return <Icon.Robot d={robotSize} color="white"/>
+  // QUAN TRỌNG: kích thước PHẢI tự set ở đây (không chỉ dựa vào width:100%
+  // của khung cha) — đây chính là nguyên nhân bug ảnh phình to lấp cả header
+  // khi component này bị nhét vào 1 nút nhỏ (.faq-mode-tab) không có khung
+  // bọc kích thước cố định như .bot-avatar/.fc-avatar vẫn hay dùng trước đó.
+  const px = Math.round(robotSize * 2.2)
   return (
     <img src={MEDAMI_AVATAR} alt="MedAmi"
-      style={{ width:"100%", height:"100%", objectFit:"cover", borderRadius:"inherit", display:"block" }}
+      style={{ width:px, height:px, minWidth:px, minHeight:px, objectFit:"cover", borderRadius:"inherit", display:"block" }}
       onError={()=>setErr(true)}/>
   )
 }
@@ -1710,8 +1803,15 @@ const TIER_META = {
 }
 const TIER_ORDER = { critical:0, warning:1, stable:2 }
 
-// Nhận xét xu hướng từng chỉ số xét nghiệm dựa trên chuỗi giá trị theo thời gian
-function labVerdict(m) {
+// Nhận xét xu hướng từng chỉ số xét nghiệm dựa trên chuỗi giá trị theo thời gian.
+// inrTarget (tùy chọn): { target_min, target_max, ten_hien_thi } lấy từ
+// analysis.inr_target_detail (backend cde/anticoagulation_targets.py) — ĐÚNG
+// theo từng loại bệnh nhân (sửa van/sinh học/cơ học/không liên quan van),
+// KHÔNG còn hardcode "van cơ học 2.0-3.0" cho mọi bệnh nhân như bản cũ (đây
+// chính là "Vấn đề 1" đã nêu — hệ thống ngầm coi mọi bệnh nhân đều là ca van
+// cơ học). Nếu không có inrTarget (vd DOAC, hoặc chưa xác định đủ dữ liệu),
+// dùng nhận xét trung tính, không đoán ngưỡng.
+function labVerdict(m, inrTarget) {
   const t = m.trend
   if (!t || t.length < 2) return null
   const delta = t[t.length - 1] - t[0]
@@ -1724,7 +1824,19 @@ function labVerdict(m) {
     HGB:        () => down ? { txt:"Thiếu máu, cần theo dõi", good:false } : { txt:"Cải thiện", good:true },
     "Na+":      () => up ? { txt:"Natri đang về bình thường", good:true } : { txt:"Hạ natri", good:false },
     Albumin:    () => up ? { txt:"Dinh dưỡng cải thiện", good:true } : { txt:"Albumin thấp", good:false },
-    INR:        () => { const last = t[t.length-1]; return last < 2 ? { txt:"Dưới mục tiêu, nguy cơ huyết khối van", good:false } : last > 3 ? { txt:"Trên mục tiêu, nguy cơ chảy máu", good:false } : { txt:"Trong mục tiêu điều trị (van cơ học 2.0-3.0)", good:true } },
+    INR:        () => {
+      const last = t[t.length-1]
+      if (inrTarget && inrTarget.target_min != null && inrTarget.target_max != null) {
+        const { target_min, target_max, ten_hien_thi } = inrTarget
+        const label = ten_hien_thi ? ` (${ten_hien_thi})` : ""
+        return last < target_min ? { txt:`Dưới mục tiêu${label}, nguy cơ huyết khối`, good:false }
+          : last > target_max ? { txt:`Trên mục tiêu${label}, nguy cơ chảy máu`, good:false }
+          : { txt:`Trong mục tiêu điều trị${label}`, good:true }
+      }
+      // Chưa xác định đủ dữ liệu để biết ngưỡng đúng (vd van cơ học thiếu vị
+      // trí van/thế hệ van) — KHÔNG đoán ngưỡng, chỉ nhận xét trung tính.
+      return { txt:"Chưa xác định được ngưỡng mục tiêu chính xác — xem chi tiết ở mục An toàn thuốc", neutral:true }
+    },
   }
   return V[m.key] ? V[m.key]() : null
 }
@@ -1818,7 +1930,7 @@ function assessTrajectory(report) {
 
 const TRAJECTORY_META = {
   tot:      { label:"Đang đáp ứng điều trị tốt", color:"#059669", bg:"linear-gradient(120deg,#ECFDF5,#F0FDFA)", border:"#A7F3D0", icon:"up" },
-  on_dinh:  { label:"Tiến triển ổn định", color:"#1D6FE8", bg:"linear-gradient(120deg,#EFF6FF,#F0F9FF)", border:"#BFDBFE", icon:"flat" },
+  on_dinh:  { label:"Tiến triển ổn định", color:"#16A34A", bg:"linear-gradient(120deg,#F0FDF4,#F7FEE7)", border:"#BBF7D0", icon:"flat" },
   xau:      { label:"Có dấu hiệu xấu đi, cần chú ý", color:"#DC2626", bg:"linear-gradient(120deg,#FEF2F2,#FFF1F2)", border:"#FECACA", icon:"down" },
 }
 
@@ -1833,7 +1945,7 @@ function buildChips(report) {
     chips.push({ label: model ? `Van cơ học ${model}` : "Van cơ học", cls:"warn" })
   }
   // Chống đông
-  const ac = (report.thuoc_cuoi_ky || []).find(m => /chống đông|acenocoumarol|warfarin|coumarin/i.test(`${m.nhom} ${m.ten_thuoc}`))
+  const ac = (report.thuoc_cuoi_ky || []).find(m => /chống đông|acenocoumarol|warfarin|coumarin/i.test(`${m.ten_thuoc}`))
   if (ac) {
     const name = (ac.ten_thuoc.split(/\d/)[0] || "").trim()
     chips.push({ label:`Chống đông ${name}`, cls:"warn" })
@@ -1852,6 +1964,10 @@ function buildChips(report) {
 
 // ─── PRINT ────────────────────────────────────────────────────────────────────
 function mpCards(collapsed){ if(typeof window!=="undefined") window.dispatchEvent(new CustomEvent("mp-cards",{detail:{collapsed}})) }
+// Widget chat nổi (mount ở App() gốc) không có quyền truy cập trực tiếp
+// state "tab" (nằm trong ReportPage) — dùng custom event, đúng pattern đã
+// có sẵn (mp-cards/mp-toast), tránh phải lift state rủi ro cao lúc này.
+function mpOpenChatTab(){ if(typeof window!=="undefined") window.dispatchEvent(new CustomEvent("mp-open-chat-tab")) }
 function useGlobalCollapse(initial){
   const [c, setC] = useState(initial)
   useEffect(() => {
@@ -1978,8 +2094,8 @@ function triggerHandoff(r, docNote, bookmarks) {
     ? findings.map(f=>`<li><b>[${TIER_META[f.muc].label}]</b> ${esc(f.ten)} - ${esc(f.ly_do)}</li>`).join("")
     : "<li>Khong co canh bao can xu tri ngay.</li>"
   const medRows = meds.length
-    ? meds.map(m=>`<tr><td><b>${esc(m.ten_thuoc)}</b></td><td>${esc(m.nhom||"")}</td><td>${esc(m.lieu||"")}</td><td>${esc(m.cach_dung||"")}${m.keo_dai?" (duy tri)":""}</td></tr>`).join("")
-    : `<tr><td colspan="4">Khong co thuoc duy tri.</td></tr>`
+    ? meds.map(m=>`<tr><td><b>${esc(m.ten_thuoc)}</b></td><td>${esc(m.lieu||"")}</td><td>${esc(m.cach_dung||"")}${m.keo_dai?" (duy tri)":""}</td></tr>`).join("")
+    : `<tr><td colspan="3">Khong co thuoc duy tri.</td></tr>`
   const prioRows = prios.length
     ? prios.map(a=>`<li>${esc(a.viec)}${a.ly_do?` <span style="color:#555">- ${esc(a.ly_do)}</span>`:""}</li>`).join("")
     : "<li>Theo y lenh tai kham.</li>"
@@ -1994,10 +2110,39 @@ function triggerHandoff(r, docNote, bookmarks) {
 <div class="hdr"><div><div style="font-size:8.5pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:3pt">MedParcours AI - Tom tat ban giao 1 trang</div><h1>${esc(p.ho_ten)}</h1><div class="sub">So benh an: ${esc(p.so_benh_an)} | ${esc(p.tuoi)} tuoi, ${esc(p.gioi_tinh)}</div><div class="sub">Vao vien: ${esc(p.ngay_vao_vien)} | Ra vien: ${esc(p.ngay_ra_vien)}</div></div><div class="hdr-r">In ngay: ${new Date().toLocaleDateString("vi-VN")}<br>MedParcours AI v1.2<br><span style="color:#c00;font-weight:700">Can bac si xac nhan</span></div></div>
 <h2>Chan doan & trang thai</h2><div class="diag">${esc(r.chan_doan_chinh)}</div><div><span class="pill">${esc(phaseLabel)}</span>${ef?`<span class="pill">EF ${esc(ef.val)}</span>`:""}</div>
 <h2>Canh bao can theo doi</h2><ul>${alertRows}</ul>
-<h2>Thuoc dang dung</h2><table><tr><th>Thuoc</th><th>Nhom</th><th>Lieu</th><th>Cach dung</th></tr>${medRows}</table>
+<h2>Thuoc dang dung</h2><table><tr><th>Thuoc</th><th>Lieu</th><th>Cach dung</th></tr>${medRows}</table>
 <h2>Viec can lam o lan tai kham</h2><ul>${prioRows}</ul>
 ${bmBlk}${noteBlk}
 <div class="footer"><span>Tao tu dong boi MedParcours AI v1.2. Can bac si xem xet truoc khi dung lam sang.</span><span>HackAIthon 2026</span></div>
+</div><script>window.onload=function(){window.print()}<\/script></body></html>`)
+  win.document.close()
+}
+
+// ─── Bản tóm tắt cho bệnh nhân — KHÔNG thuật ngữ y khoa, KHÔNG số liệu kỹ
+// thuật (xét nghiệm/cảnh báo chi tiết) — chỉ giữ đúng những gì bệnh nhân/
+// người nhà cần biết: chẩn đoán viết đơn giản, thuốc cần uống, lịch tái
+// khám, khi nào cần đi khám ngay. Tách hẳn khỏi bản dành cho bác sĩ.
+function triggerPatientSummary(r) {
+  const p = r.thong_tin_benh_nhan || {}
+  const esc = s => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+  const meds = r.thuoc_cuoi_ky || []
+  const medRows = meds.length
+    ? meds.map(m=>`<tr><td><b>${esc(m.ten_thuoc)}</b></td><td>${esc(m.lieu||"")}</td><td>${esc(m.cach_dung||"")}</td></tr>`).join("")
+    : `<tr><td colspan="3">Chưa có đơn thuốc cần dùng tại nhà.</td></tr>`
+  const prios = (r.hanh_dong_uu_tien||[]).slice(0,4)
+  const prioRows = prios.length
+    ? prios.map(a=>`<li>${esc(a.viec)}</li>`).join("")
+    : "<li>Tuân theo đúng lịch hẹn tái khám của bác sĩ.</li>"
+  const win = window.open("", "_blank", "width=800,height=700")
+  win.document.write(`<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>Tóm tắt dành cho bệnh nhân: ${esc(p.ho_ten)}</title>
+<style>body{font-family:Arial,sans-serif;color:#1a1a1a;font-size:12pt;line-height:1.7;background:#fff;margin:0}.page{padding:16mm;max-width:210mm;margin:0 auto}h1{font-size:17pt;margin:0 0 4pt;color:#1D6FE8}h2{font-size:12pt;font-weight:700;color:#1D6FE8;margin:16pt 0 6pt;border-bottom:2px solid #DBEAFE;padding-bottom:3pt}.hdr{border-bottom:3px solid #1D6FE8;padding-bottom:10pt;margin-bottom:14pt}.sub{font-size:10pt;color:#555}table{width:100%;border-collapse:collapse;font-size:11pt;margin:6pt 0}th{background:#EFF6FF;font-weight:700;text-align:left;padding:6pt 8pt;border:1px solid #BFDBFE}td{padding:6pt 8pt;border:1px solid #DBEAFE}ul{margin:6pt 0;padding-left:20pt}li{margin:4pt 0}.note{background:#FFFBEB;border:1px solid #FDE68A;border-radius:8pt;padding:10pt 12pt;margin:12pt 0;font-size:10.5pt;color:#92400E}.footer{border-top:1px solid #ddd;margin-top:20pt;padding-top:8pt;font-size:9pt;color:#888;text-align:center}@media print{@page{size:A4;margin:16mm}}</style>
+</head><body><div class="page">
+<div class="hdr"><h1>Tóm tắt tình trạng sức khỏe</h1><div class="sub">Kính gửi: <b>${esc(p.ho_ten)}</b> — ${esc(p.tuoi)} tuổi</div><div class="sub">Ngày lập: ${new Date().toLocaleDateString("vi-VN")}</div></div>
+<h2>Tình trạng hiện tại</h2><p>${esc(r.chan_doan_chinh || "Đang được bác sĩ theo dõi.")}</p>
+<h2>Thuốc cần uống tại nhà</h2><table><tr><th>Tên thuốc</th><th>Liều dùng</th><th>Cách dùng</th></tr>${medRows}</table>
+<h2>Những việc cần làm</h2><ul>${prioRows}</ul>
+<div class="note"><b>Lưu ý quan trọng:</b> Đây chỉ là bản tóm tắt hỗ trợ ghi nhớ, KHÔNG thay thế lời dặn trực tiếp của bác sĩ. Nếu có triệu chứng bất thường (đau ngực, khó thở, sốt cao, chảy máu bất thường...), hãy đến cơ sở y tế gần nhất ngay lập tức, không chờ đến lịch tái khám.</div>
+<div class="footer">Tạo bởi MedParcours AI — tài liệu hỗ trợ, không phải đơn thuốc/chỉ định chính thức.</div>
 </div><script>window.onload=function(){window.print()}<\/script></body></html>`)
   win.document.close()
 }
@@ -2049,15 +2194,15 @@ function triggerPrint(r, mode, docNote, bookmarks, analysis) {
   const clinicalBody = `<h2>I. Chẩn đoán</h2><div class="row"><span class="lbl">Chẩn đoán chính:</span><span>${r.chan_doan_chinh}</span></div><div class="row"><span class="lbl">Lý do nhập viện:</span><span>${r.ly_do_vao_vien}</span></div><div class="row"><span class="lbl">Tiền sử:</span><span>${r.tien_su_benh}</span></div>
 <h2>II. Phẫu thuật</h2><table><tr><th>Ngày</th><th>Phương pháp</th><th>Kết quả</th></tr><tr><td>${r.phau_thuat.ngay}</td><td>${r.phau_thuat.phuong_phap}</td><td>${r.phau_thuat.ket_qua}</td></tr></table><div class="row"><span class="lbl">Phẫu thuật viên:</span><span>${r.phau_thuat.bac_si_phau_thuat}</span></div>
 <h2>III. Xét nghiệm</h2><table><tr><th>Chỉ số</th><th>Kết quả</th><th>BT</th><th>Đánh giá</th></tr>${(r.xet_nghiem_key||r.xet_nghiem_meta||[]).map(m=>`<tr><td>${m.key} (${m.desc})</td><td>${m.val}</td><td>${m.normal}</td><td>${m.status==="high"?"Cao":m.status==="low"?"Thấp":"BT"}</td></tr>`).join("")}</table>
-<h2>IV. Diễn biến</h2><table><tr><th style="width:80pt">Ngày</th><th style="width:70pt">Loại</th><th>Mô tả</th></tr>${r.dien_bien_lam_sang.map(ev=>`<tr><td>${ev.ngay}</td><td>${ev.loai==="canh_bao"?"Cảnh báo":ev.loai==="bat_thuong"?"Bất thường":"BT"}</td><td>${ev.mo_ta}</td></tr>`).join("")}</table>
+<h2>IV. Diễn biến</h2><table><tr><th style="width:80pt">Ngày</th><th style="width:70pt">Loại</th><th>Mô tả</th></tr>${(r.dien_bien_lam_sang||[]).map(ev=>`<tr><td>${ev.ngay}</td><td>${ev.loai==="canh_bao"?"Cảnh báo":ev.loai==="bat_thuong"?"Bất thường":"BT"}</td><td>${ev.mo_ta}</td></tr>`).join("")}</table>
 <h2>V. Siêu âm tim (${(r.sieu_am_tim?.lan_kham||[]).length} lượt)</h2><table><tr><th>Ngày</th><th>EF</th><th>Chênh áp</th><th>Kết luận</th></tr>${(r.sieu_am_tim?.lan_kham||[]).map(s=>`<tr><td>${s.ngay}${s.latest?" (gần nhất)":""}</td><td>${s.ef!=null?s.ef+"%":"-"}</td><td>${s.grad_max!=null?s.grad_max+(s.grad_tb!=null?"/"+s.grad_tb:"")+" mmHg":"-"}</td><td>${s.ghi_chu||s.chan_doan||""}</td></tr>`).join("")}</table>
-<h2>VI. Thuốc</h2><table><tr><th>Tên thuốc</th><th>Nhóm</th><th>Liều</th><th>Cách dùng</th></tr>${r.thuoc_cuoi_ky.map(t=>`<tr><td>${t.ten_thuoc}</td><td>${t.nhom}</td><td>${t.lieu}</td><td>${t.cach_dung}</td></tr>`).join("")}</table>
-<h2>VII. Cảnh báo</h2>${r.canh_bao_nguy_co.map(c=>`<div class="alert"><div class="al">[${c.muc_do==="cao"?"ƯU TIÊN CAO":c.muc_do==="trung_binh"?"Trung bình":"Theo dõi"}] ${c.mo_ta}</div><div class="as">Căn cứ: ${c.can_cu}</div></div>`).join("")}
+<h2>VI. Thuốc</h2><table><tr><th>Tên thuốc</th><th>Liều</th><th>Cách dùng</th></tr>${(r.thuoc_cuoi_ky||[]).map(t=>`<tr><td>${t.ten_thuoc}</td><td>${t.lieu}</td><td>${t.cach_dung}</td></tr>`).join("")}</table>
+<h2>VII. Cảnh báo</h2>${(r.canh_bao_nguy_co||[]).map(c=>`<div class="alert"><div class="al">[${c.muc_do==="cao"?"ƯU TIÊN CAO":c.muc_do==="trung_binh"?"Trung bình":"Theo dõi"}] ${c.mo_ta}</div><div class="as">Căn cứ: ${c.can_cu}</div></div>`).join("")}
 ${(()=>{const{findings,egfr,ctx}=runPriorityScreens(r);const s=checkDrugSafety(r.thuoc_cuoi_ky,egfr,ctx);const act=findings.filter(f=>f.muc!=="stable").sort((a,b)=>TIER_ORDER[a.muc]-TIER_ORDER[b.muc]);let h="<h2>VIII. Phân tầng ưu tiên lâm sàng</h2>";h+=act.map(f=>`<div class="alert"><div class="al">[${TIER_META[f.muc].label}] ${f.ten}</div><div class="as">${f.ly_do} — Nguồn: ${f.nguon}</div></div>`).join("")||"<p>Không có cảnh báo cần xử trí ngay.</p>";h+=`<h2>IX. Kiểm tra an toàn đơn thuốc</h2><p>Chức năng thận: eGFR ${egfr} mL/phút/1.73m2 (CKD-EPI 2021).</p>`;if(s.interactions.length)h+="<table><tr><th>Cặp thuốc</th><th>Mức</th><th>Hậu quả</th><th>Đề xuất</th></tr>"+s.interactions.map(it=>`<tr><td>${it.thuoc_a} + ${it.thuoc_b}</td><td>${TIER_META[it.muc].label}</td><td>${it.hau_qua}</td><td>${it.de_xuat}</td></tr>`).join("")+"</table>";if(s.favorable.length)h+="<p>Phù hợp khuyến cáo: "+s.favorable.map(f=>`${f.thuoc} (${f.nguon})`).join("; ")+"</p>";return h})()}
 ${riskScoresPrintBlock}
 ${ttrPrintBlock}
 ${careGapsPrintBlock}
-<h2>X. Tóm tắt</h2><p>${r.tom_tat_toan_canh}</p>`
+<h2>X. Tóm tắt</h2>${splitTomTatTheoGiaiDoan(r.tom_tat_toan_canh).map(sec=>`${sec.tieuDe?`<div class="tomtat-giaidoan-t">${sec.tieuDe}</div>`:""}<ul class="tomtat-giaidoan-ul">${sec.cau.map(c=>`<li>${c}</li>`).join("")}</ul>`).join("")}`
   const mdtPrintBody = (rr) => {
     const m = deriveMDT(rr)
     let h = `<h2>I. Tổng quan nguy cơ (MDT Risk Dashboard)</h2><table><tr><th>Vấn đề</th><th>Mức độ</th></tr>` + m.risk.map(d=>`<tr><td>${d.ten}</td><td>${d.pct}%</td></tr>`).join("") + `</table>`
@@ -2094,7 +2239,7 @@ ${careGapsPrintBlock}
   else if(mode==="full") bodyHtml = sectionSep("PHẦN A - BÁO CÁO LÂM SÀNG") + clinicalBody + sectionSep("PHẦN B - BIÊN BẢN HỘI CHẨN ĐA CHUYÊN KHOA") + mdtPrintBody(r) + sectionSep("PHẦN C - TÀI LIỆU GIẢNG DẠY") + teachingPrintBody(r)
   const win = window.open("", "_blank", "width=900,height=700")
   win.document.write(`<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>${meta.title}: ${p.ho_ten}</title>
-<style>body{font-family:'Times New Roman',serif;color:#000;font-size:11pt;line-height:1.55;background:#fff;margin:0}.page{padding:18mm 16mm;max-width:210mm;margin:0 auto}h1{font-size:13pt;text-transform:uppercase;margin:0 0 2pt}h2{font-size:10pt;font-weight:700;text-transform:uppercase;border-bottom:1.5px solid #000;padding-bottom:3pt;margin:14pt 0 7pt}.hdr{border-bottom:2.5px solid #000;padding-bottom:10pt;margin-bottom:8pt;display:flex;justify-content:space-between}.hdr-r{text-align:right;font-size:9pt;color:#444}.sub{font-size:9pt;color:#444;margin:2pt 0}.row{display:flex;gap:6pt;font-size:10pt;margin:3pt 0}.lbl{color:#555;min-width:110pt}table{width:100%;border-collapse:collapse;font-size:10pt;margin:6pt 0 12pt}th{background:#eee;font-weight:700;text-align:left;padding:4pt 7pt;border:1px solid #aaa;font-size:9pt;text-transform:uppercase}td{padding:4pt 7pt;border:1px solid #ccc;vertical-align:top}tr:nth-child(even) td{background:#f9f9f9}.alert{border:1.5px solid #000;border-left:4px solid #000;padding:6pt 10pt;margin:5pt 0}.al{font-size:9pt;font-weight:700;text-transform:uppercase;margin-bottom:2pt}.as{font-size:9pt;color:#555}.footer{border-top:1px solid #999;margin-top:20pt;padding-top:7pt;font-size:8pt;color:#666;display:flex;justify-content:space-between}.stamp{border:1.5px solid #999;width:100pt;height:60pt;display:inline-block;margin-top:8pt;text-align:center;font-size:8pt;padding:5pt;color:#999}@media print{@page{size:A4;margin:18mm 16mm}}</style>
+<style>body{font-family:'Times New Roman',serif;color:#000;font-size:11pt;line-height:1.55;background:#fff;margin:0}.page{padding:18mm 16mm;max-width:210mm;margin:0 auto}h1{font-size:13pt;text-transform:uppercase;margin:0 0 2pt}h2{font-size:10pt;font-weight:700;text-transform:uppercase;border-bottom:1.5px solid #000;padding-bottom:3pt;margin:14pt 0 7pt}.hdr{border-bottom:2.5px solid #000;padding-bottom:10pt;margin-bottom:8pt;display:flex;justify-content:space-between}.hdr-r{text-align:right;font-size:9pt;color:#444}.sub{font-size:9pt;color:#444;margin:2pt 0}.row{display:flex;gap:6pt;font-size:10pt;margin:3pt 0}.lbl{color:#555;min-width:110pt}table{width:100%;border-collapse:collapse;font-size:10pt;margin:6pt 0 12pt}th{background:#eee;font-weight:700;text-align:left;padding:4pt 7pt;border:1px solid #aaa;font-size:9pt;text-transform:uppercase}td{padding:4pt 7pt;border:1px solid #ccc;vertical-align:top}tr:nth-child(even) td{background:#f9f9f9}.alert{border:1.5px solid #000;border-left:4px solid #000;padding:6pt 10pt;margin:5pt 0}.al{font-size:9pt;font-weight:700;text-transform:uppercase;margin-bottom:2pt}.as{font-size:9pt;color:#555}.footer{border-top:1px solid #999;margin-top:20pt;padding-top:7pt;font-size:8pt;color:#666;display:flex;justify-content:space-between}.stamp{border:1.5px solid #999;width:100pt;height:60pt;display:inline-block;margin-top:8pt;text-align:center;font-size:8pt;padding:5pt;color:#999}.tomtat-giaidoan-t{font-size:10pt;font-weight:700;text-decoration:underline;margin:10pt 0 3pt}.tomtat-giaidoan-ul{margin:0 0 4pt 16pt;padding:0}.tomtat-giaidoan-ul li{margin:2pt 0;font-size:10.5pt;line-height:1.5}@media print{@page{size:A4;margin:18mm 16mm}}</style>
 </head><body><div class="page">
 <div class="hdr"><div><div style="font-size:9pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:4pt">${meta.label}</div><h1>${p.ho_ten}</h1><div class="sub">Số bệnh án: ${p.so_benh_an} | ${p.tuoi} tuổi, ${p.gioi_tinh} | ${p.dia_chi}</div><div class="sub">Ngày sinh: ${p.ngay_sinh} | Vào viện: ${p.ngay_vao_vien} | Ra viện: ${p.ngay_ra_vien}</div></div><div class="hdr-r">In ngày: ${new Date().toLocaleDateString("vi-VN")}<br>MedParcours AI v1.2<br><span style="color:#c00;font-weight:700">Cần bác sĩ xác nhận</span></div></div>
 ${bodyHtml}
@@ -2314,7 +2459,7 @@ function MedGantt({ meds }) {
         return (
           <div key={i} className="gantt-row">
             <div className="gantt-label">
-              <div className="gantt-label-name">{m.nhom}</div>
+              <div className="gantt-label-name">{m.ten_thuoc}</div>
               <div className="gantt-label-date">{m.bat_dau} → {ongoing ? "nay" : fmt(eTs)}</div>
             </div>
             <div className="gantt-track">
@@ -2325,7 +2470,7 @@ function MedGantt({ meds }) {
                 {hover===i && (
                   <div className="gantt-tip" style={{ left:`${left>70?"auto":"0"}`, right:`${left>70?"0":"auto"}` }}>
                     <div className="gantt-tip-name">{m.ten_thuoc}</div>
-                    <div className="gantt-tip-row"><span className="gantt-tip-dot" style={{background:m.color}}/>{m.nhom} · {m.lieu}</div>
+                    <div className="gantt-tip-row"><span className="gantt-tip-dot" style={{background:m.color}}/>{m.lieu}</div>
                     <div className="gantt-tip-use">{m.cach_dung}</div>
                     <div className="gantt-tip-date">{m.bat_dau} → {ongoing ? "đang dùng" : fmt(eTs)}</div>
                   </div>
@@ -2727,7 +2872,26 @@ function LogoBar({ compact }) {
   )
 }
 
-function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, onRetry, onOpenHistory, onOpenEcg, onLogout }) {
+function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, onRetry, onOpenHistory, onOpenEcg, onLogout, recentPatients, onOpenRecent }) {
+  // "Cần chú ý hôm nay" — dùng cap_nhat_luc (ngày CẬP NHẬT gần nhất) làm
+  // proxy cho "lâu chưa xem lại", KHÔNG phải "ngày hẹn tái khám tiếp theo"
+  // (dữ liệu hiện không có trường lịch hẹn tương lai riêng — không bịa ra).
+  // Ngưỡng 60 ngày là ước lượng hợp lý cho bệnh mạn tính cần theo dõi định
+  // kỳ, không phải con số y khoa chính thức — có thể chỉnh nếu Tấn/Ngân góp ý.
+  const [attentionPatients, setAttentionPatients] = useState([])
+  useEffect(() => {
+    let cancelled = false
+    mpApi.listPatients().then(data => {
+      if (cancelled) return
+      const now = Date.now()
+      const stale = (data.patients || [])
+        .filter(p => now - new Date(p.cap_nhat_luc).getTime() > 60 * 86400000)
+        .sort((a, b) => new Date(a.cap_nhat_luc) - new Date(b.cap_nhat_luc))
+        .slice(0, 3)
+      setAttentionPatients(stale)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
   const [dragging, setDragging] = useState(false)
   const [staged, setStaged] = useState([])
   const [note, setNote] = useState("")
@@ -2787,7 +2951,7 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
       <div className="hero-wrap">
         <div>
           <div className="hero-tag"><Icon.Heart d={12} color="#1D6FE8" /><div className="hero-tag-lines"><span><b>Team UN1SVENGERS</b></span><span>Vietnamese Student HackAIthon 2026 · Bảng B Challenger</span><span>Đề tài 5: Y tế</span></div></div>
-          <h1 className="hero-h1">Hồ sơ bệnh nhân<br /><em>phân tích trong 30 giây.</em></h1>
+          <h1 className="hero-h1">Hồ sơ bệnh nhân<br /><em>phân tích trong 90 giây.</em></h1>
           <p className="hero-desc">Bác sĩ upload PDF xuất từ HIS. AI đọc toàn bộ hồ sơ, tổng hợp báo cáo có cấu trúc, phát hiện cảnh báo nguy cơ và sẵn sàng trả lời mọi câu hỏi lâm sàng.</p>
           <div className="feat-list">
             {[[<Icon.FileText d={14}/>,"Tự động phân tích và tóm tắt diễn biến lâm sàng theo 3 giai đoạn."],[<Icon.Alert d={14}/>,"Phát hiện và cảnh báo sớm nguy cơ dựa trên hồ sơ bệnh án."],[<Icon.Stethoscope d={14}/>,"Hỗ trợ hội chẩn đa chuyên khoa (Virtual MDT) và giảng dạy từ Đại học Y Hà Nội (HMU)."],[<Icon.Chat d={14}/>,"Trợ lý ảo MedAmi hỏi đáp chuyên sâu cho từng hồ sơ cụ thể."]].map(([ic,text],i)=>(
@@ -2795,7 +2959,7 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
             ))}
           </div>
           <div className="stats-row">
-            {[["~90%","thời gian được tiết kiệm",<Icon.Clock d={14} color="#1D6FE8"/>],["~30 giây","cho mỗi báo cáo phân tích",<Icon.Pulse d={14} color="#1D6FE8"/>],["3 chế độ","Bác sĩ - Hội chẩn - Giảng dạy",<Icon.Layers d={14} color="#1D6FE8"/>],["100%","cảnh báo rủi ro lâm sàng",<Icon.Shield d={14} color="#1D6FE8"/>]].map(([n,sub,ic])=>(
+            {[["~90%","thời gian được tiết kiệm",<Icon.Clock d={14} color="#1D6FE8"/>],["~90 giây","cho mỗi báo cáo phân tích",<Icon.Pulse d={14} color="#1D6FE8"/>],["3 chế độ","Bác sĩ - Hội chẩn - Giảng dạy",<Icon.Layers d={14} color="#1D6FE8"/>],["100%","cảnh báo rủi ro lâm sàng",<Icon.Shield d={14} color="#1D6FE8"/>]].map(([n,sub,ic])=>(
               <div key={n} className="stat-block">
                 <div style={{display:"flex",alignItems:"center",gap:6}}>{ic}<div className="stat-n">{n}</div></div>
                 <div className="stat-sub">{sub}</div>
@@ -2846,37 +3010,67 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
               </div>
             </div>
           ) : staged.length === 0 ? (
-            <div className={`upload-zone upload-merged${dragging?" drag":""}`}
-              onDragOver={e=>{e.preventDefault();setDragging(true)}}
-              onDragLeave={()=>setDragging(false)}
-              onDrop={e=>{e.preventDefault();setDragging(false);addFiles(e.dataTransfer.files)}}>
-              <div className="upload-merged-inner">
-                <div className="upload-icon"><Icon.Upload d={28} color="#1D6FE8"/></div>
-                <p className="upload-title">Bệnh án &amp; điện tâm đồ</p>
-                <p className="upload-sub">Kéo thả tài liệu vào đây, hoặc chọn 1 trong 2 cách bên dưới</p>
-                <div className="upload-merged-actions">
-                  <button className="btn-primary" onClick={()=>inputRef.current.click()}><Icon.Upload d={15} color="white"/>Chọn bệnh án</button>
-                  <button className="btn-primary btn-primary-ecg" onClick={onOpenEcg}><Icon.Pulse d={15} color="white"/>Quét điện tâm đồ</button>
-                </div>
-                <div className="fmt-row">
-                  <span className="fmt-lbl">Bệnh án</span>
-                  <div className="fmt-chips">
-                    {["PDF","DOCX","XLSX","PPTX","PNG","JPG"].map(t=>{
-                      const k = FILE_KINDS[t.toLowerCase()] || kindOf("x."+t.toLowerCase())
-                      return <span key={t} className="fmt-chip" style={{color:k.color,background:k.bg}}>{t}</span>
-                    })}
+            <>
+              <div className={`upload-zone upload-merged${dragging?" drag":""}`}
+                onDragOver={e=>{e.preventDefault();setDragging(true)}}
+                onDragLeave={()=>setDragging(false)}
+                onDrop={e=>{e.preventDefault();setDragging(false);addFiles(e.dataTransfer.files)}}>
+                <div className="upload-merged-inner">
+                  <div className="upload-icon"><Icon.Upload d={28} color="#1D6FE8"/></div>
+                  <p className="upload-title">Bệnh án &amp; điện tâm đồ</p>
+                  <p className="upload-sub">Kéo thả tài liệu vào đây, hoặc chọn 1 trong 2 cách bên dưới</p>
+                  <div className="upload-merged-actions">
+                    <button className="btn-primary" onClick={()=>inputRef.current.click()}><Icon.Upload d={15} color="white"/>Chọn bệnh án</button>
+                    <button className="btn-primary btn-primary-ecg" onClick={onOpenEcg}><Icon.Pulse d={15} color="white"/>Quét điện tâm đồ</button>
                   </div>
-                </div>
-                <div className="fmt-row">
-                  <span className="fmt-lbl">Điện tâm đồ</span>
-                  <div className="fmt-chips">
-                    {["PNG","JPG"].map(t=>(
-                      <span key={t} className="fmt-chip" style={{color:"#DC2626",background:"#FEF2F2"}}>{t}</span>
-                    ))}
+                  <div className="fmt-row">
+                    <span className="fmt-lbl">Bệnh án</span>
+                    <div className="fmt-chips">
+                      {["PDF","DOCX","XLSX","PPTX","PNG","JPG"].map(t=>{
+                        const k = FILE_KINDS[t.toLowerCase()] || kindOf("x."+t.toLowerCase())
+                        return <span key={t} className="fmt-chip" style={{color:k.color,background:k.bg}}>{t}</span>
+                      })}
+                    </div>
+                  </div>
+                  <div className="fmt-row">
+                    <span className="fmt-lbl">Điện tâm đồ</span>
+                    <div className="fmt-chips">
+                      {["PNG","JPG"].map(t=>(
+                        <span key={t} className="fmt-chip" style={{color:"#DC2626",background:"#FEF2F2"}}>{t}</span>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+              {(attentionPatients.length > 0 || (recentPatients && recentPatients.length > 0)) && (
+                <div className="upload-side-panels">
+                  {attentionPatients.length > 0 && (
+                    <div className="upload-attention">
+                      <span className="upload-attention-lbl"><Icon.Alert d={12}/>Cần chú ý — lâu chưa cập nhật (&gt;60 ngày)</span>
+                      <div className="upload-recent-chips">
+                        {attentionPatients.map(p => (
+                          <button key={p.so_benh_an} className="upload-attention-chip" onClick={()=>onOpenRecent(p.so_benh_an)}>
+                            {p.ho_ten || p.so_benh_an}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {recentPatients && recentPatients.length > 0 && (
+                    <div className="upload-recent">
+                      <span className="upload-recent-lbl"><Icon.Clock d={12}/>Xem gần đây</span>
+                      <div className="upload-recent-chips">
+                        {recentPatients.map(p => (
+                          <button key={p.so_benh_an} className="upload-recent-chip" onClick={()=>onOpenRecent(p.so_benh_an)}>
+                            {p.ho_ten || p.so_benh_an}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           ) : (
             <div className="stage-wrap">
               <div className="stage-head">
@@ -2989,10 +3183,238 @@ function SidebarMinimap({ activeId, onNavigate }) {
 }
 
 // ─── REPORT PAGE ──────────────────────────────────────────────────────────────
-function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChatMessages, onOpenHistory, onLogout }) {
+// ─── Mô phỏng tra cứu liên thông CCCD (Đề án 06) — TÍNH NĂNG DỰ KIẾN ──────
+// CỐ Ý gắn nhãn "Mô phỏng" rõ ràng — đây KHÔNG phải tích hợp thật với CSDL
+// quốc gia (chưa có quyền truy cập/API thật), chỉ minh họa luồng UX dự
+// kiến. Không hiện kết quả "thành công" mà không kèm nhãn, tránh gây hiểu
+// nhầm đây là chức năng đã hoạt động thật khi demo/chấm điểm.
+function CccdLookupModal({ onClose }) {
+  const [step, setStep] = useState("idle") // idle | ocr_loading | ocr_done | loading | success | error
+  const [file, setFile] = useState(null)
+  const [cccdNumber, setCccdNumber] = useState("")
+  const [ocrData, setOcrData] = useState(null)
+  const [cardWarning, setCardWarning] = useState(null)
+  const [errMsg, setErrMsg] = useState("")
+  const fileInputRef = useRef()
+
+  const pickFile = (f) => {
+    if (!f) return
+    setFile(f)
+    setStep("ocr_loading")
+    mpApi.ekycOcrCccd(f)
+      .then(res => { setOcrData(res.data); setCardWarning(res.card_warning || null); setStep("ocr_done") })
+      .catch(err => { setErrMsg(err.message || "Không đọc được ảnh CCCD"); setStep("error") })
+  }
+
+  const runLookup = () => {
+    setStep("loading")
+    // Bước "tra cứu liên thông CSDL Quốc gia" là MÔ PHỎNG — không có quyền
+    // truy cập CSDL đó thật, dù đi từ đường NHẬP SỐ hay QUÉT ẢNH. Bước OCR
+    // (đường quét ảnh) vẫn là kết quả THẬT từ ảnh vừa tải lên, không bịa —
+    // chỉ riêng bước "tìm thấy hồ sơ liên thông" sau đó là mô phỏng.
+    setTimeout(() => setStep("success"), 1500)
+  }
+
+  const openRecord = (id) => {
+    window.dispatchEvent(new CustomEvent("mp-load-demo-patient", { detail: { id } }))
+    onClose()
+  }
+
+  return (
+    <div className="cfm-ov" onClick={onClose}>
+      <div className="cfm sim-modal" onClick={e=>e.stopPropagation()}>
+        <div className="cfm-t"><Icon.Note d={16}/>Tra cứu liên thông CCCD qua VNPT eKYC</div>
+        {step === "idle" && (
+          <>
+            <p className="sim-desc">Nhập số CCCD, hoặc tải ảnh thẻ lên để tự động trích xuất thông tin (VNPT eKYC OCR).</p>
+            <label className="sim-field-lbl">1. Nhập số CCCD</label>
+            <input className="sim-input" value={cccdNumber} onChange={e=>setCccdNumber(e.target.value.replace(/\D/g,""))}
+              placeholder="Nhập 12 số CCCD..." maxLength={12} inputMode="numeric"/>
+            <button className="btn-primary" style={{width:"100%",justifyContent:"center",marginTop:8}}
+              disabled={cccdNumber.length !== 12} onClick={runLookup}>Truy xuất theo số CCCD</button>
+            <div className="sim-or-divider">hoặc</div>
+            <label className="sim-field-lbl">2. Quét ảnh CCCD</label>
+            <input type="file" accept="image/*" ref={fileInputRef} style={{display:"none"}} onChange={e=>pickFile(e.target.files[0])}/>
+            <button className="sim-upload-btn" onClick={()=>fileInputRef.current.click()}><Icon.Upload d={14} color="#1D6FE8"/>Tải ảnh CCCD (VNPT eKYC OCR)</button>
+            <div className="cfm-actions"><button className="btn-secondary-sm" onClick={onClose}>Hủy</button></div>
+          </>
+        )}
+        {step === "ocr_loading" && (
+          <div className="sim-loading"><span className="chat-mic-spin" style={{width:22,height:22,borderWidth:3}}/>Đang gọi VNPT eKYC OCR trích xuất CCCD...</div>
+        )}
+        {step === "error" && (
+          <div className="sim-loading" style={{color:"#DC2626"}}>{errMsg}
+            <div className="cfm-actions"><button className="btn-primary" onClick={()=>setStep("idle")}>Thử lại</button></div>
+          </div>
+        )}
+        {step === "ocr_done" && ocrData && (
+          <>
+            {cardWarning && (
+              <div className="sim-card-warning"><Icon.Alert d={13} color="#B45309"/>Lưu ý: {cardWarning} — vẫn tiếp tục vì đây có thể là báo động giả, bác sĩ tự kiểm tra lại bằng mắt.</div>
+            )}
+            <div className="sim-ocr-result">
+              {ocrData.name && <div><b>Họ tên:</b> {ocrData.name}</div>}
+              {ocrData.id && <div><b>Số CCCD:</b> {ocrData.id}</div>}
+              {ocrData.birth_day && <div><b>Ngày sinh:</b> {ocrData.birth_day}</div>}
+            </div>
+            <div className="cfm-actions">
+              <button className="btn-secondary-sm" onClick={onClose}>Hủy</button>
+              <button className="btn-primary" onClick={runLookup}>Truy xuất liên thông</button>
+            </div>
+          </>
+        )}
+        {step === "loading" && (
+          <div className="sim-loading"><span className="chat-mic-spin" style={{width:22,height:22,borderWidth:3}}/>Kết nối CSDL Quốc gia...</div>
+        )}
+        {step === "success" && (
+          <div className="sim-success">
+            <Icon.ShieldCheck d={28} color="#059669"/>
+            <div>Truy xuất thành công. Đã đồng bộ hồ sơ cũ của bệnh nhân — đang mở hồ sơ <b>NGUYỄN VĂN A</b>, số bệnh án <b>25.019647</b>.</div>
+            <div className="sim-record-list">
+              <button className="sim-record-btn" onClick={()=>openRecord("BN-A")}>
+                <Icon.FileText d={14} color="#1D6FE8"/>Truy cập hồ sơ — NGUYỄN VĂN A (BA 25.019647)
+              </button>
+              <button className="sim-record-btn" onClick={()=>openRecord("BN-B")}>
+                <Icon.FileText d={14} color="#1D6FE8"/>Truy cập hồ sơ — NGUYỄN VĂN B (BA 26.007850)
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Mô phỏng chữ ký sinh trắc học bác sĩ (VNPT eKYC) — TÍNH NĂNG DỰ KIẾN ──
+// CỐ Ý gắn nhãn "Mô phỏng" — KHÔNG phải xác thực sinh trắc học thật. Đây là
+// chức năng liên quan trực tiếp tới TÍNH XÁC THỰC của hồ sơ xuất ra — hiện
+// số liệu "thành công" cụ thể (vd tỉ lệ liveness) mà không gắn nhãn rõ có
+// thể khiến người xem hiểu nhầm đây là cơ chế bảo mật thật đang bảo vệ báo
+// cáo xuất ra, trong khi thực tế bấm "Hủy" vẫn xuất được bình thường qua
+// đường khác — không nên tạo cảm giác an toàn giả.
+function BiometricSignatureModal({ onClose, onComplete }) {
+  const [step, setStep] = useState("idle") // idle | camera_on | scanning | success | error
+  const [result, setResult] = useState(null)
+  const [errMsg, setErrMsg] = useState("")
+  const videoRef = useRef()
+  const canvasRef = useRef()
+  const streamRef = useRef(null)
+
+  const stopCamera = () => {
+    try { streamRef.current?.getTracks().forEach(t => t.stop()) } catch {}
+    streamRef.current = null
+  }
+  useEffect(() => stopCamera, []) // luôn tắt camera khi đóng modal — không để camera chạy ngầm
+
+  const openCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+      streamRef.current = stream
+      setStep("camera_on")
+      // video element chỉ render SAU khi step đổi -> gán srcObject ở lần
+      // render kế tiếp qua useEffect thay vì ngay tại đây (ref chưa mount).
+    } catch {
+      setErrMsg("Không truy cập được camera. Hãy cho phép quyền camera cho trang web rồi thử lại.")
+      setStep("error")
+    }
+  }
+  useEffect(() => {
+    if (step === "camera_on" && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current
+    }
+  }, [step])
+
+  const captureAndVerify = () => {
+    const video = videoRef.current, canvas = canvasRef.current
+    if (!video || !canvas) return
+    canvas.width = video.videoWidth || 480
+    canvas.height = video.videoHeight || 360
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height)
+    stopCamera()
+    setStep("scanning")
+    canvas.toBlob(blob => {
+      if (!blob) { setErrMsg("Không chụp được ảnh từ camera."); setStep("error"); return }
+      const file = new File([blob], "face_capture.jpg", { type: "image/jpeg" })
+      mpApi.ekycFaceLiveness(file)
+        .then(res => {
+          if (!res.is_real) {
+            setErrMsg(res.liveness_msg || "Không xác định được người thật — thử lại, nhìn thẳng camera và đủ sáng.")
+            setStep("error")
+            return
+          }
+          setResult(res)
+          setStep("success")
+        })
+        .catch(err => { setErrMsg(err.message || "Không xác thực được khuôn mặt"); setStep("error") })
+    }, "image/jpeg", 0.9)
+  }
+
+  return (
+    <div className="cfm-ov" onClick={onClose}>
+      <div className="cfm sim-modal" onClick={e=>e.stopPropagation()}>
+        <div className="cfm-t"><Icon.ShieldCheck d={16}/>Ký duyệt bằng sinh trắc học (VNPT eKYC)</div>
+        <p className="sim-desc">Yêu cầu xác thực Bác sĩ điều trị trước khi ra y lệnh &amp; xuất hồ sơ.</p>
+        <div className={`sim-camera-box${step==="scanning"?" scanning":""}`}>
+          {step === "camera_on" ? (
+            <video ref={videoRef} autoPlay playsInline muted className="sim-camera-video"/>
+          ) : (
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke={step==="success"?"#059669":"#94A3B8"} strokeWidth="1.6"><rect x="2" y="7" width="15" height="10" rx="2"/><path d="M17 10l5-3v10l-5-3"/></svg>
+          )}
+          {step === "scanning" && <div className="sim-scan-line"/>}
+        </div>
+        <canvas ref={canvasRef} style={{display:"none"}}/>
+        {step === "idle" && (
+          <div className="cfm-actions">
+            <button className="btn-secondary-sm" onClick={onClose}>Hủy</button>
+            <button className="btn-primary" onClick={openCamera}>Bắt đầu quét khuôn mặt</button>
+          </div>
+        )}
+        {step === "camera_on" && (
+          <div className="cfm-actions">
+            <button className="btn-secondary-sm" onClick={()=>{stopCamera();onClose()}}>Hủy</button>
+            <button className="btn-primary" onClick={captureAndVerify}>Chụp &amp; Xác thực</button>
+          </div>
+        )}
+        {step === "scanning" && (
+          <div className="sim-loading"><span className="chat-mic-spin" style={{width:22,height:22,borderWidth:3}}/>Đang gọi VNPT eKYC Liveness API...</div>
+        )}
+        {step === "error" && (
+          <div className="sim-loading" style={{color:"#DC2626"}}>{errMsg}
+            <div className="cfm-actions"><button className="btn-primary" onClick={()=>setStep("idle")}>Thử lại</button></div>
+          </div>
+        )}
+        {step === "success" && (
+          <div className="sim-success">
+            <Icon.ShieldCheck d={28} color="#059669"/>
+            <div>Xác thực thành công{result?.demo_fallback ? "" : `. ${result?.liveness_msg}`}. Chữ ký điện tử: <b>BS. Nguyễn Văn X</b>.</div>
+            <button className="btn-primary" onClick={onComplete}>Hoàn tất tải báo cáo</button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chatMessages, setChatMessages, onOpenHistory, onLogout }) {
   const [tab, setTab] = useState("report")
+  useEffect(() => {
+    const h = () => setTab("chat")
+    window.addEventListener("mp-open-chat-tab", h)
+    return () => window.removeEventListener("mp-open-chat-tab", h)
+  }, [])
+  // Đồng bộ: BẤT KỲ lúc nào chuyển sang trang Chat lớn (không chỉ qua nút
+  // mở rộng widget — có thể bấm thẳng tab "Chatbot" trên header), widget
+  // nhỏ ở góc màn hình phải tự đóng theo, tránh 2 khung chat cùng mở lấn
+  // nhau.
+  useEffect(() => {
+    if (tab === "chat" && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("mp-close-chat-widget"))
+    }
+  }, [tab])
   const [viewMode, setViewMode] = useState("clinical")
   const [menuOpen, setMenuOpen] = useState(false)
+  const [cccdModalOpen, setCccdModalOpen] = useState(false)
+  const [ekycModalOpen, setEkycModalOpen] = useState(false)
   const noteKey = "mp_note_" + ((report && report.thong_tin_benh_nhan && report.thong_tin_benh_nhan.so_benh_an) || "x")
   const [docNote, setDocNote] = useState("")
   useEffect(() => { try { setDocNote(sessionStorage.getItem(noteKey) || "") } catch {} }, [noteKey])
@@ -3007,6 +3429,35 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
   }
   const pkey = (report && report.thong_tin_benh_nhan && report.thong_tin_benh_nhan.so_benh_an) || "x"
   CURRENT_PKEY = pkey
+  // ─── Lưu trữ hồ sơ lâu dài (mới) — KHÔNG ảnh hưởng demo/luồng phân tích cũ.
+  // "savedStatus": null (chưa kiểm tra) | "chua_luu" | "da_luu" | "loi_ket_noi"
+  // — kiểm tra 1 lần khi mở report (xem hồ sơ này ĐÃ từng lưu trong database
+  // chưa), để hiện đúng nút "Lưu hồ sơ" hay "Cập nhật hồ sơ".
+  const [savedStatus, setSavedStatus] = useState(null)
+  const [savedMeta, setSavedMeta] = useState(null) // {so_lan_cap_nhat, cap_nhat_luc}
+  const [updatePanelOpen, setUpdatePanelOpen] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    if (!pkey || pkey === "x") { setSavedStatus(null); return }
+    mpApi.getPatient(pkey)
+      .then(data => { if (!cancelled) { setSavedStatus("da_luu"); setSavedMeta({ so_lan_cap_nhat: data.so_lan_cap_nhat, cap_nhat_luc: data.cap_nhat_luc }) } })
+      .catch(err => {
+        if (cancelled) return
+        if (err.status === 404) setSavedStatus("chua_luu")
+        else setSavedStatus("loi_ket_noi") // Turso chưa cấu hình / lỗi mạng — KHÔNG chặn xem báo cáo
+      })
+    return () => { cancelled = true }
+  }, [pkey])
+  const handleSavePatient = async () => {
+    try {
+      await mpApi.savePatient(report)
+      setSavedStatus("da_luu")
+      setSavedMeta({ so_lan_cap_nhat: 1, cap_nhat_luc: new Date().toISOString() })
+      mpToast("Đã lưu hồ sơ — có thể cập nhật thêm tài liệu cho lần khám sau")
+    } catch (err) {
+      mpToast(err.message || "Không lưu được hồ sơ — kiểm tra kết nối", "err")
+    }
+  }
   const [bmList, setBmList] = useState([])
   useEffect(() => { const h=()=>setBmList(bmGet(pkey)); h(); window.addEventListener("mp-bm",h); return ()=>window.removeEventListener("mp-bm",h) }, [pkey])
   const goToBookmark = (it) => {
@@ -3118,11 +3569,60 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
               <span className="logo-sub" style={{fontSize:12}}>AI</span>
             </div>
             <div className="nav-right">
+              <button className="nav-hist-btn" onClick={onOpenHistory} title="Lịch sử bệnh án" aria-label="Lịch sử bệnh án">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg>
+                <span className="nav-btn-txt">Lịch sử bệnh án</span>
+              </button>
+              <IconTip text="Mô phỏng tra cứu liên thông CCCD (Đề án 06) — tính năng dự kiến" position="top">
+                <button className="nav-hist-btn" onClick={()=>setCccdModalOpen(true)} aria-label="Tra cứu liên thông CCCD">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="12" r="2"/><line x1="14" y1="10" x2="19" y2="10"/><line x1="14" y1="14" x2="18" y2="14"/></svg>
+                  <span className="nav-btn-txt">Tra cứu CCCD</span>
+                </button>
+              </IconTip>
+              {(!pkey || pkey === "x") ? (
+                <button className="nav-save-btn err" disabled title="Hồ sơ này chưa có số bệnh án (AI không trích được từ tài liệu) — không thể lưu lâu dài. Bổ sung số bệnh án trong hồ sơ gốc rồi phân tích lại." aria-label="Thiếu số bệnh án, không lưu được">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><line x1="12" y1="11" x2="12" y2="14"/><circle cx="12" cy="17" r="0.5" fill="currentColor"/></svg>
+                  <span className="nav-btn-txt">Không thể lưu</span>
+                </button>
+              ) : <>
+                {savedStatus === "chua_luu" && (
+                  <button className="nav-save-btn primary" onClick={handleSavePatient} title="Lưu hồ sơ (để cập nhật lần sau)" aria-label="Lưu hồ sơ">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    <span className="nav-btn-txt">Lưu</span>
+                  </button>
+                )}
+                {savedStatus === "da_luu" && (
+                  <button className="nav-save-btn primary saved" onClick={()=>setUpdatePanelOpen(true)} title={`Số bệnh án: ${pkey} — đã lưu, cập nhật lần ${savedMeta?.so_lan_cap_nhat}, lúc ${savedMeta?.cap_nhat_luc ? fmtDateTime(savedMeta.cap_nhat_luc) : "?"}. Nếu đây là bệnh nhân MỚI (không phải cùng người với lần lưu trước), khả năng cao AI đã trích xuất trùng số bệnh án với 1 hồ sơ khác đã lưu — kiểm tra lại đúng số bệnh án trên tài liệu gốc.`} aria-label="Cập nhật hồ sơ">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+                    <span className="nav-btn-txt">Cập nhật / Lưu</span>
+                  </button>
+                )}
+                {savedStatus === "loi_ket_noi" && (
+                  <button className="nav-save-btn err" disabled title="Chưa kết nối được hệ thống lưu trữ lâu dài — chỉ xem được báo cáo lần này, không lưu lại được." aria-label="Lỗi kết nối lưu trữ">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><line x1="4" y1="4" x2="20" y2="20"/></svg>
+                    <span className="nav-btn-txt">Lỗi kết nối</span>
+                  </button>
+                )}
+                {savedStatus === null && (
+                  <button className="nav-save-btn" disabled title="Đang kiểm tra trạng thái lưu trữ..." aria-label="Đang kiểm tra">
+                    <span className="hist-del-spin"/>
+                  </button>
+                )}
+              </>}
+              <IconTip text={focusMode ? "Thoát chế độ trình chiếu" : "Chế độ trình chiếu — ẩn thanh bên, tập trung nội dung"} position="top">
+                <button className={`nav-compact-btn${focusMode?" active":""}`} onClick={toggleFocusMode} aria-label="Chế độ trình chiếu">
+                  {focusMode
+                    ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+                    : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>}
+                </button>
+              </IconTip>
               <button className="nav-bm-btn" onClick={()=>setTab("bookmarks")} title="Mục đã đánh dấu" aria-label="Mục đã đánh dấu">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill={bmList.length>0?"currentColor":"none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
                 {bmList.length>0 && <span className="nav-bm-badge">{bmList.length}</span>}
               </button>
-              <button className="nav-export" onClick={()=>triggerPrint(report, viewMode, docNote, bmList, analysis)} title="Xuất báo cáo"><Icon.Print d={14} color="#fff"/><span className="nav-export-txt">Xuất báo cáo</span></button>
+              <IconTip text="Mô phỏng ký duyệt sinh trắc học trước khi xuất (VNPT eKYC) — tính năng dự kiến" position="top">
+                <button className="nav-export" onClick={()=>setEkycModalOpen(true)} aria-label="Ký duyệt & xuất báo cáo"><Icon.Print d={14} color="#fff"/><span className="nav-export-txt">Ký duyệt &amp; Xuất báo cáo</span></button>
+              </IconTip>
               <div className="nav-menu-wrap">
                 <button className="nav-burger" onClick={()=>setMenuOpen(o=>!o)} title="Menu" aria-label="Menu">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -3133,6 +3633,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
                     <div className="nav-menu-sec">Xuất & chia sẻ</div>
                     <button onClick={()=>{setMenuOpen(false);triggerPrint(report,"full",docNote,bmList,analysis)}}><Icon.FileText d={14} color="#475569"/>Xuất bản đầy đủ (3 chế độ)</button>
                     <button onClick={()=>{setMenuOpen(false);triggerHandoff(report,docNote,bmList)}}><Icon.FileText d={14} color="#475569"/>Tóm tắt 1 trang (bàn giao)</button>
+                    <button onClick={()=>{setMenuOpen(false);triggerPatientSummary(report)}}><Icon.Heart d={14} color="#475569"/>Bản tóm tắt cho bệnh nhân (dễ hiểu)</button>
                     <button onClick={()=>{setMenuOpen(false);exportLabsCSV(report)}}><Icon.Flask d={14} color="#475569"/>Xuất xét nghiệm (CSV)</button>
                     <button onClick={()=>{setMenuOpen(false); (async()=>{ try{ await navigator.clipboard.writeText(reportToText(report)); mpToast("Đã sao chép toàn bộ báo cáo") }catch{ mpToast("Không sao chép được","err") } })()}}><Icon.FileText d={14} color="#475569"/>Sao chép toàn bộ báo cáo</button>
                     <div className="nav-menu-sec">Công cụ</div>
@@ -3153,7 +3654,6 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
                     <button onClick={()=>setZoom(z=>Math.min(1.4,+(z+0.1).toFixed(2)))} title="Lớn hơn">A+</button>
                   </div>
                   <div className="nav-menu-sec">Hồ sơ</div>
-                  <button onClick={()=>{setMenuOpen(false);onOpenHistory()}}><Icon.Clock d={14} color="#475569"/>Lịch sử bệnh án</button>
                   <button onClick={async()=>{setMenuOpen(false); if(await mpConfirm({title:"Phân tích hồ sơ mới?",message:"Báo cáo đang xem sẽ được đóng lại. Bạn có thể mở lại trong Lịch sử bệnh án.",okText:"Tiếp tục"})) onReset()}}><Icon.Back d={13} color="#475569"/>Hồ sơ mới</button>
                   <button className="danger" onClick={async()=>{setMenuOpen(false); if(await mpConfirm({title:"Đăng xuất khỏi MedParcours AI?",message:"Bạn sẽ quay lại màn hình đăng nhập.",okText:"Đăng xuất",danger:true})) onLogout()}}><Icon.Close d={13} color="#DC2626"/>Đăng xuất</button>
                 </div>
@@ -3215,14 +3715,21 @@ function ReportPage({ report, hoSoText, analysis, onReset, chatMessages, setChat
       {tab === "bookmarks" && (
         <BookmarkPage pkey={pkey} items={bmList} onGo={(it)=>{goToBookmark(it)}} onBack={()=>setTab("report")}/>
       )}
-      {tab === "report" && (
-        <UnifiedChatWidget report={report} hoSoText={hoSoText} messages={chatMessages} setMessages={setChatMessages} mode={viewMode}
-          onExpand={()=>setTab("chat")}/>
-      )}
       <PatientSnapshot report={report}/>
       <DoctorNote value={docNote} onChange={saveNote}/>
       <ReadProgress/>
       <ScrollToTop/>
+      {updatePanelOpen && (
+        <UpdatePatientPanel pkey={pkey} onClose={()=>setUpdatePanelOpen(false)}
+          onUpdated={(result)=>{
+            setUpdatePanelOpen(false)
+            setSavedMeta({ so_lan_cap_nhat: result.so_lan_cap_nhat, cap_nhat_luc: new Date().toISOString() })
+            onReportUpdated && onReportUpdated(result.report, result.analysis)
+          }}/>
+      )}
+      {cccdModalOpen && <CccdLookupModal onClose={()=>setCccdModalOpen(false)}/>}
+      {ekycModalOpen && <BiometricSignatureModal onClose={()=>setEkycModalOpen(false)}
+        onComplete={()=>{ setEkycModalOpen(false); triggerPrint(report, viewMode, docNote, bmList, analysis) }}/>}
     </div>
   )
 }
@@ -3327,15 +3834,20 @@ function SummaryCard({ text }) {
   const safe = typeof text === "string" ? text : (text == null ? "" : String(text))
   const toBullets = (body) => String(body || "").split(/(?<=\.)\s+/).map(s=>s.replace(/\.$/,"").trim()).filter(Boolean)
   if (!safe.trim()) return null
-  // Tách theo marker "GIAI ĐOẠN ...:"
-  const re = /GIAI ĐO[AẠ]N[^:]*:/gi
+  // Tách theo marker "GIAI ĐOẠN ...:" — CHỈ khớp đúng 3 cụm cố định mà
+  // REPORT_SYSTEM quy định (viết hoa, không có cờ /i). Bug đã sửa: regex cũ
+  // dùng cờ /i (case-insensitive) nên bắt nhầm cụm "giai đoạn" viết thường
+  // xuất hiện tình cờ giữa câu văn AI viết (vd "...phù hợp giai đoạn ngay
+  // sau mổ tim.") làm marker giả, nuốt luôn đoạn text từ đó tới dấu ":" kế
+  // tiếp — khiến tiêu đề Giai đoạn 3 hiển thị lẫn cả câu cuối của Giai đoạn 2.
+  const re = /GIAI ĐO[AẠ]N (TRƯỚC MỔ|SAU MỔ[^:]*|NGOẠI TRÚ[^:]*|HỒI PHỤC[^:]*):/g
   const markers = [...safe.matchAll(re)]
   let blocks = []
   if (markers.length) {
     markers.forEach((m, i) => {
       const start = m.index + m[0].length
       const end = i+1 < markers.length ? markers[i+1].index : safe.length
-      const rawTitle = m[0].replace(/:$/,"").replace(/GIAI ĐO[AẠ]N/i,"").trim()
+      const rawTitle = m[0].replace(/:$/,"").replace(/GIAI ĐO[AẠ]N/,"").trim()
       blocks.push({ phase: i+1, title: rawTitle, items: toBullets(safe.slice(start, end)) })
     })
   }
@@ -3461,7 +3973,7 @@ function PhaseSection({ phase, events, info, ketLuan }) {
         <span className="phase-sec-tag" style={{ background:m.color }}><i/>{m.name}</span>
         {rangeTxt && <span className="phase-sec-range">{rangeTxt}</span>}
         <span className="sec-tools" onClick={e=>e.stopPropagation()}>
-          <WidgetNoteOnlyButton tools={tools}/>
+          <WidgetToolButtons tools={tools}/>
           <FlagBtn pkey={CURRENT_PKEY} label={m.name} sub="Giai đoạn lâm sàng" detail={()=>elText(bodyRef.current)}/>
           <CopyBtn text={()=>elText(bodyRef.current)}/>
         </span>
@@ -3470,7 +3982,7 @@ function PhaseSection({ phase, events, info, ketLuan }) {
         </button>
       </div>
       {!collapsed && (
-        <>
+        <WidgetEditableBody tools={tools} bodyRef={bodyRef}>
           <div className="phase-tl">
             {events.map((e,i) => {
               const rel = relMarker(e.ngay, phase, info)
@@ -3506,7 +4018,7 @@ function PhaseSection({ phase, events, info, ketLuan }) {
               <span className="phase-ketluan-lbl" style={{ color:m.color }}>Kết luận {`Giai đoạn ${phase}`}:</span> {ketLuan}
             </div>
           )}
-        </>
+        </WidgetEditableBody>
       )}
       <WidgetNotePanel tools={tools}/>
     </div>
@@ -3610,7 +4122,7 @@ function elText(el){ try { return el ? (el.innerText || el.textContent || "") : 
 function bmKey(pkey){ return "mp_bm_" + (pkey||"x") }
 function bmGet(pkey){ try{ return JSON.parse(sessionStorage.getItem(bmKey(pkey))||"[]") }catch{ return [] } }
 function bmSet(pkey, arr){ try{ sessionStorage.setItem(bmKey(pkey), JSON.stringify(arr)) }catch{} ; if(typeof window!=="undefined") window.dispatchEvent(new CustomEvent("mp-bm",{detail:{pkey}})) }
-function bmToggle(pkey, item){ const arr=bmGet(pkey); const i=arr.findIndex(x=>x.label===item.label); let added; if(i>=0){ arr.splice(i,1); added=false } else { arr.push({label:item.label, sub:item.sub||"", detail:item.detail||"", anchor:item.anchor||"", ts:Date.now()}); added=true } bmSet(pkey,arr); return added }
+function bmToggle(pkey, item){ const arr=bmGet(pkey); const i=arr.findIndex(x=>x.label===item.label); let added; if(i>=0){ arr.splice(i,1); added=false } else { arr.push({label:item.label, sub:item.sub||"", detail:item.detail||"", anchor:item.anchor||"", chartData:item.chartData||null, ts:Date.now()}); added=true } bmSet(pkey,arr); return added }
 function bmHas(pkey,label){ return bmGet(pkey).some(x=>x.label===label) }
 
 // ─── Ghi chú bác sĩ trên widget (per bệnh nhân + per widget id) ──────────────
@@ -3782,10 +4294,10 @@ function WidgetEditableBody({ tools, bodyRef, children }) {
   return <div ref={el => { bodyRef.current = el; tools.bodyElRef.current = el }}>{children}</div>
 }
 
-function FlagBtn({ pkey, label, sub, detail }){
+function FlagBtn({ pkey, label, sub, detail, chartData }){
   const [on,setOn]=useState(()=>bmHas(pkey,label))
   useEffect(()=>{ const h=()=>setOn(bmHas(pkey,label)); window.addEventListener("mp-bm",h); return ()=>window.removeEventListener("mp-bm",h) },[pkey,label])
-  const toggle=(e)=>{ e.stopPropagation(); const d = typeof detail==="function" ? detail() : (detail||""); let anchor=""; try { const a2=e.currentTarget.closest("[id]"); anchor=a2?a2.id:"" } catch {} const a=bmToggle(pkey,{label,sub,detail:d,anchor}); mpToast(a?"Đã đánh dấu để theo dõi":"Đã bỏ đánh dấu") }
+  const toggle=(e)=>{ e.stopPropagation(); const d = typeof detail==="function" ? detail() : (detail||""); const cd = typeof chartData==="function" ? chartData() : (chartData||null); let anchor=""; try { const a2=e.currentTarget.closest("[id]"); anchor=a2?a2.id:"" } catch {} const a=bmToggle(pkey,{label,sub,detail:d,anchor,chartData:cd}); mpToast(a?"Đã đánh dấu để theo dõi":"Đã bỏ đánh dấu") }
   return (
     <button className={`flag-btn${on?" on":""}`} onClick={toggle} title={on?"Bỏ đánh dấu":"Đánh dấu để theo dõi"} aria-label="Đánh dấu theo dõi">
       <svg width="13" height="13" viewBox="0 0 24 24" fill={on?"currentColor":"none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
@@ -3804,8 +4316,221 @@ function bmIconFor(sub) {
   if (s.includes("diễn biến") || s.includes("tổng quan")) return <Icon.Clock d={15} color="#1D6FE8"/>
   return <Icon.Alert d={15} color="#DC2626"/>
 }
+function UpdatePatientPanel({ pkey, onClose, onUpdated }){
+  const [staged, setStaged] = useState(null) // { file, name, size, pages, url, isImage, isPdf } | null
+  const [note, setNote] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [progress, setProgress] = useState(null)
+  const [dragging, setDragging] = useState(false)
+  const inputRef = useRef()
+
+  const onPick = async (files) => {
+    const f = files && files[0]
+    if (!f) return
+    const ext = "." + (f.name.split(".").pop() || "").toLowerCase()
+    if (![".pdf",".docx",".xlsx",".pptx",".png",".jpg",".jpeg"].includes(ext)) {
+      setError(`Định dạng ${ext || "?"} chưa được hỗ trợ. Hỗ trợ: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), ảnh (.png/.jpg).`)
+      return
+    }
+    setError(null)
+    setNote("") // chọn file thì bỏ nội dung lời dặn đang gõ dở, tránh nhầm 2 nguồn cùng lúc
+    setStaged({
+      file: f, name: f.name, size: f.size,
+      pages: ext === ".pdf" ? await countPdfPages(f) : null,
+      url: URL.createObjectURL(f),
+      isImage: /\.(png|jpe?g)$/i.test(f.name),
+      isPdf: ext === ".pdf",
+    })
+  }
+  const clearStaged = () => { if (staged?.url) try { URL.revokeObjectURL(staged.url) } catch {}; setStaged(null) }
+
+  const submitFile = async () => {
+    setLoading(true); setError(null)
+    try {
+      let result
+      if (staged.isPdf) {
+        // PDF: bóc chữ ở trình duyệt trước (giống luồng phân tích chính) để
+        // tránh giới hạn dung lượng upload, thay vì gửi cả file PDF thô.
+        setProgress("Đang đọc tài liệu...")
+        const text = await extractPdfText(staged.file, (done, total) => setProgress(`Đang đọc trang ${done}/${total}...`))
+        setProgress("Đang gộp vào hồ sơ đã lưu...")
+        result = await mpApi.updatePatient(pkey, text, 0, staged.name)
+      } else {
+        // Word/Excel/PowerPoint/ảnh: gửi thẳng file, backend tự bóc đúng định dạng.
+        setProgress(staged.isImage ? "Đang đọc ảnh (AI Vision)..." : "Đang đọc tài liệu...")
+        result = await mpApi.updatePatientFile(pkey, staged.file, staged.name)
+      }
+      if (!result.success) {
+        setError(result.error || "Không đọc được rõ nội dung tài liệu mới.")
+        setLoading(false)
+        return
+      }
+      mpToast(`Đã cập nhật hồ sơ — lần cập nhật thứ ${result.so_lan_cap_nhat}`)
+      onUpdated(result)
+    } catch (e) {
+      setError(e.message || "Có lỗi khi cập nhật hồ sơ. Hãy thử lại.")
+      setLoading(false)
+    }
+  }
+
+  const submitNote = async () => {
+    if (!note.trim()) return
+    setLoading(true); setError(null); setProgress("Đang gộp vào hồ sơ đã lưu...")
+    try {
+      const result = await mpApi.updatePatient(pkey, note, 0, "Lời dặn của bác sĩ")
+      if (!result.success) {
+        setError(result.error || "Không đọc được rõ nội dung lời dặn.")
+        setLoading(false)
+        return
+      }
+      mpToast(`Đã cập nhật hồ sơ — lần cập nhật thứ ${result.so_lan_cap_nhat}`)
+      onUpdated(result)
+    } catch (e) {
+      setError(e.message || "Có lỗi khi cập nhật hồ sơ. Hãy thử lại.")
+      setLoading(false)
+    }
+  }
+
+  const canSubmit = staged || note.trim().length > 0
+
+  return (
+    <div className="upd-ov" onClick={loading ? undefined : onClose}>
+      <div className="upd-panel" onClick={e=>e.stopPropagation()}>
+        <div className="upd-head">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+          <span>Cập nhật hồ sơ</span>
+          {!loading && <button className="fp-close" onClick={onClose} title="Đóng"><Icon.Close d={15} color="#475569"/></button>}
+        </div>
+        <div className="upd-body">
+          <p className="upd-desc">Tài liệu mới sẽ được <b>gộp</b> vào hồ sơ đã lưu — không ghi đè, không mất dữ liệu cũ.</p>
+
+          {loading && <div className="upd-loading"><span className="spin"/>{progress}</div>}
+          {error && <div className="rec-note err"><Icon.Alert d={12} color="#B91C1C"/>{error}</div>}
+
+          {!loading && (
+            <>
+              {!staged && (
+                <div className={`upd-drop${dragging?" drag":""}`}
+                  onClick={()=>inputRef.current.click()}
+                  onDragOver={e=>{e.preventDefault();setDragging(true)}}
+                  onDragLeave={()=>setDragging(false)}
+                  onDrop={e=>{e.preventDefault();setDragging(false);onPick(e.dataTransfer.files)}}>
+                  <input ref={inputRef} type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style={{display:"none"}} onChange={e=>{onPick(e.target.files);e.target.value=""}}/>
+                  <Icon.Upload d={24} color="#1D6FE8"/>
+                  <span><b>Cách 1 —</b> Chọn tài liệu (kết quả tái khám, xét nghiệm...)</span>
+                  <div className="fmt-row" style={{justifyContent:"center", marginTop:"8px"}}>
+                    <div className="fmt-chips">
+                      {["PDF","DOCX","XLSX","PPTX","PNG","JPG"].map(t=>{
+                        const k = FILE_KINDS[t.toLowerCase()] || kindOf("x."+t.toLowerCase())
+                        return <span key={t} className="fmt-chip" style={{color:k.color,background:k.bg}}>{t}</span>
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {staged && (
+                <div className="upd-staged">
+                  {staged.isImage
+                    ? <img src={staged.url} alt={staged.name} style={{width:32,height:32,borderRadius:6,objectFit:"cover"}}/>
+                    : <Icon.FileText d={16} color="#1D6FE8"/>}
+                  <span className="upd-staged-name">{staged.name}</span>
+                  <span className="upd-staged-meta">{staged.pages!=null?`${staged.pages} trang · `:""}{fmtSize(staged.size)}</span>
+                  <button onClick={clearStaged} title="Bỏ chọn"><Icon.Close d={13} color="#94A3B8"/></button>
+                </div>
+              )}
+
+              {!staged && (
+                <div className="rec-inline-wrap" style={{marginTop:"12px"}}>
+                  <div className="rec-inline-h"><Icon.Pulse d={13} color="#1D6FE8"/><b>Cách 2 —</b> Gõ hoặc đọc lời dặn tái khám (không cần file)</div>
+                  <p className="upd-note-hint">Nội dung gõ/đọc dưới đây sẽ trở thành "tài liệu mới" và được gộp vào hồ sơ y như một tài liệu tải lên.</p>
+                  <AudioRecorder value={note} onChange={setNote} attachLabel="Đã đọc xong" attachHint="Ctrl/Cmd + Enter khi đọc xong"
+                    onAttach={(t)=>{ setNote(t); mpToast("Đã chuyển giọng nói thành chữ — kiểm tra lại nội dung rồi bấm \"Cập nhật hồ sơ\" bên dưới") }}/>
+                </div>
+              )}
+
+              {canSubmit && (
+                <button className="btn-primary" style={{width:"100%", marginTop:"12px"}} onClick={staged ? submitFile : submitNote}>
+                  <Icon.Upload d={15} color="white"/>Cập nhật hồ sơ
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Phần 5 (Bookmark): thay vì luôn in text phẳng, dựng lại ĐÚNG component gốc
+// khi bookmark có chartData có cấu trúc — hiện chỉ làm cho loại "CHART_LAB"
+// (thẻ xét nghiệm, có Sparkline) vì đây là trường hợp trực quan hóa giá trị
+// nhất; các loại bookmark khác (9 vị trí FlagBtn còn lại trong app — hành
+// động ưu tiên, dòng thời gian, kết luận nhanh...) vẫn dùng text như cũ, an
+// toàn hơn là ép mọi loại widget qua switch-case trong thời gian gấp.
+function renderLabChartTile(d, key) {
+  const sparkColor = d.effStatus === "high" ? "#DC2626" : d.effStatus === "low" ? "#EA580C" : "#16A34A"
+  const arrowChar = d.arrow === "up" ? "↑" : d.arrow === "down" ? "↓" : "→"
+  return (
+    <div className="bm-chart-card" key={key}>
+      <div className="bm-chart-top">
+        <span className="lab-key">{d.key}</span>
+        <span className={`lab-status ${d.effStatus}`}>{d.statusTxt}</span>
+      </div>
+      <div className="lab-val-row">
+        <span className="lab-val">{d.val}</span>
+        <span className={`lab-arrow ${d.arrow}`}>{arrowChar}</span>
+        {d.unit && <span className="lab-unit">{d.unit}</span>}
+      </div>
+      {d.trend && d.trend.length > 1 && (
+        <div className="lab-spark"><Sparkline values={d.trend} color={sparkColor} fluid height={28} dates={d.trendDates}/></div>
+      )}
+    </div>
+  )
+}
+function renderBookmarkDetail(it) {
+  if (it.chartData?.type === "CHART_LAB") {
+    return renderLabChartTile(it.chartData.data)
+  }
+  if (it.chartData?.type === "CHART_LAB_GRID") {
+    // Bookmark cả CARD "Xét nghiệm - giá trị gần nhất" (không chỉ 1 chỉ số
+    // lẻ) — render lại ĐÚNG dạng lưới với đầy đủ sparkline như màn hình
+    // báo cáo chính, thay vì gộp thành 1 đoạn text phẳng.
+    const labs = it.chartData.data.labs || []
+    return (
+      <div className="bm-chart-grid">
+        {labs.map((d, i) => renderLabChartTile(d, i))}
+      </div>
+    )
+  }
+  // Các loại bookmark khác (9 vị trí FlagBtn còn lại — hành động ưu tiên,
+  // trạng thái vấn đề, kết luận nhanh...) CHƯA dựng lại đúng component gốc
+  // (việc lớn, cần làm riêng cho từng loại widget khác nhau — xem ghi chú ở
+  // trên). Thay vào đó nâng cấp phần fallback: đóng khung thành thẻ có
+  // thiết kế nhất quán + tách dòng thành bullet point rõ ràng, thay vì 1
+  // đoạn văn phẳng không style như trước — cải thiện đáng kể mà không cần
+  // viết lại switch-case cho từng loại.
+  if (!it.detail) {
+    return "Chưa lưu nội dung chi tiết cho mục này (đánh dấu từ bản cũ). Hãy bỏ đánh dấu rồi đánh dấu lại để lưu kèm nội dung."
+  }
+  const lines = it.detail.split("\n").map(l => l.trim()).filter(Boolean)
+  return (
+    <div className="bm-text-card">
+      {lines.length > 1 ? (
+        <ul className="bm-text-list">{lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
+      ) : (
+        <p className="bm-text-single">{lines[0]}</p>
+      )}
+    </div>
+  )
+}
 function BookmarkPage({ pkey, items, onGo, onBack }){
-  const [openI, setOpenI] = useState(-1)
+  const [openSet, setOpenSet] = useState(() => new Set())
+  const toggleOpen = (i) => setOpenSet(prev => {
+    const next = new Set(prev)
+    next.has(i) ? next.delete(i) : next.add(i)
+    return next
+  })
   return (
     <div className="bm-page">
       <div className="bm-page-head">
@@ -3824,15 +4549,19 @@ function BookmarkPage({ pkey, items, onGo, onBack }){
           </div>
         )}
         {items.map((it,i)=>(
-          <div key={i} className={`bm-item${openI===i?" open":""}`}>
-            <div className="bm-item-top" onClick={()=>setOpenI(openI===i?-1:i)}>
+          <div key={i} className={`bm-item${openSet.has(i)?" open":""}`}>
+            <div className="bm-item-top" onClick={()=>toggleOpen(i)}>
               <span className="bm-icon-badge">{bmIconFor(it.sub)}</span>
               <div className="bm-main"><div className="bm-label">{it.label}</div><div className="bm-sub">{it.sub||"Mục báo cáo"}</div></div>
               <button className="bm-go" onClick={(e)=>{e.stopPropagation(); onGo && onGo(it)}} title="Đi tới phần này trong báo cáo"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
-              <span className="bm-chev">{openI===i ? <Icon.ChevUp d={14} color="#94A3B8"/> : <Icon.ChevDown d={14} color="#94A3B8"/>}</span>
+              <span className="bm-chev">{openSet.has(i) ? <Icon.ChevUp d={14} color="#94A3B8"/> : <Icon.ChevDown d={14} color="#94A3B8"/>}</span>
               <button className="bm-x" onClick={(e)=>{e.stopPropagation(); bmToggle(pkey,{label:it.label})}} title="Bỏ đánh dấu"><Icon.Close d={13} color="#94A3B8"/></button>
             </div>
-            {openI===i && <div className="bm-detail">{it.detail ? it.detail : "Chưa lưu nội dung chi tiết cho mục này (đánh dấu từ bản cũ). Hãy bỏ đánh dấu rồi đánh dấu lại để lưu kèm nội dung."}</div>}
+            {openSet.has(i) && (
+              <div className="bm-detail">
+                {renderBookmarkDetail(it)}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -3876,10 +4605,120 @@ function ClinicalTakeaway({ items, pkey }) {
 // checkbox tương tác + progress bar (giá trị thực hơn số thứ tự tĩnh cũ).
 // Trạng thái tick vẫn lưu sessionStorage theo bệnh nhân (pkey), giữ đúng hành vi
 // cũ của FollowupChecklist.
+// ─── Loa (TTS) — dùng chung cho Redflag ECG + Ưu tiên xử lý ────────────────
+// Gọi /voice/tts; nếu backend trả use_local_tts:true (VNPT chưa sẵn sàng)
+// HOẶC lỗi mạng bất kỳ, tự động dùng Web Speech API của trình duyệt để đảm
+// bảo tính năng đọc to LUÔN hoạt động, không phụ thuộc hoàn toàn vào VNPT.
+// ─── Góp ý / báo sai (khép vòng phản hồi) ───────────────────────────────────
+// Icon nhỏ cạnh 1 nhận định AI — bác sĩ đánh dấu "sai/chưa chuẩn" kèm ghi
+// chú ngắn. CHỈ ghi nhận vào bảng feedback, KHÔNG tự động sửa gì — cần
+// người rà lại thủ công. Rủi ro thấp, không đụng logic hiển thị hiện có.
+function FeedbackBtn({ pkey, muc, contentSnippet }) {
+  const [open, setOpen] = useState(false)
+  const [note, setNote] = useState("")
+  const [sending, setSending] = useState(false)
+  const submit = async (e) => {
+    e.stopPropagation()
+    setSending(true)
+    try {
+      await mpApi.sendFeedback(pkey, muc, contentSnippet || "", note)
+      mpToast("Cảm ơn góp ý — đã ghi nhận để rà soát lại")
+      setOpen(false); setNote("")
+    } catch {
+      mpToast("Không gửi được góp ý, thử lại sau", "err")
+    }
+    setSending(false)
+  }
+  return (
+    <span className="fb-wrap" onClick={e=>e.stopPropagation()}>
+      <IconTip text="Góp ý / báo sai mục này" position="top">
+        <button type="button" className="fb-trigger-btn" onClick={()=>setOpen(o=>!o)} aria-label="Góp ý hoặc báo sai">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+        </button>
+      </IconTip>
+      {open && (
+        <div className="fb-popover">
+          <div className="fb-popover-title">Mục này chưa đúng/chưa rõ?</div>
+          <textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Mô tả ngắn gọn (không bắt buộc)..." rows={2}/>
+          <div className="fb-popover-actions">
+            <button className="fb-cancel" onClick={()=>setOpen(false)}>Hủy</button>
+            <button className="fb-submit" onClick={submit} disabled={sending}>{sending ? "Đang gửi..." : "Gửi góp ý"}</button>
+          </div>
+        </div>
+      )}
+    </span>
+  )
+}
+// Cache danh sách giọng đọc — speechSynthesis.getVoices() đôi khi trả mảng
+// rỗng ở lần gọi đầu (load bất đồng bộ), cần đợi sự kiện "voiceschanged".
+let _viVoiceCache = null
+let _viVoiceWarned = false
+function getVietnameseVoice() {
+  return new Promise(resolve => {
+    if (!window.speechSynthesis) { resolve(null); return }
+    const pick = () => {
+      const voices = window.speechSynthesis.getVoices()
+      return voices.find(v => v.lang?.toLowerCase().startsWith("vi")) || null
+    }
+    let v = pick()
+    if (v) { resolve(v); return }
+    const voices0 = window.speechSynthesis.getVoices()
+    if (voices0.length > 0) { resolve(null); return } // đã load xong, chắc chắn không có giọng Việt
+    window.speechSynthesis.onvoiceschanged = () => resolve(pick())
+    setTimeout(() => resolve(pick()), 800) // phòng khi trình duyệt không bắn sự kiện
+  })
+}
+function SpeakerButton({ text, color = "#64748B" }) {
+  const [loading, setLoading] = useState(false)
+  const speakLocal = async () => {
+    if (!window.speechSynthesis) return
+    window.speechSynthesis.cancel()
+    const u = new SpeechSynthesisUtterance(text)
+    u.lang = "vi-VN"
+    if (_viVoiceCache === null) _viVoiceCache = await getVietnameseVoice()
+    if (_viVoiceCache) {
+      u.voice = _viVoiceCache
+    } else if (!_viVoiceWarned) {
+      // Chỉ báo 1 lần/phiên — tránh làm phiền nếu bác sĩ bấm loa nhiều lần.
+      _viVoiceWarned = true
+      mpToast("Máy này chưa cài giọng đọc Tiếng Việt — trình duyệt tự đọc bằng giọng mặc định (có thể không đúng phát âm tiếng Việt). Cài thêm giọng Tiếng Việt trong Cài đặt hệ điều hành để đọc đúng.", "err")
+    }
+    window.speechSynthesis.speak(u)
+  }
+  const speak = async (e) => {
+    e.stopPropagation()
+    if (!text || loading) return
+    setLoading(true)
+    try {
+      const res = await mpApi.textToSpeech(text)
+      if (res.success && res.blob) {
+        const url = URL.createObjectURL(res.blob)
+        const audio = new Audio(url)
+        audio.onended = () => URL.revokeObjectURL(url)
+        audio.play()
+      } else {
+        speakLocal()
+      }
+    } catch {
+      speakLocal()
+    } finally {
+      setLoading(false)
+    }
+  }
+  return (
+    <IconTip text="Đọc to nội dung" position="top">
+      <button type="button" className="tts-speaker-btn" onClick={speak} disabled={loading} aria-label="Đọc to nội dung">
+        {loading ? <span className="chat-mic-spin"/> : <Icon.Speaker d={14} color={color}/>}
+      </button>
+    </IconTip>
+  )
+}
 function NextActions({ items, pkey }) {
   const [collapsed, setCollapsed] = useGlobalCollapse(false)
   const skey = "mp_chk_" + (pkey || "x")
   const [done, setDone] = useState(() => { try { return JSON.parse(sessionStorage.getItem(skey) || "[]") } catch { return [] } })
+  const bodyRef = useRef(null)
+  const tools = useWidgetTools("sec-actions", pkey)
   if (!items || !items.length) return null
   const toggle = (i) => setDone(prev => {
     const next = prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]
@@ -3895,31 +4734,34 @@ function NextActions({ items, pkey }) {
       <div className="next-hd">
         <Icon.ShieldCheck d={16} color="#B45309"/><span>Hành động ưu tiên ở lần tái khám tới</span>
         <span className="next-prog-txt">{completed}/{total} xong</span>
-        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><FlagBtn pkey={pkey || CURRENT_PKEY} label="Hành động ưu tiên ở lần tái khám tới" sub="Mục báo cáo" detail={detail}/><CopyBtn text={detail} label=""/></span>
+        <span style={{marginLeft:"auto",display:"inline-flex",gap:"6px",alignItems:"center"}}><SpeakerButton text={detail} color="#B45309"/><WidgetToolButtons tools={tools}/><FlagBtn pkey={pkey || CURRENT_PKEY} label="Hành động ưu tiên ở lần tái khám tới" sub="Mục báo cáo" detail={detail}/><CopyBtn text={detail} label=""/></span>
         <button className="banner-collapse dark" onClick={()=>setCollapsed(c=>!c)} title={collapsed?"Mở":"Thu gọn"} style={{ marginLeft:"6px" }}>
           {collapsed ? <Icon.ChevDown d={14} color="#B45309"/> : <Icon.ChevUp d={14} color="#B45309"/>}
         </button>
       </div>
       <div className="next-bar"><div className="next-bar-fill" style={{ width: pct + "%" }}/></div>
       {!collapsed && (
-        <div className="next-list">
-          {items.map((a,i) => {
-            const checked = done.includes(i)
-            return (
-              <div key={i} className={"next-item" + (checked ? " done" : "")} onClick={() => toggle(i)} role="button" tabIndex={0}
-                onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(i) } }}>
-                <span className="next-box" aria-hidden="true">
-                  {checked && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>}
-                </span>
-                <div className="next-body">
-                  <div className="next-viec">{a.viec}</div>
-                  {a.ly_do && <div className="next-lydo">{a.ly_do}</div>}
+        <WidgetEditableBody tools={tools} bodyRef={bodyRef}>
+          <div className="next-list">
+            {items.map((a,i) => {
+              const checked = done.includes(i)
+              return (
+                <div key={i} className={"next-item" + (checked ? " done" : "")} onClick={() => toggle(i)} role="button" tabIndex={0}
+                  onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(i) } }}>
+                  <span className="next-box" aria-hidden="true">
+                    {checked && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>}
+                  </span>
+                  <div className="next-body">
+                    <div className="next-viec">{a.viec}</div>
+                    {a.ly_do && <div className="next-lydo">{a.ly_do}</div>}
+                  </div>
                 </div>
-              </div>
-            )
-          })}
-        </div>
+              )
+            })}
+          </div>
+        </WidgetEditableBody>
       )}
+      <WidgetNotePanel tools={tools}/>
     </div>
   )
 }
@@ -4015,6 +4857,34 @@ const GLOSSARY = {
   APTT:"Thời gian thromboplastin hoạt hóa, đánh giá con đường đông máu nội sinh.",
 }
 function glossKey(t){ return String(t||"").toUpperCase().replace(/[^A-Z0-9]/g,"") }
+// ─── Phần 6: Tooltip chung cho icon lạ + Skeleton loading ─────────────────
+// IconTip tái dùng đúng style popup của TermTip (đã có, quen thuộc trong
+// app) nhưng bọc quanh 1 icon/nút bất kỳ thay vì chỉ thuật ngữ y khoa.
+function IconTip({ text, children, position = "top" }) {
+  if (!text) return children
+  return (
+    <span className={`icon-tip icon-tip-${position}`} tabIndex={-1}>
+      {children}
+      <span className="icon-tip-pop">{text}</span>
+    </span>
+  )
+}
+// Khung xám nhấp nháy khi đang tải — thay cho màn hình trắng/chữ "Đang tải".
+function Skeleton({ width = "100%", height = 14, radius = 8, style }) {
+  return <span className="mp-skeleton" style={{ width, height, borderRadius: radius, ...style }}/>
+}
+function SkeletonHistCard() {
+  return (
+    <div className="hist-item hist-skeleton">
+      <Skeleton width={40} height={40} radius={999}/>
+      <div className="hist-info" style={{display:"flex",flexDirection:"column",gap:6}}>
+        <Skeleton width="55%" height={13}/>
+        <Skeleton width="35%" height={11}/>
+        <Skeleton width="45%" height={11}/>
+      </div>
+    </div>
+  )
+}
 function TermTip({ term, children }){
   const tip = GLOSSARY[glossKey(term)]
   if(!tip) return <>{children}</>
@@ -4027,7 +4897,7 @@ function TermTip({ term, children }){
 }
 const LAB_SYSTEM = { "EF":"tim", "NT-proBNP":"tim", "INR":"tim", "Creatinin":"than", "Na+":"than", "K+":"than", "CRP":"nhiem", "WBC":"nhiem", "HGB":"huyet", "PLT":"huyet", "Albumin":"huyet" }
 const SYS_LABEL = { tim:"Tim mạch", than:"Thận - điện giải", nhiem:"Nhiễm khuẩn", huyet:"Huyết học" }
-function LabPanel({ labs, note }) {
+function LabPanel({ labs, note, inrTargetDetail, anticoagulantStatus, phaseInfo }) {
   const [filter, setFilter] = useState("all")
   const [sysFilter, setSysFilter] = useState("all")
   const counts = { high:0, normal:0, low:0 }
@@ -4049,8 +4919,20 @@ function LabPanel({ labs, note }) {
       ))}
     </div>
   )
+  const labsSnippet = shown.slice(0,6).map(m=>`${m.key}: ${m.val}${m.unit||""} (${m.statusTxt||m.status})`).join("; ")
   return (
-    <Card id="sec-labs" title="Xét nghiệm - giá trị gần nhất" icon={<Icon.Flask d={16}/>} headRight={filterBar}>
+    <Card id="sec-labs" title="Xét nghiệm - giá trị gần nhất" icon={<Icon.Flask d={16}/>} headRight={
+      <span style={{display:"inline-flex",gap:6,alignItems:"center"}}>
+        {filterBar}
+        <FlagBtn pkey={CURRENT_PKEY} label="Xét nghiệm - giá trị gần nhất (toàn bộ)" sub="Tổng quan"
+          detail={labsSnippet}
+          chartData={()=>({type:"CHART_LAB_GRID", data:{ labs: shown.map(m=>({
+            key:m.key, val:m.val, unit:m.unit, arrow:m.arrow,
+            statusTxt: m.status==="high"?"Cao":m.status==="low"?"Thấp":"Bình thường",
+            effStatus:m.status, trend:m.trend, trendDates:m.trendDates
+          })) }})}/>
+      </span>
+    }>
       <div className="lab-clarify">Mỗi chỉ số hiển thị theo ngày lấy mẫu gần nhất của nó. Nhiều giá trị (CRP, NT-proBNP, Na+) là kết quả tại thời điểm ra viện (03/10/2025 - Giai đoạn 2), chưa có xét nghiệm ngoại trú mới, cần đối chiếu giai đoạn khi diễn giải.</div>
       <div className="lab-legend">
         <span><b>Mũi tên</b> = xu hướng so với lần trước (↑ tăng, ↓ giảm)</span>
@@ -4068,18 +4950,34 @@ function LabPanel({ labs, note }) {
       <div className="lab-grid">
         {shown.map(m => {
           const arrowChar = m.arrow==="up"?"↑":m.arrow==="down"?"↓":"→"
-          const sparkColor = m.status==="high"?"#DC2626":m.status==="low"?"#EA580C":"#16A34A"
-          const verdict = labVerdict(m)
           const isINR = m.key === "INR"
-          const statusTxt = isINR
-            ? (m.status==="high"?"Trên mục tiêu":m.status==="low"?"Dưới mục tiêu":"Trong mục tiêu")
-            : (m.status==="high"?"Cao":m.status==="low"?"Thấp":"Bình thường")
+          const isDoac = isINR && anticoagulantStatus && anticoagulantStatus.an_inr_ttr
+          // ─── Ghi đè phán đoán của AI (status/normal do Rule 17 trong
+          // REPORT_SYSTEM tự gán, CHỈ nhận biết van cơ học qua từ khóa) bằng
+          // ngưỡng THẬT từ cde/anticoagulation_targets.py — đúng theo từng
+          // loại bệnh nhân (sửa van/sinh học/cơ học/không liên quan van),
+          // không còn mặc định "van cơ học 2.0-3.0" cho mọi ca (Vấn đề 1).
+          let effStatus = m.status, effNormalTxt = m.normal, hasDeterministicTarget = false
+          if (isINR && inrTargetDetail && inrTargetDetail.target_min != null && inrTargetDetail.target_max != null) {
+            hasDeterministicTarget = true
+            const { target_min, target_max } = inrTargetDetail
+            effStatus = m.rawVal < target_min ? "low" : m.rawVal > target_max ? "high" : "normal"
+            effNormalTxt = `${target_min.toFixed(1)} - ${target_max.toFixed(1)}`
+          }
+          const sparkColor = effStatus==="high"?"#DC2626":effStatus==="low"?"#EA580C":"#16A34A"
+          const verdict = isINR ? labVerdict(m, hasDeterministicTarget ? inrTargetDetail : null) : labVerdict(m)
+          const statusTxt = isDoac ? "DOAC — không theo dõi INR"
+            : isINR ? (effStatus==="high"?"Trên mục tiêu":effStatus==="low"?"Dưới mục tiêu":hasDeterministicTarget?"Trong mục tiêu":"Chưa xác định ngưỡng")
+            : (effStatus==="high"?"Cao":effStatus==="low"?"Thấp":"Bình thường")
           const rangeLabel = isINR ? "Mục tiêu" : "Bình thường"
           return (
             <div key={m.key} className="lab-cell">
               <div className="lab-top">
                 <TermTip term={m.key}><span className="lab-key">{m.key}</span></TermTip>
-                <span className={`lab-status ${m.status}`}>{statusTxt}</span>
+                <span className={`lab-status ${isDoac ? "normal" : effStatus}`}>{statusTxt}</span>
+                <FlagBtn pkey={CURRENT_PKEY} label={`Xét nghiệm: ${m.key}`} sub="Xét nghiệm - giá trị gần nhất"
+                  detail={()=>`${m.key}: ${m.val}${m.unit?" "+m.unit:""} (${statusTxt})`}
+                  chartData={()=>({type:"CHART_LAB", data:{key:m.key, val:m.val, unit:m.unit, arrow:m.arrow, statusTxt, effStatus: isDoac?"normal":effStatus, trend:m.trend, trendDates:m.trendDates}})}/>
               </div>
               <div className="lab-val-row">
                 <span className="lab-val"><CountUp value={parseFloat(m.val)} decimals={(String(m.rawVal).split(".")[1]||"").length} suffix={(m.val.split(" ")[0].match(/[^0-9.,\-]+$/)||[""])[0]}/></span>
@@ -4089,18 +4987,58 @@ function LabPanel({ labs, note }) {
               <div className="lab-spark"><Sparkline values={m.trend} color={sparkColor} fluid height={28} dates={m.trendDates}/></div>
               {m.trendDates && m.trendDates.length >= 2 && m.trend && m.trend.length === m.trendDates.length && (
                 <div className="lab-spark-dates">
-                  {m.trendDates.map((d,di)=>{
+                  {(() => {
                     const n = m.trendDates.length
-                    const left = (di/(n-1))*100
-                    const style = di===0 ? {left:"0%",transform:"none"} : di===n-1 ? {left:"100%",transform:"translateX(-100%)"} : {left:`${left}%`,transform:"translateX(-50%)"}
-                    return <span key={di} className="lab-spark-date" style={style}>{d}</span>
-                  })}
+                    let idxs
+                    if (phaseInfo && phaseInfo.surg) {
+                      // 4 mốc lâm sàng cụ thể (không phải vị trí chung chung):
+                      // gần nhất trước mổ / gần nhất sau mổ / ngay trước ra viện /
+                      // gần nhất hiện tại — dùng đúng phaseOf() đã có sẵn cho toàn
+                      // app, nhất quán với 3 giai đoạn hiển thị ở nơi khác.
+                      const phases = m.trendDates.map(d => phaseOf(d, phaseInfo))
+                      const pick = new Set()
+                      const lastWhere = (ph) => { for (let i=n-1;i>=0;i--) if (phases[i]===ph) return i; return -1 }
+                      const firstWhere = (ph) => { for (let i=0;i<n;i++) if (phases[i]===ph) return i; return -1 }
+                      const preOp = lastWhere(1); if (preOp >= 0) pick.add(preOp)
+                      const postOp = firstWhere(2); if (postOp >= 0) pick.add(postOp)
+                      const preDischarge = lastWhere(2); if (preDischarge >= 0) pick.add(preDischarge)
+                      pick.add(n - 1) // gần nhất hiện tại — luôn hiện
+                      // Bảo hiểm: nếu trendDates thiếu năm (vd "12/06" không đủ
+                      // 4 chữ số) thì parseVNDate()/phaseOf() không phân loại
+                      // được giai đoạn nào — pick chỉ còn "hiện tại", trục Ox
+                      // trông trống trải chỉ có 1 mốc (bug đã xác nhận qua ảnh
+                      // chụp thực tế). Bù thêm các mốc cách đều để LUÔN có tối
+                      // thiểu 4 mốc (hoặc đủ n nếu n<4) — đúng yêu cầu tối
+                      // thiểu, dù không gán được đúng ý nghĩa lâm sàng cho mốc
+                      // bù thêm.
+                      const minWanted = Math.min(4, n)
+                      if (pick.size < minWanted) {
+                        const step = (n - 1) / (minWanted - 1 || 1)
+                        for (let k = 0; k < minWanted; k++) pick.add(Math.round(k * step))
+                      }
+                      idxs = [...pick].sort((a,b)=>a-b)
+                    } else {
+                      // Không có ngày mổ (hồ sơ không phẫu thuật) — không gán được
+                      // 4 mốc lâm sàng, chọn tối thiểu 4 mốc cách đều (hoặc đủ n
+                      // nếu n<4) thay vì chỉ đầu/giữa/cuối.
+                      const minWanted = Math.min(4, n)
+                      const step = (n - 1) / (minWanted - 1 || 1)
+                      const pick = new Set()
+                      for (let k = 0; k < minWanted; k++) pick.add(Math.round(k * step))
+                      idxs = [...pick].sort((a,b)=>a-b)
+                    }
+                    return idxs.map(di => {
+                      const left = (di/(n-1))*100
+                      const style = di===0 ? {left:"0%",transform:"none"} : di===n-1 ? {left:"100%",transform:"translateX(-100%)"} : {left:`${left}%`,transform:"translateX(-50%)"}
+                      return <span key={di} className="lab-spark-date" style={style}>{m.trendDates[di]}</span>
+                    })
+                  })()}
                 </div>
               )}
               {verdict && <div className={`lab-verdict ${verdict.neutral?"neutral":verdict.good?"good":"bad"}`}>{verdict.txt}</div>}
               <div className="lab-foot">
                 <span className="lab-desc">{(m.trendDates && m.trendDates.length) ? `Lấy mẫu: ${m.trendDates[m.trendDates.length-1]}` : (m.ngay ? `Ngày ${m.ngay}` : m.desc)}</span>
-                <span className="lab-normal">{rangeLabel} {m.normal}</span>
+                <span className="lab-normal">{isDoac ? "" : `${rangeLabel} ${effNormalTxt}`}</span>
               </div>
             </div>
           )
@@ -4596,30 +5534,161 @@ function CoStat({ m }) {
   const tr = (m.trend || []).filter(v => typeof v === "number")
   const col = m.status === "normal" ? "#22C55E" : m.status === "high" ? "#EF4444" : "#F59E0B"
   const W = 72, H = 24, P = 3
-  let path = "", last = null
+  let pts = [], last = null
   if (tr.length > 1) {
-    const mn = Math.min(...tr), mx = Math.max(...tr), rng = (mx - mn) || 1
-    const pts = tr.map((v, i) => [P + i * (W - 2*P) / (tr.length - 1), H - P - ((v - mn) / rng) * (H - 2*P)])
-    path = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ")
+    const mn = Math.min(...tr), mx = Math.max(...tr)
+    // Giữ đệm nhẹ để đường không dính sát mép card, nhưng KHÔNG làm mượt bằng
+    // Bezier nữa. Tổng quan nhanh cần nhìn xu hướng dạng ziczac/gấp khúc rõ,
+    // nên nối từng mốc bằng đoạn thẳng thật qua <polyline>.
+    const rawRng = (mx - mn) || 1
+    const pad = rawRng * 0.15
+    const mn2 = mn - pad, rng = rawRng + pad * 2
+    pts = tr.map((v, i) => [
+      P + i * (W - 2*P) / (tr.length - 1),
+      H - P - ((v - mn2) / rng) * (H - 2*P),
+    ])
     last = pts[pts.length - 1]
   }
+  const pointString = pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ")
+  const dateLabel = (m.trendDates && m.trendDates.length) ? m.trendDates[m.trendDates.length-1] : (m.ngay || null)
   return (
     <div className="co-stat">
       <div className="co-stat-top"><span className="co-stat-key">{m.key}</span><span className="co-stat-dot" style={{ background: col }}/></div>
       <div className="co-stat-val">{m.val}</div>
       <svg className="co-spark" viewBox={`0 0 ${W} ${H}`} width={W} height={H} preserveAspectRatio="none">
-        {tr.length > 1 && <path d={path} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>}
+        {tr.length > 1 && <polyline points={pointString} fill="none" stroke={col} strokeWidth="1.8" strokeLinecap="butt" strokeLinejoin="miter" vectorEffect="non-scaling-stroke"/>}
         {last && <circle cx={last[0]} cy={last[1]} r="2.6" fill={col}/>}
       </svg>
-      <div className="co-stat-norm">BT {m.normal}</div>
+      <div className="co-stat-foot">
+        <span className="co-stat-norm">BT {m.normal}</span>
+        {dateLabel && <span className="co-stat-date">{dateLabel}</span>}
+      </div>
     </div>
   )
 }
-function CaseOverview({ report: r, findings, phaseInfo, pkey }) {
+// ─── Phân loại bệnh cảnh theo ICD-10 (10 nhóm, cde/icd_groups.py) ─────────
+// Dữ liệu này backend đã tính từ lâu (active_icd_groups) nhưng frontend
+// CHƯA TỪNG hiển thị — bổ sung để lộ rõ đúng phần "chất xám" khác biệt của
+// sản phẩm (rule engine theo từng nhóm ICD, không hard-code riêng ca van
+// tim). Ẩn hoàn toàn nếu rỗng — không tạo card trống vô nghĩa.
+// ─── So sánh thuốc/chẩn đoán giữa 2 lần cập nhật ──────────────────────────
+// Khác "So sánh xét nghiệm" (VisitCompare, chỉ số liệu lab) — panel này diff
+// THUỐC và CHẨN ĐOÁN, dùng đúng patient_history đã lưu sẵn (report_json
+// TRƯỚC lần gộp gần nhất), không cần đổi cấu trúc lưu trữ nào thêm.
+function MedDiagChangesPanel({ report: r, pkey }) {
+  const [loading, setLoading] = useState(false)
+  const [diff, setDiff] = useState(null)
+  const [opened, setOpened] = useState(false)
+
+  const load = async () => {
+    if (!pkey || pkey === "x") return
+    setOpened(true); setLoading(true)
+    try {
+      const res = await mpApi.getPatientHistory(pkey, 1)
+      const prev = res.history?.[0]?.report
+      if (!prev) { setDiff({ empty: true }); return }
+      const curMeds = new Set((r.thuoc_cuoi_ky || []).map(t => t.ten_thuoc))
+      const prevMeds = new Set((prev.thuoc_cuoi_ky || []).map(t => t.ten_thuoc))
+      const added = [...curMeds].filter(m => !prevMeds.has(m))
+      const removed = [...prevMeds].filter(m => !curMeds.has(m))
+      const dxChanged = (prev.chan_doan_chinh || "") !== (r.chan_doan_chinh || "")
+      setDiff({ added, removed, dxChanged, prevDx: prev.chan_doan_chinh, curDx: r.chan_doan_chinh, thoiDiem: res.history[0].thoi_diem })
+    } catch {
+      setDiff({ error: true })
+    }
+    setLoading(false)
+  }
+
+  if (!pkey || pkey === "x") return null
+  return (
+    <Card id="sec-meddiag-diff" title="So sánh với lần cập nhật trước" icon={<Icon.TrendUp d={16}/>}>
+      {!opened ? (
+        <button className="btn-secondary-sm" onClick={load}>Xem thay đổi thuốc/chẩn đoán</button>
+      ) : loading ? (
+        <div className="vc-empty">Đang tải...</div>
+      ) : diff?.error ? (
+        <div className="vc-empty">Không tải được dữ liệu so sánh, thử lại sau.</div>
+      ) : diff?.empty ? (
+        <div className="vc-empty">Chưa có lần cập nhật nào trước đó để so sánh.</div>
+      ) : (
+        <div className="meddiag-diff">
+          {diff.dxChanged && (
+            <div className="meddiag-dx-change">
+              <div className="meddiag-dx-label">Chẩn đoán chính thay đổi</div>
+              <div className="meddiag-dx-old">Trước: {diff.prevDx || "(chưa ghi nhận)"}</div>
+              <div className="meddiag-dx-new">Nay: {diff.curDx || "(chưa ghi nhận)"}</div>
+            </div>
+          )}
+          {diff.added.length > 0 && (
+            <div className="meddiag-group">
+              <div className="meddiag-group-lbl added">+ Thuốc mới thêm</div>
+              {diff.added.map(m => <span key={m} className="meddiag-tag added">{m}</span>)}
+            </div>
+          )}
+          {diff.removed.length > 0 && (
+            <div className="meddiag-group">
+              <div className="meddiag-group-lbl removed">− Thuốc đã ngưng</div>
+              {diff.removed.map(m => <span key={m} className="meddiag-tag removed">{m}</span>)}
+            </div>
+          )}
+          {!diff.dxChanged && diff.added.length === 0 && diff.removed.length === 0 && (
+            <div className="vc-empty">Không có thay đổi về thuốc/chẩn đoán chính so với lần trước.</div>
+          )}
+        </div>
+      )}
+    </Card>
+  )
+}
+function IcdGroupsCard({ groups, pkey }) {
+  if (!groups || groups.length === 0) return null
+  const tools = useWidgetTools("sec-icd", pkey)
+  const detail = groups.map(g =>
+    `${g.ten_hien_thi} (${g.icd_range})${g.subtype ? " — " + g.subtype : ""}: ${(g.thang_diem_dac_trung||[]).join(", ")}`
+  ).join("\n")
+  return (
+    <Card id="sec-icd" title="Phân loại bệnh cảnh (ICD-10)" icon={<Icon.Layers d={16}/>}
+      headRight={<span style={{display:"inline-flex",gap:6}}><WidgetToolButtons tools={tools}/><FlagBtn pkey={pkey || CURRENT_PKEY} label="Phân loại bệnh cảnh (ICD-10)" sub="Tổng quan" detail={detail}/><CopyBtn text={detail} label=""/></span>}>
+      <div className="icd-groups-grid">
+        {groups.map((g, i) => (
+          <div key={i} className="icd-group-tile">
+            <div className="icd-group-top">
+              <span className="icd-group-name">{g.ten_hien_thi}</span>
+              <span className="icd-group-range">{g.icd_range}</span>
+            </div>
+            {g.subtype && <div className="icd-group-subtype">{g.subtype}</div>}
+            {g.thang_diem_dac_trung && g.thang_diem_dac_trung.length > 0 && (
+              <div className="icd-group-scores">
+                {g.thang_diem_dac_trung.map(s => <span key={s} className="icd-score-tag">{s}</span>)}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="icd-groups-note">Thang điểm liệt kê là <b>thang điểm khuyến nghị áp dụng</b> theo nhóm bệnh — hệ thống chưa tự tính điểm số cụ thể, cần bác sĩ đánh giá.</div>
+    </Card>
+  )
+}
+function CaseOverview({ report: r, findings, phaseInfo, pkey, activeIcdGroups }) {
   const tools = useWidgetTools("sec-overview", pkey)
   const bodyRef = useRef(null)
   const labs = r.xet_nghiem_meta || r.xet_nghiem_key || []
-  const markers = CO_KEYS.map(k => labs.find(l => l && l.key === k)).filter(Boolean)
+  const markers = CO_KEYS.map(k => {
+    const found = labs.find(l => l && l.key === k)
+    if (!found) return null
+    if (k === "EF") {
+      // xet_nghiem_key.EF CHỈ có giá trị gần nhất (đúng thiết kế — xem
+      // REPORT_SYSTEM rule 10), lịch sử đầy đủ nằm ở sieu_am_tim.lan_kham.
+      // Ghép lại trend/trendDates từ đó để CoStat vẽ được đường xu hướng
+      // thật (trước đây hồ sơ thật luôn chỉ có 1 điểm -> không vẽ được gì,
+      // chỉ hồ sơ demo "vô tình" có sẵn nhiều điểm trong xet_nghiem_key mới
+      // hiện đẹp — không nhất quán giữa demo và thật).
+      const lan = (r.sieu_am_tim?.lan_kham || []).filter(s => s && s.ef != null)
+      if (lan.length >= 2) {
+        return { ...found, trend: lan.map(s => s.ef), trendDates: lan.map(s => s.ngay) }
+      }
+    }
+    return found
+  }).filter(Boolean)
   const crit = (findings || []).filter(f => f.muc === "critical").length
   const warn = (findings || []).filter(f => f.muc === "warning").length
   const prios = (r.hanh_dong_uu_tien || []).slice().sort((a,b) => (a.uu_tien||9) - (b.uu_tien||9)).slice(0, 3)
@@ -4710,6 +5779,19 @@ function VisitCompare({ report: r }) {
 
 // ─── BIỂU ĐỒ XU HƯỚNG TỔNG HỢP (% so với lần đo đầu, đa chỉ số) ────────────────
 const MT_COLORS = ["#1D6FE8","#EF4444","#F59E0B","#0E9488","#8B5CF6","#EC4899","#0EA5E9","#65A30D"]
+// Sinh mốc trục Y "đẹp" (1/2/5 × 10^n) tự nới rộng theo maxY bất kỳ — thay
+// cho cách cũ chỉ có sẵn đúng 2 mốc cố định 200/400, không mượt khi số liệu
+// tăng vọt cao hơn dự đoán (vd CRP tăng >800% sau mổ).
+function niceYTicks(maxY) {
+  const targetCount = 5
+  const rough = maxY / targetCount
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)))
+  const norm = rough / mag
+  const step = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * mag
+  const ticks = []
+  for (let v = 0; v <= maxY + step * 0.01; v += step) ticks.push(Math.round(v))
+  return ticks
+}
 function MultiTrend({ report: r }) {
   const labs = (r.xet_nghiem_meta || r.xet_nghiem_key || []).filter(l =>
     l && Array.isArray(l.trend) && l.trend.length > 1 && l.trend.every(v => typeof v === "number") && l.trend[0] !== 0)
@@ -4721,14 +5803,28 @@ function MultiTrend({ report: r }) {
   const series = labs.filter(l => sel.includes(l.key)).map(l => {
     const first = l.trend[0]
     const pts = l.trend.map((v, i) => ({ x: l.trend.length > 1 ? i / (l.trend.length - 1) : 0, y: v / first * 100 }))
-    return { key: l.key, unit: l.unit, color: colorOf(l.key), pts, last: l.trend[l.trend.length - 1], lastPct: Math.round(l.trend[l.trend.length-1]/first*100) }
+    return { key: l.key, unit: l.unit, color: colorOf(l.key), pts, dates: l.trendDates || null,
+             last: l.trend[l.trend.length - 1], lastPct: Math.round(l.trend[l.trend.length-1]/first*100) }
   })
   const allY = series.flatMap(s => s.pts.map(p => p.y))
-  const maxY = Math.max(140, ...(allY.length ? allY : [140])) * 1.04
-  const W = 620, H = 250, PADL = 46, PADR = 16, PADT = 14, PADB = 30
+  const maxY = Math.max(140, ...(allY.length ? allY : [140])) * 1.08
+  const W = 620, H = 250, PADL = 46, PADR = 16, PADT = 14, PADB = 34
   const ix = x => PADL + x * (W - PADL - PADR)
   const iy = y => PADT + (1 - y / maxY) * (H - PADT - PADB)
-  const yTicks = [0, 50, 100].concat(maxY > 250 ? [200, 400].filter(v => v < maxY) : maxY > 150 ? [150] : [])
+  const yTicks = niceYTicks(maxY)
+  // Ngày thật cho trục X — lấy từ chuỗi có nhiều điểm nhất trong các chỉ số
+  // đang chọn (đại diện), thay cho chữ chung chung "Lần đo đầu"/"Gần nhất"
+  // không có mốc thời gian cụ thể.
+  const dateSrc = series.filter(s => s.dates && s.dates.length === s.pts.length).sort((a,b)=>b.pts.length-a.pts.length)[0]
+  const firstDate = dateSrc ? dateSrc.dates[0] : null
+  const lastDate = dateSrc ? dateSrc.dates[dateSrc.dates.length-1] : null
+  // Tránh nhãn cuối các đường đè lên nhau khi 2+ chỉ số có % gần nhau (vd
+  // 140% và 141%) — xếp theo Y rồi đẩy giãn ra tối thiểu 11px nếu quá sát.
+  const labelPositions = series.map(s => { const lp = s.pts[s.pts.length-1]; return { key:s.key, color:s.color, x:ix(lp.x), y:iy(lp.y), txt:`${s.lastPct}%` } })
+    .sort((a,b) => a.y - b.y)
+  for (let i = 1; i < labelPositions.length; i++) {
+    if (labelPositions[i].y - labelPositions[i-1].y < 11) labelPositions[i].y = labelPositions[i-1].y + 11
+  }
   return (
     <div className="mt">
       <div className="mt-chips">
@@ -4743,24 +5839,29 @@ function MultiTrend({ report: r }) {
         {yTicks.map(v => (
           <g key={v}>
             <line x1={PADL} y1={iy(v)} x2={W - PADR} y2={iy(v)} style={{stroke:"var(--border)"}} strokeWidth="1" strokeDasharray={v === 100 ? "0" : "3 3"}/>
-            <text x={PADL - 6} y={iy(v) + 3} textAnchor="end" fontSize="9" style={{fill:"var(--muted2)"}}>{v}%</text>
+            <rect x={0} y={iy(v)-7} width={PADL-6} height="13" fill="var(--glass)"/>
+            <text x={PADL - 8} y={iy(v) + 3} textAnchor="end" fontSize="9" style={{fill:"var(--muted2)"}}>{v}%</text>
           </g>
         ))}
-        <text x={PADL} y={H - 8} fontSize="9" style={{fill:"var(--muted2)"}}>Lần đo đầu</text>
-        <text x={W - PADR} y={H - 8} fontSize="9" style={{fill:"var(--muted2)"}} textAnchor="end">Gần nhất</text>
+        <text x={PADL} y={H - 8} fontSize="9" style={{fill:"var(--muted2)"}}>Lần đo đầu{firstDate?` (${firstDate})`:""}</text>
+        <text x={W - PADR} y={H - 8} fontSize="9" style={{fill:"var(--muted2)"}} textAnchor="end">Gần nhất{lastDate?` (${lastDate})`:""}</text>
         {series.map(s => {
           const d = s.pts.map((p, i) => (i ? "L" : "M") + ix(p.x).toFixed(1) + " " + iy(p.y).toFixed(1)).join(" ")
-          const lp = s.pts[s.pts.length - 1]
           return (
             <g key={s.key}>
               <path d={d} fill="none" stroke={s.color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
               {s.pts.map((p, i) => <circle key={i} cx={ix(p.x)} cy={iy(p.y)} r="2.6" fill={s.color}/>)}
-              <text x={ix(lp.x) - 3} y={iy(lp.y) - 6} fontSize="9.5" fontWeight="700" fill={s.color} textAnchor="end">{s.lastPct}%</text>
             </g>
           )
         })}
+        {labelPositions.map(lp => (
+          <g key={lp.key}>
+            <rect x={lp.x-2} y={lp.y-15} width={String(lp.txt).length*6.2+4} height="13" fill="var(--glass)" opacity="0.92" rx="2"/>
+            <text x={lp.x-3} y={lp.y-6} fontSize="9.5" fontWeight="700" fill={lp.color} textAnchor="end">{lp.txt}</text>
+          </g>
+        ))}
       </svg>
-      <div className="mt-note">Mỗi đường = giá trị theo % so với lần đo đầu của chính chỉ số đó (lần đầu = 100%). Dùng để so sánh tốc độ cải thiện/xấu đi giữa các chỉ số có đơn vị khác nhau. Trục ngang theo thứ tự lần đo, không theo khoảng cách ngày thực.</div>
+      <div className="mt-note">Mỗi đường = giá trị theo % so với lần đo đầu của chính chỉ số đó (lần đầu = 100%). Dùng để so sánh tốc độ cải thiện/xấu đi giữa các chỉ số có đơn vị khác nhau. Trục ngang theo thứ tự lần đo, không theo khoảng cách ngày thực — trục Y tự nới rộng theo số liệu lớn nhất đang hiển thị.</div>
     </div>
   )
 }
@@ -4820,6 +5921,15 @@ function ReportTab({ report: r, analysis }) {
     // offline, 2 Card này tự ẩn (đúng theo thiết kế null-safe của chúng).
     riskScores = computeRiskScoresClient(r)
   }
+  // inrTargetDetail/anticoagulantStatus TÁCH RIÊNG khỏi nhánh if/else ở trên
+  // (không gộp vào "analysis" state) — vì gộp sẽ làm ReportTab hiểu nhầm là
+  // đang ở luồng "có backend" và bỏ qua toàn bộ tính findings/egfr/drug_safety
+  // client-side cho demo (đã từng gây bug, xem lịch sử sửa). Với 2 hồ sơ demo
+  // offline, dùng bảng tra cứu tĩnh MOCK_ANALYSIS_BY_SBA (loại van đã biết
+  // trước, không cần rule engine tính lại).
+  const inrTargetDetail = analysis ? (analysis.inr_target_detail || null) : (MOCK_ANALYSIS_BY_SBA[CURRENT_PKEY]?.inr_target_detail || null)
+  const anticoagulantStatus = analysis ? (analysis.anticoagulant_status || null) : (MOCK_ANALYSIS_BY_SBA[CURRENT_PKEY]?.anticoagulant_status || null)
+  const activeIcdGroups = analysis ? (analysis.active_icd_groups || []) : (MOCK_ANALYSIS_BY_SBA[CURRENT_PKEY]?.active_icd_groups || [])
   const trajectory = assessTrajectory(r)
   const phaseInfo = computePhaseInfo(r)
   const phaseEvents = buildPhaseEvents(r, phaseInfo)
@@ -4889,7 +5999,7 @@ function ReportTab({ report: r, analysis }) {
       {/* Dải trạng thái 15 giây: giai đoạn + đánh giá tiến triển + đếm cảnh báo (sau thông tin bệnh nhân) */}
       <HeroStatus info={phaseInfo} findings={findings} trajectory={trajectory}/>
 
-      <CaseOverview report={r} findings={findings} phaseInfo={phaseInfo} pkey={r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an}/>
+      <CaseOverview report={r} findings={findings} phaseInfo={phaseInfo} pkey={r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an} activeIcdGroups={activeIcdGroups}/>
 
       {/* Banner trạng thái + Kết luận nhanh + Trạng thái vấn đề + Hành động */}
       <div id="sec-status"><ClinicalStatusBanner info={phaseInfo} report={r}/></div>
@@ -4943,19 +6053,21 @@ function ReportTab({ report: r, analysis }) {
       <Card id="sec-trend" title="Xu hướng tổng hợp (% so với lần đầu)" icon={<Icon.Pulse d={16}/>}><MultiTrend report={r}/></Card>
 
       {/* PHÂN TÍCH: Xét nghiệm */}
-      <LabPanel labs={r.xet_nghiem_key||r.xet_nghiem_meta||[]} note={r.xet_nghiem_truoc_mo?.ghi_chu}/>
+      <LabPanel labs={r.xet_nghiem_key||r.xet_nghiem_meta||[]} note={r.xet_nghiem_truoc_mo?.ghi_chu} inrTargetDetail={inrTargetDetail} anticoagulantStatus={anticoagulantStatus} phaseInfo={phaseInfo}/>
 
       {/* PHÂN TÍCH: Thuốc */}
       <Card id="sec-meds" title="Đơn thuốc và lịch dùng" icon={<Icon.Pill d={16}/>}>
+        {(r.thuoc_cuoi_ky||[]).length===0 ? (
+          <div className="lab-empty">Hồ sơ không ghi nhận thông tin thuốc.</div>
+        ) : (
         <div className="grid2">
-          {r.thuoc_cuoi_ky.map((t,i)=>{
+          {(r.thuoc_cuoi_ky||[]).map((t,i)=>{
             const st = drugStatus(t, phaseInfo)
             return (
             <div key={i} className="med-item">
               <div className="med-icon"><Icon.Pill d={16} color="#1D6FE8"/></div>
               <div style={{flex:1,minWidth:0}}>
                 <div className="med-name">{t.ten_thuoc}</div>
-                <div className="med-nhom">{t.nhom}</div>
                 <div className="med-dose">{t.lieu} • {t.cach_dung}</div>
                 {(st.kind !== "unknown" || t.bat_dau) && (
                   <div className="med-status-row">
@@ -4967,6 +6079,7 @@ function ReportTab({ report: r, analysis }) {
             </div>
           )})}
         </div>
+        )}
         <MedGantt meds={r.thuoc_cuoi_ky}/>
       </Card>
 
@@ -5046,214 +6159,247 @@ function DoctorNote({ value, onChange }){
     </>
   )
 }
-function UnifiedChatWidget({ report, hoSoText, messages, setMessages, onExpand, mode }) {
-  const [open, setOpen] = useState(false)
-  const [activeMode, setActiveMode] = useState("clinical")
-  const [input, setInput] = useState("")
-  const [loading, setLoading] = useState(false)
-  const [systemMessages, setSystemMessages] = useState([
-    { role:"assistant", content:"Xin chào! Tôi là trợ lý Hỗ trợ hệ thống của MedParcours. Bạn cần hướng dẫn sử dụng tính năng nào?" }
-  ])
-  const [seenClinical, setSeenClinical] = useState(messages.length)
-  const [seenSystem, setSeenSystem] = useState(1)
-  const bottomRef = useRef()
-  const senderId = useRef("user_" + Math.random().toString(36).slice(2, 10))
-
-  const isClinical = activeMode === "clinical"
-  const activeMessages = isClinical ? messages : systemMessages
-
-  useEffect(() => {
-    if (open) bottomRef.current?.scrollIntoView({ behavior:"smooth" })
-  }, [activeMessages, open, activeMode])
-
-  useEffect(() => {
-    if (!open) return
-    setSeenClinical(messages.length)
-    setSeenSystem(systemMessages.length)
-  }, [open, messages.length, systemMessages.length])
-
-  const sendClinical = async (q) => {
-    setMessages(prev => [...prev, { role:"user", content:q }])
-    try {
-      const res = await callApi("/chat", { method:"POST", headers:{ "Content-Type":"application/json" },
-        body:JSON.stringify({ question:q, assistant_type:"clinical", ho_so_text:hoSoText||JSON.stringify(report), chat_history:messages.slice(-6), mode }) })
-      const data = await res.json()
-      if (!res.ok || !data || !data.answer) throw new Error(data?.detail || "no answer")
-      setMessages(prev => [...prev, { role:"assistant", content:data.answer }])
-    } catch (error) {
-      console.error("Claude clinical chat error:", error)
-      setMessages(prev => [...prev, {
-        role:"assistant",
-        content:"Không thể kết nối với Claude lúc này. Vui lòng kiểm tra backend và biến ANTHROPIC_API_KEY."
-      }])
-    }
+// ─── Micro (STT) cho ô chat MedAmi — dùng MediaRecorder gốc trình duyệt ────
+// Khác AudioRecorder (Web Speech API, dùng cho ghi chú/widget note) — nút
+// này thu âm thành file gửi lên /voice/stt (VNPT SmartVoice, có fallback).
+// Tài liệu VNPT khuyến nghị "Wav, PCM 16bit, Mono Channel" cho STT/tóm tắt,
+// nhưng MediaRecorder trình duyệt mặc định chỉ ghi ra webm (không hỗ trợ
+// ghi trực tiếp .wav qua API chuẩn). Chọn định dạng GẦN NHẤT trình duyệt
+// hỗ trợ được (ưu tiên wav nếu có, hiếm — thường chỉ Safari 1 phần) thay
+// vì luôn ép webm mặc định — tăng khả năng VNPT chấp nhận, KHÔNG đảm bảo
+// 100% (đã có fallback an toàn ở cả 2 nơi dùng nếu VNPT từ chối định dạng).
+function pickBestAudioMime() {
+  const candidates = ["audio/wav", "audio/wave", "audio/mp4", "audio/webm;codecs=opus", "audio/webm"]
+  for (const m of candidates) {
+    try { if (window.MediaRecorder?.isTypeSupported?.(m)) return m } catch {}
   }
-
-  const sendSystem = async (q) => {
-    setSystemMessages(prev => [...prev, { role:"user", content:q }])
-    try {
-      const data = await mpApi.askSystemBot(q, senderId.current)
-      if (!data?.answer) throw new Error("Backend không trả về trường answer")
-      if (data.provider !== "vnpt-smartbot") {
-        throw new Error(`Sai provider: ${data.provider || "không xác định"}`)
-      }
-      setSystemMessages(prev => [...prev, {
-        role:"assistant",
-        content:data.answer,
-        provider:"vnpt-smartbot",
-      }])
-    } catch (error) {
-      console.error("VNPT system support error:", error)
-      const reason = error?.message || String(error)
-      setSystemMessages(prev => [...prev, {
-        role:"assistant",
-        content:`Không thể kết nối với VNPT SmartBot.\n\nLỗi thực tế: ${reason}`,
-        provider:"vnpt-smartbot-error",
-      }])
-    }
-  }
-
-  const send = async (text) => {
-    const q = text || input.trim()
-    if (!q || loading) return
-    setInput("")
-    setLoading(true)
-    if (isClinical) await sendClinical(q)
-    else await sendSystem(q)
-    setLoading(false)
-  }
-
-  const clinicalSuggestions = chatSuggestions(mode).slice(0,3)
-  const systemSuggestions = [
-    "Làm thế nào để tải hồ sơ?",
-    "Cách xem lịch sử phân tích?",
-    "Cách sử dụng hai chatbot?",
-  ]
-  const suggestions = isClinical ? clinicalSuggestions : systemSuggestions
-  const unread = !open
-    ? Math.max(0, messages.length - seenClinical) + Math.max(0, systemMessages.length - seenSystem)
-    : 0
-
-  return (
-    <>
-      {!open && (
-        <button className="fab-chat" onClick={()=>setOpen(true)} aria-label="Mở MedAmi và Hỗ trợ hệ thống">
-          <Icon.Chat d={22} color="#fff"/>
-          {unread > 0 && <span className="fab-badge">{unread}</span>}
-        </button>
-      )}
-      {open && (
-        <div className="fc-panel">
-          <div className="fc-head">
-            <div className="fc-head-l">
-              <div className="fc-avatar"><MedAmiAvatar robotSize={15}/></div>
-              <div>
-                <div className="fc-title">{isClinical ? "MedAmi" : "Hỗ trợ hệ thống"}</div>
-                <div className="fc-provider">{isClinical ? "Bác sĩ lâm sàng - Claude" : "Trợ lý sản phẩm - VNPT SmartBot"}</div>
-              </div>
-            </div>
-            <div className="fc-head-r">
-              {isClinical && (
-                <button className="fc-icon-btn" title="Mở rộng" onClick={onExpand}>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
-                </button>
-              )}
-              <button className="fc-icon-btn" title="Thu nhỏ" onClick={()=>setOpen(false)}>
-                <Icon.Close d={15} color="#fff"/>
-              </button>
-            </div>
-          </div>
-
-          <div className="fc-mode-tabs">
-            <button className={`fc-mode-tab${isClinical ? " active" : ""}`} onClick={()=>setActiveMode("clinical")}>
-              Bác sĩ (Lâm sàng)
-            </button>
-            <button className={`fc-mode-tab${!isClinical ? " active" : ""}`} onClick={()=>setActiveMode("system")}>
-              Hỗ trợ hệ thống
-            </button>
-          </div>
-
-          <div className="fc-msgs">
-            {activeMessages.map((m,i)=>(
-              <div key={`${activeMode}-${i}`} className={`msg-row${m.role==="user"?" user":""}`}>
-                {m.role==="assistant"&&<div className="bot-avatar sm">{isClinical ? <MedAmiAvatar robotSize={11}/> : <Icon.Chat d={12} color="#fff"/>}</div>}
-                <div className={`bubble sm ${m.role==="user"?"user":"bot"}`}>{renderMd(m.content)}</div>
-              </div>
-            ))}
-            {loading&&<div className="msg-row"><div className="bot-avatar sm">{isClinical ? <MedAmiAvatar robotSize={11}/> : <Icon.Chat d={12} color="#fff"/>}</div><div className="bubble sm bot"><div className="typing"><span/><span/><span/></div></div></div>}
-            <div ref={bottomRef}/>
-          </div>
-
-          <div className="fc-sug">
-            {suggestions.map(s=>(
-              <button key={s} onClick={()=>send(s)} disabled={loading}>{s}</button>
-            ))}
-          </div>
-          <div className="fc-input">
-            <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()}
-              placeholder={isClinical ? "Hỏi nhanh về bệnh nhân..." : "Hỏi về cách dùng MedParcours..."}/>
-            <button className="send-btn sm" onClick={()=>send()} disabled={!input.trim()||loading}>
-              <Icon.Send d={12} color={input.trim()&&!loading?"white":"#9BB5D8"}/>
-            </button>
-          </div>
-        </div>
-      )}
-    </>
-  )
+  return "" // để trình duyệt tự chọn mặc định nếu không cái nào khớp
+}
+// Lấy đúng constructor SpeechRecognition có tiền tố tùy trình duyệt (Chrome/
+// Edge: webkitSpeechRecognition; 1 số trình duyệt mới: SpeechRecognition
+// chuẩn không tiền tố) — trả về null nếu trình duyệt không hỗ trợ, cho
+// phép rơi về hành vi cũ (chỉ hiện text sau khi ghi âm xong) mà không lỗi.
+function getSpeechRecognitionCtor() {
+  if (typeof window === "undefined") return null
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null
 }
 
+function ChatMicButton({ getCurrentInput, onTextChange }) {
+  const [isRecording, setIsRecording] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const mediaRecorderRef = useRef(null)
+  const chunksRef = useRef([])
+  const recognitionRef = useRef(null)
+  const baseTextRef = useRef("") // text đã có SẴN trong ô input trước khi bắt đầu ghi âm — giữ nguyên, chỉ nối thêm phần mới nói
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      baseTextRef.current = (getCurrentInput() || "").trim()
+      const mime = pickBestAudioMime()
+      const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined)
+      chunksRef.current = []
+      mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data) }
+      mr.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop())
+        const blob = new Blob(chunksRef.current, { type: mime || "audio/webm" })
+        const ext = mime.includes("wav") ? "wav" : mime.includes("mp4") ? "mp4" : "webm"
+        setIsProcessing(true)
+        try {
+          const res = await mpApi.speechToText(blob, `ghi_am.${ext}`)
+          if (res.success && res.text) {
+            // Kết quả VNPT chính xác hơn nhiều so với ước lượng thời gian
+            // thực của trình duyệt — GHI ĐÈ phần vừa nói bằng bản này.
+            const base = baseTextRef.current
+            onTextChange(base ? `${base} ${res.text}` : res.text)
+          }
+          // Nếu VNPT lỗi: KHÔNG báo lỗi ồn ào nữa — ô input đã có sẵn text
+          // ước lượng thời gian thực từ SpeechRecognition (nếu trình duyệt
+          // hỗ trợ), bác sĩ vẫn dùng được, chỉ là kém chính xác hơn 1 chút.
+        } catch {
+          // Giữ nguyên text đã có từ SpeechRecognition, không ghi đè bằng lỗi.
+        } finally {
+          setIsProcessing(false)
+        }
+      }
+      mediaRecorderRef.current = mr
+      mr.start()
+
+      // Song song: SpeechRecognition của trình duyệt để HIỂN THỊ TRỰC TIẾP
+      // chữ đang nói (interimResults=true) — cập nhật ô input NGAY LẬP TỨC
+      // thay vì phải đợi tới lúc dừng ghi âm mới thấy chữ (trải nghiệm cũ).
+      // Đây CHỈ để hiển thị tạm thời — kết quả VNPT ở trên mới là bản CHÍNH
+      // THỨC ghi đè lên khi ghi âm kết thúc.
+      const Recognition = getSpeechRecognitionCtor()
+      if (Recognition) {
+        const rec = new Recognition()
+        rec.lang = "vi-VN"
+        rec.continuous = true
+        rec.interimResults = true
+        rec.onresult = (e) => {
+          let liveText = ""
+          for (let i = 0; i < e.results.length; i++) liveText += e.results[i][0].transcript
+          liveText = liveText.trim()
+          const base = baseTextRef.current
+          onTextChange(base ? `${base} ${liveText}` : liveText)
+        }
+        rec.onerror = () => {} // im lặng — không phải nguồn chính thức, VNPT vẫn chạy song song
+        try { rec.start() } catch {}
+        recognitionRef.current = rec
+      }
+
+      setIsRecording(true)
+    } catch {
+      mpToast("Không truy cập được micro. Hãy cho phép quyền micro cho trang web rồi thử lại.", "err")
+    }
+  }
+  const stopRecording = () => {
+    try { mediaRecorderRef.current && mediaRecorderRef.current.stop() } catch {}
+    try { recognitionRef.current && recognitionRef.current.stop() } catch {}
+    setIsRecording(false)
+  }
+  useEffect(() => () => {
+    try { mediaRecorderRef.current && mediaRecorderRef.current.stop() } catch {}
+    try { recognitionRef.current && recognitionRef.current.stop() } catch {}
+  }, [])
+
+  return (
+    <button type="button" className={`chat-mic-btn${isRecording ? " recording" : ""}`}
+      onClick={() => isRecording ? stopRecording() : startRecording()}
+      disabled={isProcessing} title={isRecording ? "Dừng ghi âm" : "Ghi âm câu hỏi bằng giọng nói"}
+      aria-label={isRecording ? "Dừng ghi âm" : "Ghi âm câu hỏi"}>
+      {isProcessing ? <span className="chat-mic-spin"/> : <Icon.Mic d={15} color={isRecording ? "#fff" : "#7A96C8"}/>}
+    </button>
+  )
+}
 function ChatTab({ report, hoSoText, messages, setMessages, mode }) {
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
   const bottomRef = useRef()
   const inputRef = useRef()
-  useEffect(() => { bottomRef.current?.scrollIntoView({behavior:"smooth"}) }, [messages])
+  // Tách lịch sử theo TỪNG chế độ — trước đây dùng chung 1 mảng `messages`
+  // từ App(), đổi chế độ là mất/đè lịch sử chế độ kia. FAQ dùng mảng riêng
+  // cục bộ trong ChatTab; lâm sàng vẫn dùng `messages`/`setMessages` từ
+  // App() (đã đồng bộ với widget nhỏ + lưu lịch sử backend — không đổi để
+  // không phá vỡ 2 cơ chế đó).
+  const [chatMode, setChatMode] = useState(mode || "clinical")
+  const [faqMsgs, setFaqMsgs] = useState([
+    { role: "assistant", content: "Xin chào! Tôi có thể giúp gì cho bạn về cách dùng MedParcours?" },
+  ])
+  // Smart default: bất cứ khi nào hồ sơ đang xem đổi (bác sĩ vừa mở hồ sơ
+  // khác/quét xong hồ sơ mới), luôn quay về chế độ Lâm sàng — chặn kẹt ở
+  // FAQ khi đang cần hỏi về bệnh án.
+  useEffect(() => { setChatMode("clinical") }, [report?.thong_tin_benh_nhan?.so_benh_an])
+  const [attachedFile, setAttachedFile] = useState(null)
+  const [attachedFileText, setAttachedFileText] = useState(null)
+  const [attachExtracting, setAttachExtracting] = useState(false)
+  const fileInputRef = useRef()
+  const pickAttachFile = async (f) => {
+    if (!f) return
+    setAttachedFile(f); setAttachedFileText(null)
+    if (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")) {
+      setAttachExtracting(true)
+      try {
+        const extracted = await extractPdfText(f)
+        const text = typeof extracted === "string" ? extracted : (extracted?.text || "")
+        setAttachedFileText(text)
+      } catch {
+        mpToast("Không đọc được nội dung file PDF này — vẫn gửi được tin nhắn, chỉ là AI sẽ không thấy nội dung file.", "err")
+      } finally {
+        setAttachExtracting(false)
+      }
+    }
+    // File không phải PDF: giữ tag đính kèm hiển thị nhưng KHÔNG trích nội
+    // dung (chỉ hỗ trợ PDF thật theo đúng yêu cầu — ảnh/Word/Excel cần
+    // luồng OCR/trích khác, chưa làm ở đây).
+  }
+  const isFaq = chatMode === "faq"
+  const activeMsgs = isFaq ? faqMsgs : messages
+  const setActiveMsgs = isFaq ? setFaqMsgs : setMessages
+  useEffect(() => { bottomRef.current?.scrollIntoView({behavior:"smooth"}) }, [activeMsgs])
 
   const send = async (text) => {
     const q = text || input.trim(); if (!q || loading) return
-    setInput(""); setMessages(prev => [...prev, {role:"user", content:q}]); setLoading(true)
+    setInput(""); setActiveMsgs(prev => [...prev, {role:"user", content:q}]); setLoading(true)
+    // Nếu có PDF đính kèm đã trích được text thật, ghép vào nội dung hồ sơ
+    // gửi cho AI — KHÔNG bịa/mock nữa, đây là nội dung THẬT của file vừa
+    // tải lên (dùng đúng extractPdfText đã có sẵn cho luồng Cập nhật hồ sơ).
+    const hoSoVoiFileDinhKem = attachedFileText
+      ? `${hoSoText || JSON.stringify(report)}\n\n--- TÀI LIỆU ĐÍNH KÈM THÊM TỪ BÁC SĨ (${attachedFile?.name}) ---\n${attachedFileText}`
+      : (hoSoText || JSON.stringify(report))
+    const hadAttachment = !!attachedFileText
+    setAttachedFile(null); setAttachedFileText(null)
+    if (isFaq) {
+      try {
+        const res = await mpApi.askFaqBot(q)
+        setActiveMsgs(prev => [...prev, {role:"assistant", content: res.text || "Xin lỗi, tôi chưa có câu trả lời cho câu hỏi này."}])
+      } catch {
+        setActiveMsgs(prev => [...prev, {role:"assistant", content: "Trợ lý hệ thống đang bảo trì, thử lại sau."}])
+      }
+      setLoading(false)
+      return
+    }
     try {
       const res = await callApi("/chat", {method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({question:q, assistant_type:"clinical", ho_so_text:hoSoText||JSON.stringify(report), chat_history:messages.slice(-6), mode})})
+        body:JSON.stringify({question:q, assistant_type:"clinical", ho_so_text:hoSoVoiFileDinhKem, chat_history:messages.slice(-6), mode:chatMode})})
       const data = await res.json()
-      // fetch không tự throw khi status lỗi; MedAmi lâm sàng dùng Claude qua /chat
+      // Xem ghi chú ở FloatingChat.send(): fetch không tự throw khi status lỗi
       // nhưng vẫn trả JSON hợp lệ -> phải tự kiểm tra res.ok + data.answer.
       if (!res.ok || !data || !data.answer) throw new Error(data?.detail || "no answer")
-      setMessages(prev => [...prev, {role:"assistant", content:data.answer}])
-    } catch (error) {
-      console.error("Chat API error:", error)
-      setMessages(prev => [...prev, {
-        role:"assistant",
-        content:"Không thể kết nối với Claude lúc này. Vui lòng kiểm tra backend và biến ANTHROPIC_API_KEY."
-      }])
+      setActiveMsgs(prev => [...prev, {role:"assistant", content:data.answer}])
+    } catch {
+      const key = Object.keys(DEMO_CHAT).find(k => q.toLowerCase().includes(k))
+      const ans = key ? DEMO_CHAT[key] : "Không tìm thấy thông tin cụ thể trong hồ sơ. Bác sĩ có thể hỏi về: biến chứng sau mổ, thuốc chống đông, kết quả siêu âm, hoặc diễn biến CRP."
+      setActiveMsgs(prev => [...prev, {role:"assistant", content:ans}])
     }
     setLoading(false)
   }
 
   return (
     <div className="chat-wrap">
+      <div className="chat-mode-toggle">
+        <button className={`chat-mode-btn${!isFaq?" active":""}`} onClick={()=>setChatMode("clinical")}>MedAmi Lâm sàng</button>
+        <button className={`chat-mode-btn${isFaq?" active":""}`} onClick={()=>setChatMode("faq")}>Hỗ trợ hệ thống</button>
+      </div>
       <div className="chat-msgs">
-        {messages.map((m,i)=>(
+        {activeMsgs.map((m,i)=>(
           <div key={i} className={`msg-row${m.role==="user"?" user":""}`}>
             {m.role==="assistant"&&<div className="bot-avatar"><MedAmiAvatar robotSize={13}/></div>}
-            <div className={`bubble ${m.role==="user"?"user":"bot"}`}>{renderMd(m.content)}</div>
+            <div className={`bubble ${m.role==="user"?"user":"bot"}`}>
+              {renderMd(m.content)}
+              {m.role==="assistant" && <SpeakerButton text={m.content} color="#94A3B8"/>}
+            </div>
           </div>
         ))}
         {loading&&<div className="msg-row"><div className="bot-avatar"><MedAmiAvatar robotSize={13}/></div><div className="bubble bot"><div className="typing"><span/><span/><span/></div></div></div>}
         <div ref={bottomRef}/>
       </div>
       <div className="chat-suggestions">
-        {chatSuggestions(mode).map(s=>(
+        {chatSuggestions(chatMode).map(s=>(
           <button key={s} className="sug-chip" onClick={()=>send(s)} disabled={loading}>{s}</button>
         ))}
       </div>
+      {attachedFile && (
+        <div className="chat-attach-tag">
+          <Icon.FileText d={12} color="#1D6FE8"/>{attachedFile.name}
+          {attachExtracting && <span className="chat-mic-spin" style={{width:11,height:11,borderWidth:2,marginLeft:2}}/>}
+          {!attachExtracting && attachedFileText && <span style={{color:"#059669",fontSize:10.5}}>· đã đọc nội dung</span>}
+          <button onClick={()=>{ setAttachedFile(null); setAttachedFileText(null) }} aria-label="Bỏ đính kèm"><Icon.Close d={11} color="#7A96C8"/></button>
+        </div>
+      )}
       <div className="chat-input-row">
-        <Icon.Chat d={16} style={{color:"#7A96C8",flexShrink:0}}/>
+        <input type="file" ref={fileInputRef} style={{display:"none"}} onChange={e=>{ pickAttachFile(e.target.files[0]); e.target.value="" }}/>
+        <IconTip text="Đính kèm tài liệu (giao diện minh họa)" position="top">
+          <button type="button" className="chat-attach-btn" onClick={()=>fileInputRef.current.click()} aria-label="Đính kèm file">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+        </IconTip>
         <input id="chat-input-field" ref={inputRef} className="chat-input" value={input}
           onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()}
           placeholder="Hỏi về bệnh nhân..."/>
+        <ChatMicButton getCurrentInput={()=>input} onTextChange={setInput}/>
         <div className="kbd-hint"><kbd className="kbd">Ctrl</kbd><span>+</span><kbd className="kbd">K</kbd></div>
-        <button className="send-btn" onClick={()=>send()} disabled={!input.trim()||loading}>
+        <button className="send-btn" onClick={()=>{ send(); setAttachedFile(null) }} disabled={!input.trim()||loading}>
           <Icon.Send d={13} color={input.trim()&&!loading?"white":"#9BB5D8"}/>
         </button>
       </div>
@@ -5417,6 +6563,32 @@ const HISTORY = [
   { id:"BN-B", ...recMeta(PATIENT_B) },
 ]
 
+// ─── Mock "analysis" cho 2 hồ sơ demo (Nguyễn Văn A/B) ─────────────────────
+// Demo mode không gọi backend nên analysis vốn = null — nhưng từ khi
+// LabPanel đọc analysis.inr_target_detail để hiện đúng ngưỡng INR theo
+// TỪNG LOẠI bệnh nhân (sửa "Vấn đề 1" — hệ thống từng mặc định mọi bệnh
+// nhân là ca van cơ học), demo cần có sẵn field này để không hiện "chưa xác
+// định ngưỡng" cho 2 ca demo (vốn đã biết rõ loại van). Giá trị khớp đúng
+// logic cde/anticoagulation_targets.py sẽ tính cho từng ca thật tương ứng.
+const MOCK_ANALYSIS_BY_SBA = {
+  "25.019647": { // Nguyễn Văn A — van ĐMC cơ học On-X + đau thắt ngực + suy tim
+    inr_target_detail: { target_min: 2.0, target_max: 3.0, target_mid: 2.5, ten_hien_thi: "Van ĐMC cơ học On-X — ESC/EACTS 2021 (nguy cơ thấp)" },
+    anticoagulant_status: { an_inr_ttr: false },
+    active_icd_groups: [
+      { icd_group: "I30_van_tim", ten_hien_thi: "Thể khác của bệnh tim", icd_range: "I30-I52", subtype: "Van tim không do thấp + Suy tim", thang_diem_dac_trung: ["NYHA"] },
+      { icd_group: "I20_thieu_mau_ct", ten_hien_thi: "Bệnh tim thiếu máu cục bộ", icd_range: "I20-I25", subtype: null, thang_diem_dac_trung: ["GRACE", "TIMI", "HEART"] },
+    ],
+  },
+  "26.007850": { // Nguyễn Văn B — hở van 2 lá/3 lá, tăng áp phổi, suy tim
+    inr_target_detail: { target_min: 2.0, target_max: 3.0, target_mid: 2.5, ten_hien_thi: "Sửa van tim (mitral/tricuspid repair) — chỉ 3 tháng đầu, không suốt đời" },
+    anticoagulant_status: { an_inr_ttr: false },
+    active_icd_groups: [
+      { icd_group: "I30_van_tim", ten_hien_thi: "Thể khác của bệnh tim", icd_range: "I30-I52", subtype: "Van tim không do thấp + Suy tim", thang_diem_dac_trung: ["NYHA"] },
+      { icd_group: "I26_tuan_hoan_phoi", ten_hien_thi: "Bệnh tim do phổi và tuần hoàn phổi", icd_range: "I26-I28", subtype: null, thang_diem_dac_trung: ["Wells", "Geneva", "PESI", "REVEAL"] },
+    ],
+  },
+}
+
 // ─── Lịch sử quét ECG (lưu sessionStorage, KHÔNG bao gồm 2 mẫu demo tĩnh) ────
 // Tích hợp theo yêu cầu: mục "Lịch sử bệnh án" cũng hiện các lượt quét ECG đã
 // thực hiện, không chỉ hồ sơ bệnh án. Mỗi lượt quét ảnh thật qua /ecg (không
@@ -5453,6 +6625,26 @@ function matchKw(text, kws){ const t=(text||"").toLowerCase(); return kws.some(k
 function pickCanhBao(r, kws){ return (r.canh_bao_nguy_co||[]).filter(c=>matchKw(c.mo_ta, kws)) }
 function shortLabel(s){ return ((s||"").split(/[:\-]/)[0]||s||"").trim().slice(0,72) }
 function splitSentences(s){ return (s||"").split(/(?<=[.!?])\s+/).map(x=>x.trim()).filter(x=>x.length>2) }
+// tom_tat_toan_canh do AI sinh ra là 1 ĐOẠN VĂN LIỀN MẠCH có các tiêu đề
+// giai đoạn viết hoa xen giữa — dùng ĐÚNG regex đã kiểm chứng trong
+// SummaryCard (đã từng sửa bug case-insensitive bắt nhầm cụm "giai đoạn"
+// viết thường giữa câu văn) thay vì viết lại pattern mới có nguy cơ lặp
+// lại lỗi cũ. Trước đây bản IN chỉ in 1 khối text dính liền không xuống
+// dòng — trong khi màn hình chính (SummaryCard) đã tách bullet đúng từ
+// trước — hàm này đưa bản IN về cùng chất lượng với màn hình chính.
+function splitTomTatTheoGiaiDoan(text) {
+  const safe = text || ""
+  if (!safe.trim()) return []
+  const re = /GIAI ĐO[AẠ]N (TRƯỚC MỔ|SAU MỔ[^:]*|NGOẠI TRÚ[^:]*|HỒI PHỤC[^:]*):/g
+  const markers = [...safe.matchAll(re)]
+  if (!markers.length) return [{ tieuDe: null, cau: splitSentences(safe) }]
+  return markers.map((m, i) => {
+    const start = m.index + m[0].length
+    const end = i + 1 < markers.length ? markers[i + 1].index : safe.length
+    const tieuDe = m[0].replace(/:$/, "").trim()
+    return { tieuDe, cau: splitSentences(safe.slice(start, end)) }
+  })
+}
 
 // ─── Engine Hội chẩn ảo (Virtual MDT) ─────────────────────────────────────────
 const SPEC_DEFS = [
@@ -5496,7 +6688,7 @@ function buildThread(r, names){
 }
 function buildAskMDT(r, names){
   const f=(arr)=>arr.filter(a=>names.includes(a.khoa))
-  const text=[r.chan_doan_chinh,...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta),...(r.thuoc_cuoi_ky||[]).map(t=>t.nhom)].join(" ")
+  const text=[r.chan_doan_chinh,...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta),...(r.thuoc_cuoi_ky||[]).map(t=>t.ten_thuoc)].join(" ")
   const has=(...k)=>matchKw(text,k)
   const out=[]
   if(has("kháng sinh","nhiễm","crp","pct")) out.push({ q:"Có nên xuống thang kháng sinh không?",
@@ -5511,7 +6703,7 @@ function buildAskMDT(r, names){
   return out
 }
 function deriveMDT(r){
-  const text=[r.chan_doan_chinh,r.tom_tat_toan_canh,...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta),...(r.thuoc_cuoi_ky||[]).map(t=>t.nhom),r.phau_thuat&&r.phau_thuat.phuong_phap].join(" ")
+  const text=[r.chan_doan_chinh,r.tom_tat_toan_canh,...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta),...(r.thuoc_cuoi_ky||[]).map(t=>t.ten_thuoc),r.phau_thuat&&r.phau_thuat.phuong_phap].join(" ")
   const specialties=SPEC_DEFS.filter(s=>matchKw(text,s.kw)).map(s=>{
     const cbs=pickCanhBao(r,s.kw)
     const fullEval = cbs.length ? cbs.map(c=>c.mo_ta)
@@ -5550,19 +6742,79 @@ function deriveMDT(r){
 }
 
 // ─── Engine Giảng dạy (khung bệnh án ngoại khoa HMU + tutor) ──────────────────
+// Luôn trả về ĐÚNG 5 tình huống MCQ (cho cả demo lẫn hồ sơ quét thật) — trước
+// đây chỉ có 2 pattern cố định (lactate/toan, INR) nên đa số hồ sơ chỉ ra
+// 0-1 câu. Giờ xếp theo thứ tự ưu tiên: pattern lâm sàng cụ thể theo từ khóa
+// (đúng ngữ cảnh nhất) -> từng cảnh báo nguy cơ thật trong hồ sơ (không chỉ
+// lấy 1 cái đầu) -> từng hành động ưu tiên thật -> kịch bản chung an toàn
+// (luôn áp dụng được, đảm bảo đủ 5 câu kể cả hồ sơ dữ liệu rất mỏng).
+const DECISION_TARGET_COUNT = 5
+
 function buildDecisions(r){
   const text=[r.chan_doan_chinh,...(r.canh_bao_nguy_co||[]).map(c=>c.mo_ta)].join(" ")
   const has=(...k)=>matchKw(text,k)
   const out=[]
+
   if(has("lactate","toan")) out.push({ tinh_huong:"Hậu phẫu, lactate tăng cao kèm toan chuyển hóa, bệnh nhân còn phụ thuộc thuốc vận mạch.",
     options:[{k:"A",t:"Giảm vận mạch ngay"},{k:"B",t:"Hồi sức tối ưu huyết động, theo dõi lactate clearance"},{k:"C",t:"Cho ăn đường miệng sớm"},{k:"D",t:"Ngừng theo dõi sát"}],
     dung:"B", giai_thich:"Lactate cao phản ánh giảm tưới máu mô; ưu tiên tối ưu cung lượng tim và theo dõi xu hướng lactate. Giảm vận mạch quá sớm có thể làm nặng tụt tưới máu." })
   if(has("inr","chống đông")) out.push({ tinh_huong:"Bệnh nhân vừa mổ tim, INR vọt lên ngưỡng nguy cơ chảy máu.",
     options:[{k:"A",t:"Tăng liều chống đông"},{k:"B",t:"Giữ nguyên liều"},{k:"C",t:"Tạm ngừng/giảm liều và đánh giá nguy cơ chảy máu"},{k:"D",t:"Truyền chế phẩm máu ngay"}],
     dung:"C", giai_thich:"INR vượt mục tiêu trên bệnh nhân vừa phẫu thuật làm tăng nguy cơ chảy máu; cần giảm/tạm ngừng và đánh giá. Đảo ngược bằng chế phẩm chỉ khi có chảy máu hoặc cần can thiệp." })
-  if(out.length===0 && (r.canh_bao_nguy_co||[]).length){ const c=r.canh_bao_nguy_co[0]
-    out.push({ tinh_huong:c.mo_ta, options:[{k:"A",t:"Theo dõi tiếp"},{k:"B",t:"Xử trí theo ưu tiên đã nêu"},{k:"C",t:"Cho xuất viện"},{k:"D",t:"Bỏ qua"}], dung:"B", giai_thich:"Đây là vấn đề ưu tiên cao, cần can thiệp theo hướng đã nêu." }) }
-  return out
+  if(has("kháng sinh","nhiễm","crp","pct")) out.push({ tinh_huong:"CRP/bạch cầu giảm rõ rệt sau vài ngày dùng kháng sinh, lâm sàng cải thiện, hết sốt.",
+    options:[{k:"A",t:"Tiếp tục nguyên phổ kháng sinh đến hết đợt theo kinh nghiệm ban đầu"},{k:"B",t:"Xuống thang kháng sinh dựa trên đáp ứng lâm sàng và marker viêm"},{k:"C",t:"Đổi sang kháng sinh phổ rộng hơn"},{k:"D",t:"Ngừng kháng sinh ngay lập tức"}],
+    dung:"B", giai_thich:"CRP/PCT giảm liên tục kèm cải thiện lâm sàng là chỉ điểm đáp ứng điều trị tốt — nên cân nhắc xuống thang theo nguyên tắc antibiotic stewardship, không kéo dài phổ rộng không cần thiết." })
+  if(has("suy tim","nt-probnp","ef giảm")) out.push({ tinh_huong:"NT-proBNP còn tăng cao, có dấu hiệu ứ dịch (khó thở, phù), EF giảm trên siêu âm gần nhất.",
+    options:[{k:"A",t:"Tăng cường lợi tiểu, tối ưu điều trị suy tim theo guideline (ACEI/ARB/SGLT2i/chẹn beta)"},{k:"B",t:"Ngừng toàn bộ thuốc tim mạch để tránh tụt huyết áp"},{k:"C",t:"Chỉ theo dõi, không can thiệp"},{k:"D",t:"Truyền dịch để cải thiện tưới máu"}],
+    dung:"A", giai_thich:"Dấu hiệu ứ dịch + NT-proBNP cao + EF giảm gợi ý suy tim mất bù — cần tối ưu lợi tiểu và điều trị nền theo khuyến cáo suy tim hiện hành, tránh truyền dịch làm nặng thêm ứ dịch." })
+  if(has("rung nhĩ","af","đột quỵ")) out.push({ tinh_huong:"Bệnh nhân rung nhĩ mới phát hiện, chưa dùng thuốc chống đông, chưa có tiền sử đột quỵ.",
+    options:[{k:"A",t:"Không cần chống đông vì chưa có triệu chứng"},{k:"B",t:"Đánh giá nguy cơ đột quỵ (CHA2DS2-VASc) và nguy cơ chảy máu (HAS-BLED) trước khi quyết định"},{k:"C",t:"Chống đông liều tối đa ngay lập tức không cần đánh giá"},{k:"D",t:"Chuyển thẳng sốc điện chuyển nhịp"}],
+    dung:"B", giai_thich:"Quyết định chống đông ở rung nhĩ luôn dựa trên cân bằng nguy cơ đột quỵ và nguy cơ chảy máu qua thang điểm chuẩn, không quyết định cảm tính theo triệu chứng." })
+  if(has("creatinin","egfr","suy thận","aki")) out.push({ tinh_huong:"Creatinin tăng hơn 50% so với nền trong vòng 48 giờ sau mổ, lượng nước tiểu giảm.",
+    options:[{k:"A",t:"Tiếp tục phác đồ thuốc cũ không đổi liều"},{k:"B",t:"Đánh giá tổn thương thận cấp (AKI), điều chỉnh liều thuốc theo eGFR và rà soát thuốc độc thận"},{k:"C",t:"Tăng liều lợi tiểu để ép tiểu nhiều hơn"},{k:"D",t:"Chỉ cần theo dõi, không cần xét nghiệm lại"}],
+    dung:"B", giai_thich:"Creatinin tăng >50% trong 48 giờ đạt tiêu chuẩn AKI — cần rà soát và chỉnh liều mọi thuốc thải qua thận, tránh thêm thuốc độc thận, không tự ý tăng lợi tiểu khi chưa rõ nguyên nhân." })
+
+  // Cảnh báo nguy cơ THẬT trong hồ sơ chưa dùng ở trên — mỗi cảnh báo còn lại
+  // thành 1 câu MCQ riêng (khác bản cũ: bản cũ chỉ lấy đúng 1 cảnh báo đầu tiên).
+  const usedTexts = new Set(out.map(d=>d.tinh_huong))
+  for(const c of (r.canh_bao_nguy_co||[])){
+    if(out.length>=DECISION_TARGET_COUNT) break
+    if(usedTexts.has(c.mo_ta)) continue
+    usedTexts.add(c.mo_ta)
+    out.push({ tinh_huong:c.mo_ta,
+      options:[{k:"A",t:"Theo dõi tiếp, chưa cần can thiệp"},{k:"B",t:"Xử trí theo hướng ưu tiên đã nêu trong hồ sơ"},{k:"C",t:"Cho xuất viện ngay"},{k:"D",t:"Bỏ qua, không cần đánh giá thêm"}],
+      dung:"B", giai_thich:(c.can_cu ? `Căn cứ: ${c.can_cu}. ` : "")+"Đây là vấn đề đã được hệ thống đánh giá là cần chú ý — nên xử trí theo đúng hướng ưu tiên đã nêu, không trì hoãn hoặc bỏ qua." })
+  }
+
+  // Hành động ưu tiên THẬT trong hồ sơ — dùng làm nguồn bổ sung nếu vẫn thiếu.
+  for(const a of (r.hanh_dong_uu_tien||[])){
+    if(out.length>=DECISION_TARGET_COUNT) break
+    if(!a.viec || usedTexts.has(a.viec)) continue
+    usedTexts.add(a.viec)
+    out.push({ tinh_huong:`Trong kế hoạch tái khám, có đề nghị: "${a.viec}"${a.ly_do?` (lý do: ${a.ly_do})`:""}.`,
+      options:[{k:"A",t:"Thực hiện đúng theo đề nghị và lý do đã nêu"},{k:"B",t:"Bỏ qua vì không quan trọng"},{k:"C",t:"Trì hoãn vô thời hạn"},{k:"D",t:"Chuyển tuyến ngay không cần lý do"}],
+      dung:"A", giai_thich:"Hành động ưu tiên trong hồ sơ được xếp hạng dựa trên mức độ ảnh hưởng tới an toàn bệnh nhân — nên thực hiện đúng theo đề nghị và căn cứ đã nêu." })
+  }
+
+  // Kịch bản chung an toàn — đảm bảo LUÔN đủ 5 câu kể cả hồ sơ demo/dữ liệu
+  // mỏng không có đủ cảnh báo/hành động ưu tiên để sinh đủ 5 câu ở trên.
+  const GENERIC_FALLBACK = [
+    { tinh_huong:"Bệnh nhân xuất viện, hẹn tái khám định kỳ theo kế hoạch điều trị.",
+      options:[{k:"A",t:"Không cần dặn dò gì thêm"},{k:"B",t:"Dặn rõ lịch tái khám, dấu hiệu cần quay lại viện ngay, và mang đủ đơn thuốc/giấy tờ"},{k:"C",t:"Để bệnh nhân tự quyết định khi nào tái khám"},{k:"D",t:"Ngừng toàn bộ thuốc khi ra viện"}],
+      dung:"B", giai_thich:"Dặn dò rõ ràng khi xuất viện (lịch tái khám, dấu hiệu cảnh báo, đơn thuốc) giúp giảm nguy cơ tái nhập viện và biến chứng bị bỏ sót." },
+    { tinh_huong:"Bệnh nhân đang dùng nhiều loại thuốc cùng lúc sau khi ra viện.",
+      options:[{k:"A",t:"Không cần rà soát vì bác sĩ kê đơn đã đúng"},{k:"B",t:"Rà soát tương tác thuốc và trùng nhóm trước khi kê thêm thuốc mới"},{k:"C",t:"Tự ý bớt thuốc để đơn giản hóa"},{k:"D",t:"Kê thêm thuốc mới mà không cần xem đơn cũ"}],
+      dung:"B", giai_thich:"Bệnh nhân đa thuốc có nguy cơ tương tác/trùng nhóm cao — luôn rà soát toàn bộ đơn thuốc hiện tại trước khi kê thêm." },
+    { tinh_huong:"Kết quả cận lâm sàng mới có giá trị bất thường nhẹ, chưa rõ ý nghĩa lâm sàng.",
+      options:[{k:"A",t:"Bỏ qua vì mức độ nhẹ"},{k:"B",t:"Đối chiếu với xu hướng các lần đo trước và bệnh cảnh lâm sàng trước khi kết luận"},{k:"C",t:"Kết luận ngay là bất thường nguy hiểm"},{k:"D",t:"Yêu cầu bệnh nhân tự diễn giải kết quả"}],
+      dung:"B", giai_thich:"Một giá trị bất thường đơn lẻ cần đặt trong bối cảnh xu hướng và lâm sàng tổng thể trước khi đưa ra kết luận hay hành động." },
+  ]
+  let gi = 0
+  while(out.length<DECISION_TARGET_COUNT && gi<GENERIC_FALLBACK.length){
+    out.push(GENERIC_FALLBACK[gi]); gi++
+  }
+
+  return out.slice(0, DECISION_TARGET_COUNT)
 }
 function deriveTeaching(r){
   const p=r.thong_tin_benh_nhan
@@ -5595,7 +6847,7 @@ function deriveTeaching(r){
     bien_luan:(r.ly_luan_lam_sang||[]).map(l=>`${l.tieu_de}: ${l.noi_dung}`),
     can_lam_sang:(r.hanh_dong_uu_tien||[]).map(a=>({viec:a.viec,ly_do:a.ly_do})),
     dieu_tri_ngoai:r.phau_thuat?`Ngoại khoa (${r.phau_thuat.ngay}): ${r.phau_thuat.phuong_phap}`:"",
-    dieu_tri_noi:(r.thuoc_cuoi_ky||[]).map(m=>`${m.nhom}: ${m.ten_thuoc}`),
+    dieu_tri_noi:(r.thuoc_cuoi_ky||[]).map(m=>`${m.ten_thuoc}${m.lieu?" — "+m.lieu:""}`),
     tien_luong:(r.ket_luan_giai_doan&&(r.ket_luan_giai_doan[3]||r.ket_luan_giai_doan[2]))||"",
     red_flags, decisions:buildDecisions(r), reasoning_score,
     muc_tieu:["Khai thác bệnh sử và khám lâm sàng theo khung bệnh án ngoại khoa Đại học Y Hà Nội (HMU).","Tóm tắt thành hội chứng, chẩn đoán sơ bộ và phân biệt.","Biện luận và đề nghị cận lâm sàng hợp lý.","Trình bày điều trị, tiên lượng và dự phòng biến chứng."],
@@ -5605,18 +6857,20 @@ function deriveTeaching(r){
       { q:"Vì sao nghĩ đến chẩn đoán đó? Dấu hiệu nào ủng hộ, dữ kiện nào chống lại?", a:(r.ly_luan_lam_sang&&r.ly_luan_lam_sang[0]?r.ly_luan_lam_sang[0].noi_dung:ddx.join(" ")) },
       { q:"Cần phân biệt với những bệnh nào?", a:ddx.join(" ") },
       { q:"Đề nghị cận lâm sàng nào và kỳ vọng kết quả gì?", a:(r.hanh_dong_uu_tien||[]).map(a=>a.viec).join("; ") },
-      { q:"Trình bày nguyên tắc điều trị và theo dõi hậu phẫu.", a:`${r.phau_thuat?("Ngoại khoa: "+r.phau_thuat.phuong_phap+". "):""}Nội khoa: ${(r.thuoc_cuoi_ky||[]).map(m=>m.nhom).join(", ")}.` },
+      { q:"Trình bày nguyên tắc điều trị và theo dõi hậu phẫu.", a:`${r.phau_thuat?("Ngoại khoa: "+r.phau_thuat.phuong_phap+". "):""}Nội khoa: ${(r.thuoc_cuoi_ky||[]).map(m=>m.ten_thuoc).join(", ")}.` },
     ],
   }
 }
 
-// ─── Đăng nhập / tạo tài khoản bằng Supabase Auth ─────────────────────────────
+// ─── Đăng nhập (demo) ─────────────────────────────────────────────────────────
 function LoginPage({ onLogin, onRegister }){
   const [screen, setScreen] = useState("login")
   const [fullName, setFullName] = useState("")
   const [department, setDepartment] = useState("")
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
+  const SAMPLE_EMAIL = "bacsi@medparcours.com"
+  const SAMPLE_PASSWORD = "un1svengers"
+  const [email, setEmail] = useState(SAMPLE_EMAIL)
+  const [password, setPassword] = useState(SAMPLE_PASSWORD)
   const [confirmPassword, setConfirmPassword] = useState("")
   const [showPw, setShowPw] = useState(false)
   const [err, setErr] = useState("")
@@ -5670,7 +6924,7 @@ function LoginPage({ onLogin, onRegister }){
   ]
   const STATS = [
     { v:"~90%", l:"thời gian được tiết kiệm" },
-    { v:"~30 giây", l:"cho mỗi báo cáo phân tích" },
+    { v:"~90 giây", l:"cho mỗi báo cáo phân tích" },
     { v:"3 chế độ", l:"Bác sĩ - Hội chẩn - Giảng dạy" },
     { v:"100%", l:"cảnh báo rủi ro lâm sàng" },
   ]
@@ -5707,7 +6961,7 @@ function LoginPage({ onLogin, onRegister }){
 
               <div className="login-field">
                 <label>Email bác sĩ</label>
-                <input type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="bacsi@benhvien.vn" autoComplete="email" autoFocus={screen==="login"}/>
+                <input type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="bacsi@medparcours.com" autoComplete="email" autoFocus={screen==="login"}/>
               </div>
               <div className="login-field">
                 <label>Mật khẩu</label>
@@ -5739,9 +6993,9 @@ function LoginPage({ onLogin, onRegister }){
               </button>
 
               <div className="login-hint">
+                <div className="login-hint-row"><span>Tài khoản mẫu</span><b>bacsi@medparcours.com</b></div>
+                <div className="login-hint-row"><span>Mật khẩu mẫu</span><b>un1svengers</b></div>
                 <div className="login-hint-row"><span>Xác thực</span><b>Supabase Auth</b></div>
-                <div className="login-hint-row"><span>Hồ sơ bác sĩ</span><b>public.bac_si</b></div>
-                <div className="login-hint-row"><span>Dữ liệu</span><b>RLS theo bệnh viện</b></div>
               </div>
             </div>
           </div>
@@ -5765,7 +7019,7 @@ function LoginPage({ onLogin, onRegister }){
 }
 
 // ─── Ghi âm tài liệu hỗ trợ (Web Speech API vi-VN, có xử lý quyền + lỗi) ───────
-function AudioRecorder({ value, onChange, onAttach }){
+function AudioRecorder({ value, onChange, onAttach, attachLabel="Đính kèm", attachHint="Ctrl/Cmd + Enter để đính kèm" }){
   const [supported] = useState(() => typeof window!=="undefined" && !!(window.SpeechRecognition||window.webkitSpeechRecognition))
   const [rec, setRec] = useState(false)
   const [err, setErr] = useState("")
@@ -5831,9 +7085,9 @@ function AudioRecorder({ value, onChange, onAttach }){
             ? <><span className="rec-dot pulse"/>Đang nghe... bấm để dừng</>
             : <><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>Ghi âm</>}
         </button>
-        <span className="sn-count">{chars>0 ? `${chars} ký tự` : "Ctrl/Cmd + Enter để đính kèm"}</span>
+        <span className="sn-count">{chars>0 ? `${chars} ký tự` : attachHint}</span>
         <span style={{flex:1}}/>
-        <button type="button" className="sn-send" onClick={attach} disabled={!(value||"").trim()}><Icon.Send d={13} color="#fff"/>Đính kèm</button>
+        <button type="button" className="sn-send" onClick={attach} disabled={!(value||"").trim()}><Icon.Send d={13} color="#fff"/>{attachLabel}</button>
       </div>
       {!supported && <div className="rec-note warn">Trình duyệt chưa hỗ trợ ghi âm giọng nói. Hãy dùng Chrome hoặc Edge mới nhất (trên trang HTTPS đã xuất bản).</div>}
       {err && <div className="rec-note err"><Icon.Alert d={13} color="#B91C1C"/>{err}</div>}
@@ -5940,15 +7194,151 @@ function SpecCard({ y }){
   )
 }
 function stanceClass(s){ return /có/i.test(s)?"yes":/không/i.test(s)?"no":"neu" }
+// ─── Ghi âm & Tóm tắt Hội chẩn (VNPT iSense + Claude fallback thật) ───────
+function ConsultationVoiceSummary() {
+  const [step, setStep] = useState("idle") // idle | recording | uploading | success | error
+  const [seconds, setSeconds] = useState(0)
+  const [result, setResult] = useState(null)
+  const [errMsg, setErrMsg] = useState("")
+  const [copied, setCopied] = useState(false)
+  const mediaRecorderRef = useRef(null)
+  const chunksRef = useRef([])
+  const timerRef = useRef(null)
+  const fileInputRef = useRef()
+
+  const runSummarize = async (file) => {
+    setStep("uploading")
+    try {
+      const res = await mpApi.summarizeConsultationAudio(file)
+      setResult(res)
+      setStep("success")
+    } catch (err) {
+      setErrMsg(err.message || "Không tóm tắt được bản ghi âm")
+      setStep("error")
+    }
+  }
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mime = pickBestAudioMime()
+      const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined)
+      chunksRef.current = []
+      mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data) }
+      mr.onstop = () => {
+        stream.getTracks().forEach(t => t.stop())
+        clearInterval(timerRef.current)
+        const blob = new Blob(chunksRef.current, { type: mime || "audio/webm" })
+        const ext = mime.includes("wav") ? "wav" : mime.includes("mp4") ? "mp4" : "webm"
+        runSummarize(new File([blob], `hoi_chan.${ext}`, { type: mime || "audio/webm" }))
+      }
+      mediaRecorderRef.current = mr
+      mr.start()
+      setSeconds(0)
+      timerRef.current = setInterval(() => setSeconds(s => s + 1), 1000)
+      setStep("recording")
+    } catch {
+      mpToast("Không truy cập được micro. Hãy cho phép quyền micro cho trang web, hoặc tải file ghi âm lên.", "err")
+    }
+  }
+  const stopRecording = () => { try { mediaRecorderRef.current?.stop() } catch {} }
+  useEffect(() => () => { try { mediaRecorderRef.current?.stop() } catch {}; clearInterval(timerRef.current) }, [])
+
+  const fmtTime = (s) => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`
+  const copySummary = () => {
+    if (!result) return
+    const s = result.source === "VNPT_AI"
+      ? result.summary_raw
+      : [
+          `Tóm tắt ca bệnh: ${result.summary.tom_tat_ca_benh || ""}`,
+          `Ý kiến hội chẩn:`, ...(result.summary.y_kien_hoi_chan||[]).map(x=>`- ${x}`),
+          `Hướng xử trí:`, ...(result.summary.huong_xu_tri||[]).map(x=>`- ${x}`),
+        ].join("\n")
+    navigator.clipboard?.writeText(s).then(() => { setCopied(true); mpToast("Đã sao chép kết luận"); setTimeout(()=>setCopied(false), 2000) })
+  }
+  const reset = () => { setStep("idle"); setResult(null); setErrMsg("") }
+
+  return (
+    <div className="cvs-card">
+      <div className="cvs-head">
+        <Icon.Mic d={16} color="#1D6FE8"/>
+        <span>Ghi âm &amp; Tóm tắt Hội chẩn (VNPT SmartVoice)</span>
+      </div>
+
+      {step === "idle" && (
+        <div className="cvs-idle-row">
+          <button className="btn-primary" onClick={startRecording}><Icon.Mic d={14} color="#fff"/>Ghi âm hội chẩn</button>
+          <input type="file" accept="audio/*" ref={fileInputRef} style={{display:"none"}}
+            onChange={e=>{ if (e.target.files[0]) runSummarize(e.target.files[0]) }}/>
+          <button className="btn-secondary-sm" onClick={()=>fileInputRef.current.click()}>Tải file ghi âm (.wav/.mp3)</button>
+        </div>
+      )}
+
+      {step === "recording" && (
+        <div className="cvs-recording">
+          <span className="cvs-rec-dot"/>Đang ghi âm... <b>{fmtTime(seconds)}</b>
+          <button className="cvs-stop-btn" onClick={stopRecording}>Dừng &amp; Tóm tắt</button>
+        </div>
+      )}
+
+      {step === "uploading" && (
+        <div className="sim-loading"><span className="chat-mic-spin" style={{width:20,height:20,borderWidth:3}}/>Đang bóc tách âm thanh &amp; tổng hợp ý kiến hội chẩn...</div>
+      )}
+
+      {step === "error" && (
+        <div className="sim-loading" style={{color:"#DC2626"}}>{errMsg}
+          <div className="cfm-actions"><button className="btn-primary" onClick={reset}>Thử lại</button></div>
+        </div>
+      )}
+
+      {step === "success" && result && (
+        <div className="cvs-result">
+          {result.source === "CLAUDE_FALLBACK" && <span className="cvs-fallback-badge">Chế độ dự phòng lâm sàng</span>}
+          <div className="cvs-summary-card">
+            <div className="cvs-summary-head">
+              <span><Icon.ShieldCheck d={14} color="#059669"/>Tóm tắt kết luận hội chẩn</span>
+              <button className="cvs-copy-btn" onClick={copySummary}>{copied ? "Đã sao chép" : "Sao chép vào bệnh án"}</button>
+            </div>
+            {result.source === "VNPT_AI" ? (
+              <p>{result.summary_raw}</p>
+            ) : (
+              <>
+                <p><b>Tóm tắt ca bệnh:</b> {result.summary.tom_tat_ca_benh}</p>
+                {result.summary.y_kien_hoi_chan?.length > 0 && (
+                  <><b>Ý kiến hội chẩn:</b><ul>{result.summary.y_kien_hoi_chan.map((x,i)=><li key={i}>{x}</li>)}</ul></>
+                )}
+                {result.summary.huong_xu_tri?.length > 0 && (
+                  <><b>Hướng xử trí:</b><ul>{result.summary.huong_xu_tri.map((x,i)=><li key={i}>{x}</li>)}</ul></>
+                )}
+              </>
+            )}
+          </div>
+          {result.transcript && (
+            <div className="cvs-transcript-card">
+              <div className="cvs-transcript-head">Biên bản giải băng chi tiết</div>
+              <div className="cvs-transcript-body">{result.transcript}</div>
+            </div>
+          )}
+          <button className="btn-secondary-sm" onClick={reset}>Ghi âm ca khác</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MDTView({ report }){
   const [mdt, setMdt] = useState(() => deriveMDT(report))
   const [shown, setShown] = useState(0)
   const [askI, setAskI] = useState(-1)
   useEffect(() => {
-    let alive = true
     setMdt(deriveMDT(report))
-    mpApi.mdt(report).then(d => { if(alive && d && Array.isArray(d.specialties)) setMdt(d) }).catch(()=>{})
-    return () => { alive = false }
+    // Trước đây gọi POST /mdt để lấy bản AI-narrate phong phú hơn, nhưng
+    // endpoint đó CHƯA TỪNG được ghép vào main.py hiện tại (có 1 module
+    // riêng medparcours_modes_backend.py định nghĩa /mdt/khoa, /mdt/y-kien,
+    // /mdt/ket-luan — khác hẳn đường dẫn /mdt phẳng này — chưa tích hợp).
+    // Gọi liên tục ra 404 vô ích trên mọi lượt xem, không ảnh hưởng chức
+    // năng (đã fallback đúng deriveMDT), nhưng gây nhiễu log server — bỏ
+    // hẳn cho tới khi tích hợp đúng bộ endpoint /mdt/* thật.
   }, [report])
   useEffect(() => {
     setShown(0); setAskI(-1)
@@ -5967,10 +7357,12 @@ function MDTView({ report }){
         </div>
       </div>
 
+      <ConsultationVoiceSummary/>
+
       <Step n="1" t="Tổng quan nguy cơ (MDT Risk Dashboard)"/>
       <div className="risk-dash">
         {mdt.risk.map((d,i)=>(
-          <div key={i} className="risk-row">
+          <div key={i} className="mdt-risk-row">
             <span className={`risk-dot ${d.tone}`}/>
             <span className="risk-ten">{d.ten}</span>
             <span className="risk-bar"><span className={`risk-fill ${d.tone}`} style={{width:d.pct+"%"}}/></span>
@@ -6067,10 +7459,11 @@ function TeachingView({ report }){
   const [t, setT] = useState(() => deriveTeaching(report))
   const [sub, setSub] = useState("guided")
   useEffect(() => {
-    let alive = true
     setT(deriveTeaching(report))
-    mpApi.teaching(report).then(d => { if(alive && d && Array.isArray(d.socratic)) setT(d) }).catch(()=>{})
-    return () => { alive = false }
+    // Tương tự MDTView: /teaching (phẳng) chưa từng được ghép vào main.py —
+    // bộ endpoint thật đã thiết kế là /teaching/bai-giang + /teaching/socratic
+    // trong medparcours_modes_backend.py, chưa tích hợp. Bỏ gọi cho tới khi
+    // tích hợp đúng, tránh 404 vô ích mỗi lần mở Giảng dạy.
   }, [report])
   const [revealAns, setRevealAns] = useState(false)
   const [open, setOpen] = useState(() => ({}))
@@ -6176,12 +7569,7 @@ function TeachingView({ report }){
 }
 
 // ─── Lịch sử bệnh án (overlay) ────────────────────────────────────────────────
-function HistoryPanel({ onClose, onOpen, onOpenRemote, onOpenEcgEntry, currentId }){
-  const [rows, setRows] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState("")
-  const [query, setQuery] = useState("")
-  const [openingId, setOpeningId] = useState(null)
+function HistoryPanel({ onBack, onOpen, onOpenDbPatient, onOpenRemote, onOpenEcgEntry, currentId }){
   const ecgList = loadEcgHistory()
   const demoEntries = Object.entries(ECG_DEMO_SAMPLES).map(([key, sample]) => ({
     id: "demo-" + key,
@@ -6191,57 +7579,439 @@ function HistoryPanel({ onClose, onOpen, onOpenRemote, onOpenEcgEntry, currentId
     nhip_deu: null,
     result: sample,
   }))
-  const refresh = useCallback(async () => {
-    setLoading(true); setError("")
+  // Lịch sử phân tích lưu trên Supabase Auth/RLS — sinh ra tự động sau mỗi lần /analyze thành công.
+  const [remoteRows, setRemoteRows] = useState([])
+  const [remoteLoading, setRemoteLoading] = useState(true)
+  const [remoteError, setRemoteError] = useState("")
+  const [openingRemoteId, setOpeningRemoteId] = useState(null)
+  const refreshSupabaseHistory = useCallback(async () => {
+    setRemoteLoading(true); setRemoteError("")
     try {
       const res = await callApi("/lich-su")
       const data = await res.json()
-      if(!res.ok) throw new Error(data?.detail || "Không tải được lịch sử")
-      setRows(Array.isArray(data) ? data : [])
-    } catch(e) { setError(e?.message || "Không tải được lịch sử từ Supabase") }
-    finally { setLoading(false) }
+      if(!res.ok) throw new Error(data?.detail || "Không tải được lịch sử Supabase")
+      setRemoteRows(Array.isArray(data) ? data : [])
+    } catch(e) {
+      setRemoteRows([])
+      setRemoteError(e?.message || "Không tải được lịch sử Supabase")
+    } finally {
+      setRemoteLoading(false)
+    }
   }, [])
-  useEffect(() => { refresh() }, [refresh])
+  useEffect(() => { refreshSupabaseHistory() }, [refreshSupabaseHistory])
   const openRemote = async (rec) => {
-    if(openingId) return
-    setOpeningId(rec.id)
+    if(!onOpenRemote || openingRemoteId) return
+    setOpeningRemoteId(rec.id)
     try { await onOpenRemote(rec) }
-    catch(e) { setError(e?.message || "Không mở được bản phân tích") }
-    finally { setOpeningId(null) }
+    catch(e) { setRemoteError(e?.message || "Không mở được bản phân tích Supabase") }
+    finally { setOpeningRemoteId(null) }
   }
-  const removeRemote = async (event, rec) => {
-    event.stopPropagation()
-    const ok = await mpConfirm({title:"Xóa bản phân tích?",message:"Bản phân tích sẽ bị xóa khỏi lịch sử Supabase. Hành động vẫn được ghi vào nhật ký truy cập.",okText:"Xóa",danger:true})
+  const removeRemote = async (e, rec) => {
+    e.stopPropagation()
+    const ok = await mpConfirm({title:"Xóa bản phân tích Supabase?",message:"Bản phân tích sẽ bị xóa khỏi lịch sử Supabase của tài khoản hiện tại.",okText:"Xóa",danger:true})
     if(!ok) return
     try {
       const res = await callApi(`/phan-tich/${rec.id}`, { method:"DELETE" })
       const data = await res.json()
       if(!res.ok || !data?.ok) throw new Error(data?.detail || "Không xóa được bản phân tích")
-      setRows(prev => prev.filter(x => x.id !== rec.id)); mpToast("Đã xóa bản phân tích")
-    } catch(e) { setError(e?.message || "Không xóa được bản phân tích") }
+      setRemoteRows(prev => prev.filter(x => x.id !== rec.id))
+      mpToast("Đã xóa bản phân tích Supabase")
+    } catch(e) {
+      setRemoteError(e?.message || "Không xóa được bản phân tích Supabase")
+    }
   }
-  const q = query.trim().toLowerCase()
-  const filteredRows = rows.filter(r => !q || [r.ma_hien_thi,r.chan_doan_chinh,r.giai_doan,r.gioi_tinh].some(v=>String(v||"").toLowerCase().includes(q)))
+  // Hồ sơ THẬT đã lưu (Turso) — tải riêng, không chặn hiện demo nếu lỗi
+  // mạng/chưa cấu hình Turso (đúng nguyên tắc không gây gián đoạn).
+  const [dbPatients, setDbPatients] = useState(null) // null = đang tải, [] = rỗng, [...] = có dữ liệu
+  const [dbError, setDbError] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    mpApi.listPatients()
+      .then(r => { if (!cancelled) setDbPatients(r.patients || []) })
+      .catch(err => { if (!cancelled) { setDbPatients([]); setDbError(err.message) } })
+    return () => { cancelled = true }
+  }, [])
+  // handleDelete gọi mpConfirm() — trước đây là bug đã sửa: HistoryPanel là
+  // overlay modal riêng với z-index CAO HƠN cả hộp thoại xác nhận (.cfm-ov),
+  // nên hộp xác nhận xóa bị che khuất phía sau, nhìn như "chìm mất". Chuyển
+  // HistoryPanel thành TRANG RIÊNG (không còn overlay/z-index) loại bỏ hẳn
+  // lớp bug này, không chỉ riêng chỗ xóa mà mọi hộp thoại mở từ trang này.
+  // Hoàn tác khi xóa: ẩn ngay khỏi danh sách (cảm giác tức thì) nhưng CHƯA
+  // gọi API xóa thật — đợi 5s, nếu bác sĩ bấm "Hoàn tác" trong lúc đó thì
+  // hủy hẳn, khôi phục lại danh sách, không đụng gì tới server.
+  const pendingDeleteTimers = useRef({})
+  const handleDelete = async (e, p) => {
+    e.stopPropagation()
+    const ok = await mpConfirm({
+      title: "Xóa hồ sơ đã lưu?",
+      message: `Xóa vĩnh viễn hồ sơ của ${p.ho_ten || "bệnh nhân này"} (BA ${p.so_benh_an})? Toàn bộ dữ liệu đã gộp qua ${p.so_lan_cap_nhat} lần cập nhật sẽ mất, không khôi phục được.`,
+      okText: "Xóa vĩnh viễn",
+      danger: true,
+    })
+    if (!ok) return
+    setDbPatients(list => list.filter(x => x.so_benh_an !== p.so_benh_an))
+    const timer = setTimeout(async () => {
+      delete pendingDeleteTimers.current[p.so_benh_an]
+      try {
+        await mpApi.deletePatient(p.so_benh_an)
+      } catch (err) {
+        // Xóa thật thất bại sau khi đã ẩn khỏi UI — khôi phục lại để không
+        // mất đồng bộ với server, báo rõ lỗi thay vì âm thầm mất hồ sơ.
+        setDbPatients(list => [...list, p])
+        mpToast(err.message || "Không xóa được hồ sơ — đã khôi phục lại", "err")
+      }
+    }, 5000)
+    pendingDeleteTimers.current[p.so_benh_an] = timer
+    mpToast(`Đã xóa hồ sơ ${p.ho_ten || ""}`, "ok", {
+      duration: 5200,
+      actionLabel: "Hoàn tác",
+      onAction: () => {
+        clearTimeout(pendingDeleteTimers.current[p.so_benh_an])
+        delete pendingDeleteTimers.current[p.so_benh_an]
+        setDbPatients(list => [...list, p])
+      },
+    })
+  }
+  // Đổi tên hiển thị (Part 3) — editingId = so_benh_an đang sửa (null = không
+  // sửa gì). editValue giữ nội dung ô input trong lúc gõ, tách khỏi state
+  // dbPatients để không re-render toàn danh sách mỗi phím gõ.
+  const [editingId, setEditingId] = useState(null)
+  const [editValue, setEditValue] = useState("")
+  const [savingRename, setSavingRename] = useState(false)
+  const startEdit = (e, p) => {
+    e.stopPropagation()
+    setEditingId(p.so_benh_an)
+    setEditValue(p.ho_ten || "")
+  }
+  const cancelEdit = (e) => {
+    e?.stopPropagation()
+    setEditingId(null)
+    setEditValue("")
+  }
+  const saveEdit = async (e, p) => {
+    e.stopPropagation()
+    const tenMoi = editValue.trim()
+    setSavingRename(true)
+    try {
+      const res = await mpApi.renamePatient(p.so_benh_an, tenMoi)
+      setDbPatients(list => list.map(x => x.so_benh_an === p.so_benh_an
+        ? { ...x, ho_ten: res.ten_hien_thi || x.ho_ten_goc || x.ho_ten, ten_hien_thi: res.ten_hien_thi }
+        : x))
+      mpToast(tenMoi ? "Đã đổi tên hồ sơ" : "Đã bỏ tên tùy chỉnh")
+      setEditingId(null)
+      setEditValue("")
+    } catch (err) {
+      mpToast(err.message || "Không đổi được tên hồ sơ", "err")
+    } finally {
+      setSavingRename(false)
+    }
+  }
+  // ─── Toolbar quản lý (Phần 2): chọn nhiều / xóa hàng loạt / lọc / sắp xếp ──
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
+  const [filterOpt, setFilterOpt] = useState("all")
+  const [sortOpt, setSortOpt] = useState("newest")
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [diseaseFilterOpt, setDiseaseFilterOpt] = useState("all")
+  const [searchQuery, setSearchQuery] = useState("")
+  // Ghim ưu tiên: lưu localStorage (không cần đổi backend) — bác sĩ ghim các
+  // ca đang theo dõi sát để luôn nổi lên đầu, không phụ thuộc sắp xếp.
+  const [pinnedIds, setPinnedIds] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("mp_pinned_patients") || "[]")) }
+    catch { return new Set() }
+  })
+  const togglePin = (soBenhAn, e) => {
+    e.stopPropagation()
+    setPinnedIds(prev => {
+      const next = new Set(prev)
+      next.has(soBenhAn) ? next.delete(soBenhAn) : next.add(soBenhAn)
+      try { localStorage.setItem("mp_pinned_patients", JSON.stringify([...next])) } catch {}
+      return next
+    })
+  }
+
+  // Danh sách nhóm bệnh có THẬT trong dữ liệu hiện tại (không hard-code cứng
+  // danh sách cố định) — nếu sau này cde/disease_classifier.py thêm profile
+  // mới, dropdown tự cập nhật theo, không cần sửa gì ở đây.
+  const diseaseGroups = useMemo(() => {
+    if (!dbPatients) return []
+    const set = new Set()
+    dbPatients.forEach(p => (p.nhom_benh || "").split(",").map(s => s.trim()).filter(Boolean).forEach(g => set.add(g)))
+    return [...set].sort((a, b) => a.localeCompare(b, "vi"))
+  }, [dbPatients])
+
+  const visiblePatients = useMemo(() => {
+    if (!dbPatients) return []
+    const now = Date.now()
+    let list = dbPatients.filter(p => {
+      if (searchQuery.trim()) {
+        const q = searchQuery.trim().toLowerCase()
+        const hay = `${p.ho_ten || ""} ${p.so_benh_an || ""}`.toLowerCase()
+        if (!hay.includes(q)) return false
+      }
+      if (diseaseFilterOpt !== "all") {
+        const groups = (p.nhom_benh || "").split(",").map(s => s.trim())
+        if (!groups.includes(diseaseFilterOpt)) return false
+      }
+      if (filterOpt === "all") return true
+      const t = new Date(p.cap_nhat_luc).getTime()
+      if (filterOpt === "7d") return now - t <= 7 * 86400000
+      if (filterOpt === "30d") return now - t <= 30 * 86400000
+      if (filterOpt === "updated") return p.so_lan_cap_nhat > 1
+      return true
+    })
+    list = [...list].sort((a, b) => {
+      const pinDiff = (pinnedIds.has(b.so_benh_an) ? 1 : 0) - (pinnedIds.has(a.so_benh_an) ? 1 : 0)
+      if (pinDiff !== 0) return pinDiff
+      if (sortOpt === "newest") return new Date(b.cap_nhat_luc) - new Date(a.cap_nhat_luc)
+      if (sortOpt === "oldest") return new Date(a.cap_nhat_luc) - new Date(b.cap_nhat_luc)
+      if (sortOpt === "name") return (a.ho_ten || "").localeCompare(b.ho_ten || "", "vi")
+      return 0
+    })
+    return list
+  }, [dbPatients, filterOpt, sortOpt, diseaseFilterOpt, searchQuery, pinnedIds])
+
+  const allVisibleSelected = visiblePatients.length > 0 && visiblePatients.every(p => selectedIds.has(p.so_benh_an))
+  const toggleSelectAll = () => {
+    setSelectedIds(prev => allVisibleSelected ? new Set() : new Set(visiblePatients.map(p => p.so_benh_an)))
+  }
+  const toggleSelectOne = (soBenhAn) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(soBenhAn) ? next.delete(soBenhAn) : next.add(soBenhAn)
+      return next
+    })
+  }
+  const handleBulkDelete = async () => {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    const ok = await mpConfirm({
+      title: `Xóa vĩnh viễn ${ids.length} hồ sơ đã chọn?`,
+      message: `Toàn bộ dữ liệu của ${ids.length} hồ sơ sẽ mất, không khôi phục được. Bạn chắc chắn muốn xóa?`,
+      okText: "Xóa vĩnh viễn",
+      danger: true,
+    })
+    if (!ok) return
+    setBulkDeleting(true)
+    let failed = 0
+    for (const id of ids) {
+      try { await mpApi.deletePatient(id) } catch { failed++ }
+    }
+    // Tải lại danh sách thật từ server thay vì tự suy state cục bộ — chắc
+    // chắn khớp đúng trạng thái thật kể cả khi vài id xóa lỗi giữa chừng.
+    try {
+      const fresh = await mpApi.listPatients()
+      setDbPatients(fresh.patients || [])
+    } catch {}
+    setSelectedIds(new Set())
+    setBulkDeleting(false)
+    mpToast(failed > 0 ? `Đã xóa ${ids.length - failed}/${ids.length} hồ sơ (${failed} lỗi)` : `Đã xóa ${ids.length} hồ sơ`, failed > 0 ? "err" : "ok")
+  }
   return (
-    <div className="hist-overlay" onClick={onClose}>
-      <div className="hist-modal" onClick={e=>e.stopPropagation()}>
-        <div className="hist-head"><span className="hist-title"><Icon.FileText d={17} color="#1D6FE8"/>Lịch sử bệnh án</span><button className="fp-close" onClick={onClose} title="Đóng"><Icon.Close d={15} color="#475569"/></button></div>
-        <div className="hist-search-wrap"><input className="hist-search" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm theo mã hồ sơ, chẩn đoán hoặc giai đoạn..."/><button className="hist-refresh" onClick={refresh} disabled={loading}>Làm mới</button></div>
-        <div className="hist-list">
-          <div className="hist-section-lbl"><Icon.FileText d={13} color="#1D6FE8"/>Lịch sử phân tích trên Supabase</div>
-          {loading && <div className="hist-state"><span className="loading-spin small"/>Đang tải lịch sử...</div>}
-          {error && <div className="hist-state hist-state-error">{error}</div>}
-          {!loading && !error && filteredRows.length===0 && <div className="hist-state">Chưa có bản phân tích nào phù hợp.</div>}
-          {filteredRows.map(rec=>(
-            <div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>openRemote(rec)}>
-              <div className="hist-avatar">{(rec.ma_hien_thi||"HS").charAt(0)}</div>
-              <div className="hist-info"><div className="hist-name">Hồ sơ {rec.ma_hien_thi || String(rec.id).slice(0,8)} <span className="hist-meta">{rec.tuoi ? `${rec.tuoi} tuổi` : "Tuổi chưa rõ"}{rec.gioi_tinh ? `, ${rec.gioi_tinh}` : ""}</span></div><div className="hist-dx">{expandAbbr(rec.chan_doan_chinh || "Chưa có chẩn đoán chính")}</div><div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>{fmtDateTime(rec.ngay_phan_tich)} · {rec.giai_doan || "Chưa xác định giai đoạn"} · {rec.so_canh_bao || 0} cảnh báo</div></div>
-              <div className="hist-actions">{rec.co_the_xoa && <button className="hist-delete" onClick={e=>removeRemote(e,rec)} title="Xóa bản phân tích">×</button>}<span className="hist-open">{openingId===rec.id ? "Đang mở..." : "Mở ▶"}</span></div>
+    <div className="hist-page">
+      <header className="report-nav">
+        <div className="report-nav-inner">
+          <div className="nav-row1">
+            <div className="nav-left">
+              <button className="ecg-back" onClick={onBack} title="Quay lại"><Icon.Back d={16} color="#1D6FE8"/></button>
+              <div className="logo">
+                <BrandMark size={30} radius={9}/>
+                <span className="logo-text" style={{fontSize:14}}>Med<em>Parcours</em></span>
+                <span className="logo-sub" style={{fontSize:12}}>AI</span>
+              </div>
             </div>
-          ))}
-          <div className="hist-section-lbl"><Icon.Layers d={13} color="#0E9488"/>Hồ sơ mẫu</div>
-          {HISTORY.map(rec=>(<div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>onOpen(rec)}><div className="hist-avatar">{rec.ho_ten.charAt(0)}</div><div className="hist-info"><div className="hist-name">{rec.ho_ten} <span className="hist-demo-tag">Mẫu demo</span> <span className="hist-meta">{rec.tuoi} tuổi, {rec.gioi_tinh}</span></div><div className="hist-dx">{expandAbbr(rec.chan_doan)}</div><div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Dữ liệu minh họa, không lưu Supabase</div></div><span className="hist-open">Mở ▶</span></div>))}
-          {(ecgList.length > 0 || demoEntries.length > 0) && (<><div className="hist-section-lbl"><Icon.Pulse d={13} color="#DC2626"/>Lịch sử quét điện tâm đồ</div>{ecgList.map(e=>(<div key={e.id} className="hist-item hist-item-ecg" onClick={()=>onOpenEcgEntry(e)}><div className="hist-avatar hist-avatar-ecg"><Icon.Pulse d={15} color="#DC2626"/></div><div className="hist-info"><div className="hist-name">{e.ten_file}</div><div className="hist-dx">{e.bpm != null ? `${e.bpm} lần/phút` : "Không xác định tần số"}{e.nhip_deu === false ? " · nghi ngờ nhịp không đều" : ""}</div><div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>{fmtDateTime(e.thoi_diem)}</div></div><span className="hist-open">Mở ▶</span></div>))}{demoEntries.map(e=>(<div key={e.id} className="hist-item hist-item-ecg hist-item-ecg-demo" onClick={()=>onOpenEcgEntry(e)}><div className="hist-avatar hist-avatar-ecg"><Icon.Pulse d={15} color="#DC2626"/></div><div className="hist-info"><div className="hist-name">{e.ten_file} <span className="hist-demo-tag">Mẫu demo</span></div><div className="hist-dx">{e.bpm != null ? `${e.bpm} lần/phút` : "Không xác định tần số"}</div><div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Ảnh ECG thật dùng để minh họa tính năng</div></div><span className="hist-open">Mở ▶</span></div>))}</>)}
+            <div className="nav-right"><ThemeToggle/></div>
+          </div>
+        </div>
+      </header>
+      <div className="hist-page-body">
+        <div className="hist-page-inner">
+          <span className="hist-title"><Icon.FileText d={17} color="#1D6FE8"/>Lịch sử bệnh án</span>
+          <div className="hist-list">
+            {(remoteLoading || remoteError || remoteRows.length > 0) && (
+              <>
+                <div className="hist-section-lbl"><Icon.FileText d={13} color="#1D6FE8"/>Lịch sử phân tích trên Supabase</div>
+                {remoteLoading && <div className="hist-state"><span className="loading-spin small"/>Đang tải lịch sử Supabase...</div>}
+                {remoteError && <div className="hist-state hist-state-error">{remoteError}</div>}
+                {!remoteLoading && !remoteError && remoteRows.length === 0 && <div className="hist-state">Chưa có bản phân tích Supabase nào.</div>}
+                {remoteRows.map(rec => (
+                  <div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>openRemote(rec)}>
+                    <div className="hist-avatar">{(rec.ma_hien_thi||"HS").charAt(0)}</div>
+                    <div className="hist-info">
+                      <div className="hist-name">Hồ sơ {rec.ma_hien_thi || String(rec.id).slice(0,8)} <span className="hist-meta">{rec.tuoi ? `${rec.tuoi} tuổi` : "Tuổi chưa rõ"}{rec.gioi_tinh ? `, ${rec.gioi_tinh}` : ""}</span></div>
+                      <div className="hist-dx">{expandAbbr(rec.chan_doan_chinh || "Chưa có chẩn đoán chính")}</div>
+                      <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>{fmtDateTime(rec.ngay_phan_tich)} · {rec.giai_doan || "Chưa xác định giai đoạn"} · {rec.so_canh_bao || 0} cảnh báo</div>
+                    </div>
+                    <div className="hist-actions">
+                      {rec.co_the_xoa && <button className="hist-delete" onClick={e=>removeRemote(e, rec)} title="Xóa bản phân tích">×</button>}
+                      <span className="hist-open">{openingRemoteId===rec.id ? "Đang mở..." : "Mở ▶"}</span>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+            <div className="hist-section-lbl"><Icon.FileText d={13} color="#1D6FE8"/>Báo cáo - Demo</div>
+            {HISTORY.map(rec=>(
+              <div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>onOpen(rec)}>
+                <div className="hist-avatar">{rec.ho_ten.charAt(0)}</div>
+                <div className="hist-info">
+                  <div className="hist-name">{rec.ho_ten} <span className="hist-meta">{rec.tuoi} tuổi, {rec.gioi_tinh} · BA {rec.so_benh_an}</span></div>
+                  <div className="hist-dx">{expandAbbr(rec.chan_doan)}</div>
+                  <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Vào viện {rec.ngay_vao_vien} · {rec.bac_si}</div>
+                </div>
+                <span className="hist-open">Mở ▶</span>
+              </div>
+            ))}
+            {dbPatients && dbPatients.length > 0 && (
+              <>
+                <div className="hist-section-lbl"><Icon.FileText d={13} color="#059669"/>Hồ sơ đã lưu</div>
+                <div className="rpt-search hist-search">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#7A96C8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                  <input value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} placeholder="Tìm theo tên bệnh nhân hoặc số bệnh án..."/>
+                  {searchQuery && <button className="rpt-search-x" onClick={()=>setSearchQuery("")} title="Xóa"><Icon.Close d={11} color="#7A96C8"/></button>}
+                </div>
+                <div className="hist-toolbar">
+                  <label className="hist-select-all">
+                    <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll}/>
+                    Chọn tất cả
+                  </label>
+                  {selectedIds.size > 0 && (
+                    <button className="hist-bulk-del-btn" onClick={handleBulkDelete} disabled={bulkDeleting}>
+                      {bulkDeleting ? <span className="hist-del-spin"/> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>}
+                      Xóa {selectedIds.size} mục đã chọn
+                    </button>
+                  )}
+                  <div className="hist-toolbar-spacer"/>
+                  {diseaseGroups.length > 0 && (
+                    <select className="hist-dd" value={diseaseFilterOpt} onChange={e=>setDiseaseFilterOpt(e.target.value)} title="Lọc theo loại bệnh">
+                      <option value="all">Mọi loại bệnh</option>
+                      {diseaseGroups.map(g => <option key={g} value={g}>{g}</option>)}
+                    </select>
+                  )}
+                  <select className="hist-dd" value={filterOpt} onChange={e=>setFilterOpt(e.target.value)} title="Lọc">
+                    <option value="all">Tất cả</option>
+                    <option value="7d">7 ngày qua</option>
+                    <option value="30d">30 ngày qua</option>
+                    <option value="updated">Đã cập nhật ≥2 lần</option>
+                  </select>
+                  <select className="hist-dd" value={sortOpt} onChange={e=>setSortOpt(e.target.value)} title="Sắp xếp">
+                    <option value="newest">Mới nhất</option>
+                    <option value="oldest">Cũ nhất</option>
+                    <option value="name">Tên A-Z</option>
+                  </select>
+                </div>
+                {visiblePatients.length === 0 && (
+                  <div className="hist-empty-state">
+                    <Icon.FileText d={28} color="#CBD5E1"/>
+                    <div>Không có hồ sơ nào khớp bộ lọc hiện tại.</div>
+                  </div>
+                )}
+                {visiblePatients.map(p=>{
+                  const isEditing = editingId === p.so_benh_an
+                  return (
+                  <div key={p.so_benh_an} className={`hist-item${currentId===("db-"+p.so_benh_an)?" cur":""}`} onClick={isEditing ? undefined : ()=>onOpenDbPatient(p.so_benh_an)}>
+                    {!isEditing && (
+                      <input type="checkbox" className="hist-row-check" checked={selectedIds.has(p.so_benh_an)}
+                        onClick={e=>e.stopPropagation()} onChange={()=>toggleSelectOne(p.so_benh_an)} aria-label="Chọn hồ sơ"/>
+                    )}
+                    <div className="hist-avatar" style={{background:"linear-gradient(135deg,#D1FAE5,#A7F3D0)",color:"#059669"}}>{(p.ho_ten||"?").charAt(0)}</div>
+                    <div className="hist-info">
+                      {isEditing ? (
+                        <div className="hist-rename-row" onClick={e=>e.stopPropagation()}>
+                          <input
+                            className="hist-rename-input"
+                            value={editValue}
+                            autoFocus
+                            placeholder="Tên hiển thị (để trống = dùng tên gốc)"
+                            onChange={e=>setEditValue(e.target.value)}
+                            onKeyDown={e=>{
+                              if (e.key === "Enter") saveEdit(e, p)
+                              if (e.key === "Escape") cancelEdit(e)
+                            }}
+                          />
+                          <button className="hist-rename-save" onClick={(e)=>saveEdit(e, p)} disabled={savingRename} title="Lưu tên" aria-label="Lưu tên">
+                            {savingRename ? <span className="hist-del-spin"/> : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
+                          </button>
+                          <button className="hist-rename-cancel" onClick={cancelEdit} disabled={savingRename} title="Hủy" aria-label="Hủy">
+                            <Icon.Close d={13}/>
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="hist-name">
+                          {pinnedIds.has(p.so_benh_an) && <Icon.Pin d={12} color="#D97706" style={{marginRight:4,verticalAlign:"-1px"}}/>}
+                          {p.ho_ten || "(chưa rõ tên)"} <span className="hist-meta">BA {p.so_benh_an}</span>
+                        </div>
+                      )}
+                      <div className="hist-dx">Đã cập nhật {p.so_lan_cap_nhat} lần</div>
+                      <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Cập nhật gần nhất: {fmtDateTime(p.cap_nhat_luc)}</div>
+                    </div>
+                    {!isEditing && <span className="hist-open">Mở ▶</span>}
+                    {!isEditing && (
+                      <div className="hist-actions">
+                        <IconTip text={pinnedIds.has(p.so_benh_an) ? "Bỏ ghim" : "Ghim ưu tiên lên đầu"} position="top">
+                          <button className={`hist-pin-btn${pinnedIds.has(p.so_benh_an) ? " pinned" : ""}`} onClick={(e)=>togglePin(p.so_benh_an, e)} aria-label="Ghim ưu tiên">
+                            <Icon.Pin d={14}/>
+                          </button>
+                        </IconTip>
+                        <IconTip text="Đổi tên hồ sơ" position="top">
+                          <button className="hist-edit-btn" onClick={(e)=>startEdit(e, p)} aria-label="Đổi tên hồ sơ">
+                            <Icon.Pencil d={14}/>
+                          </button>
+                        </IconTip>
+                        <IconTip text="Xóa hồ sơ" position="top">
+                          <button className="hist-del-btn" onClick={(e)=>handleDelete(e, p)} aria-label="Xóa hồ sơ">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                          </button>
+                        </IconTip>
+                      </div>
+                    )}
+                  </div>
+                )})}
+              </>
+            )}
+            {dbPatients === null && (
+              <>
+                <SkeletonHistCard/>
+                <SkeletonHistCard/>
+                <SkeletonHistCard/>
+              </>
+            )}
+            {dbPatients !== null && !dbError && dbPatients.length === 0 && (
+              <div className="hist-empty-state">
+                <Icon.FileText d={30} color="#CBD5E1"/>
+                <div>Chưa có hồ sơ nào được lưu.<br/>Phân tích 1 hồ sơ rồi bấm "Lưu" để bắt đầu theo dõi lâu dài.</div>
+              </div>
+            )}
+            {dbError && (
+              <div className="hist-loading-hint">Chưa kết nối được hệ thống lưu trữ lâu dài — chỉ hiện được hồ sơ mẫu.</div>
+            )}
+            {(ecgList.length > 0 || demoEntries.length > 0) && (
+              <>
+                <div className="hist-section-lbl"><Icon.Pulse d={13} color="#DC2626"/>Lịch sử quét điện tâm đồ</div>
+                {ecgList.map(e=>(
+                  <div key={e.id} className="hist-item hist-item-ecg" onClick={()=>onOpenEcgEntry(e)}>
+                    <div className="hist-avatar hist-avatar-ecg"><Icon.Pulse d={15} color="#DC2626"/></div>
+                    <div className="hist-info">
+                      <div className="hist-name">{e.ten_file}</div>
+                      <div className="hist-dx">{e.bpm != null ? `${e.bpm} lần/phút` : "Không xác định tần số"}{e.nhip_deu === false ? " · nghi ngờ nhịp không đều" : ""}</div>
+                      <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>{fmtDateTime(e.thoi_diem)}</div>
+                    </div>
+                    <span className="hist-open">Mở ▶</span>
+                  </div>
+                ))}
+                {demoEntries.map(e=>(
+                  <div key={e.id} className="hist-item hist-item-ecg hist-item-ecg-demo" onClick={()=>onOpenEcgEntry(e)}>
+                    <div className="hist-avatar hist-avatar-ecg"><Icon.Pulse d={15} color="#DC2626"/></div>
+                    <div className="hist-info">
+                      <div className="hist-name">{e.ten_file} <span className="hist-demo-tag">Mẫu demo</span></div>
+                      <div className="hist-dx">{e.bpm != null ? `${e.bpm} lần/phút` : "Không xác định tần số"}</div>
+                      <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Ảnh ECG thật dùng để minh họa tính năng</div>
+                    </div>
+                    <span className="hist-open">Mở ▶</span>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -6258,7 +8028,7 @@ function HistoryPanel({ onClose, onOpen, onOpenRemote, onOpenEcgEntry, currentId
 // AN TOÀN: chỉ trực quan hóa hỗ trợ, KHÔNG tự chẩn đoán. Không hiện sẵn dữ
 // liệu demo/ảnh tổng hợp giả làm ví dụ — tránh gây hiểu lầm là dữ liệu thật
 // (đã xác nhận với Đăng). Trạng thái mặc định là "trống, mời upload".
-const ECG_DEMO_SAMPLES = {"ecg1": {"ten": "Mẫu 1: 81 tuổi, Sinus rhythm, 82 bpm", "doc_diem_lam_sang": {"thong_so_ky_thuat": {"toc_do_ghi": "25 mm/s (chuẩn, không ghi rõ trên ảnh gốc — áp dụng mặc định lâm sàng phổ biến nhất)", "bien_do_chuan": "Không xác định — ảnh chỉ có 1 dải nhịp (rhythm strip) duy nhất, không thấy thước chuẩn 10mm/1mV trên ảnh gốc", "so_chuyen_dao": "1 chuyển đạo (dải nhịp đơn, không phải bản ghi 12 chuyển đạo đầy đủ)"}, "nhip": {"loai": "Nhịp xoang (Sinus rhythm)", "ghi_chu": "Sóng P đều, đứng trước mỗi QRS, hình dạng nhất quán qua các nhịp — phù hợp nhịp xoang. Theo số máy đo ghi trên ảnh gốc."}, "tan_so": {"gia_tri": 82, "don_vi": "lần/phút", "phan_loai": "Bình thường (60-100 lần/phút)", "nguon": "Số máy đo ghi trên ảnh gốc (Vent. rate: 82 bpm) — đáng tin hơn số ước tính tự động của thuật toán hiện tại, xem mục Hạn chế kỹ thuật"}, "truc": {"gia_tri": "Chưa xác định", "ly_do": "Cần tối thiểu 2 chuyển đạo ở 2 mặt phẳng khác nhau (ví dụ DI và aVF) để tính trục điện tim. Ảnh mẫu chỉ có 1 dải nhịp đơn, không đủ dữ liệu — đây là hạn chế của ẢNH MẪU, không phải hệ thống chưa làm tính năng này."}, "nghi_ngo": {"tinh_trang": "Không có dấu hiệu bất thường rõ trên dải nhịp quan sát được", "ly_giai": "Tần số 82 lần/phút trong giới hạn bình thường, nhịp đều, sóng P-QRS-T theo trình tự bình thường trên dải nhịp 1 chuyển đạo. KHÔNG thể loại trừ bất thường ở các chuyển đạo khác hoặc đoạn ST/sóng T chi tiết vì ảnh không có bản ghi 12 chuyển đạo đầy đủ.", "nhan": "Hỗ trợ quan sát — cần bác sĩ đọc lại trên bản ghi đầy đủ, không thay thế chẩn đoán điện tâm đồ chuẩn"}}, "image_base64": "data:image/jpeg;base64,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", "signal": [0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9508, 0.9842, 0.9623, 0.9003, 0.8139, 0.7186, 0.6304, 0.5652, 0.5393, 0.5688, 0.5673, 0.5644, 0.5576, 0.5454, 0.5248, 0.501, 0.476, 0.4562, 0.4474, 0.4326, 0.4438, 0.483, 0.5471, 0.679, 0.7492, 0.7807, 0.7834, 0.7914, 0.8308, 0.7342, 0.7089, 0.7614, 0.7559, 0.7652, 0.7133, 0.6579, 0.5888, 0.38, 0.2526, 0.1834, 0.1994, 0.3387, 0.5351, 0.6431, 0.7133, 0.7812, 0.7969, 0.7056, 0.6909, 0.747, 0.818, 0.6624, 0.5249, 0.4536, 0.3707, 0.2292, 0.1929, 0.1763, 0.147, 0.0601, 0.0405, 0.0501, 0.0689, 0.0804, 0.0944, 0.1078, 0.1259, 0.1424, 0.1514, 0.1586, 0.1586, 0.1515, 0.1356, 0.031, 0.1168, 0.1924, 0.2864, 0.4391, 0.6311, 0.794, 0.8578, 0.7609, 0.8161, 0.7828, 0.8022, 0.8055, 0.8132, 0.8542, 0.8251, 0.7776, 0.7939, 0.844, 0.9424, 0.9551, 0.8914, 0.8751, 0.832, 0.8283, 0.846, 0.885, 0.952, 0.9897, 0.9417, 0.9077, 0.8729, 0.8853, 0.8455, 0.8262, 0.818, 0.8152, 0.8238, 0.8398, 0.8688, 0.897, 0.8932, 0.9054, 0.8454, 0.8206, 0.7271, 0.5765, 0.4215, 0.2872, 0.2418, 0.1923, 0.16, 0.2551, 0.3445, 0.4476, 0.5669, 0.6723, 0.7046, 0.6671, 0.6231, 0.6144, 0.6428, 0.6986, 0.7523, 0.7761, 0.7394, 0.6877, 0.6159, 0.5344, 0.4503, 0.3915, 0.3791, 0.3413, 0.2833, 0.2201, 0.1563, 0.1066, 0.0697, 0.0656, 0.1087, 0.1279, 0.1433, 0.1476, 0.1397, 0.1096, 0.0363, 0.0893, 0.2355, 0.4664, 0.6743, 0.7863, 0.8778, 0.8802, 0.7908, 0.7298, 0.6665, 0.6313, 0.5721, 0.5047, 0.5263, 0.5747, 0.6734, 0.7504, 0.803, 0.7586, 0.7536, 0.7584, 0.7533, 0.7348, 0.7542, 0.7673, 0.7525, 0.6915, 0.6946, 0.6997, 0.6924, 0.6561, 0.6061, 0.5402, 0.4842, 0.462, 0.453, 0.4864, 0.5441, 0.6072, 0.6531, 0.6862, 0.6509, 0.593, 0.6373, 0.611, 0.548, 0.4685, 0.406, 0.3373, 0.1939, 0.1752, 0.3126, 0.3803, 0.4542, 0.4625, 0.5422, 0.6067, 0.6172, 0.7092, 0.8132, 0.9027, 0.9485, 0.9584, 0.9878, 0.93, 0.7554, 0.5476, 0.3137, 0.1632, 0.0711, 0.0771, 0.0907, 0.1214, 0.123, 0.1114, 0.0936, 0.1236, 0.1302, 0.1329, 0.1339, 0.1525, 0.1499, 0.1351, 0.0463, 0.1073, 0.2494, 0.3378, 0.4851, 0.6477, 0.7855, 0.9075, 0.8602, 0.8697, 0.8106, 0.645, 0.5445, 0.4828, 0.4882, 0.5677, 0.5864, 0.5684, 0.5433, 0.5351, 0.5764, 0.697, 0.7638, 0.7881, 0.7805, 0.7563, 0.7934, 0.7554, 0.7298, 0.7785, 0.7956, 0.7961, 0.7818, 0.7684, 0.6863, 0.5222, 0.3921, 0.3665, 0.4466, 0.6035, 0.7553, 0.8487, 0.8292, 0.8037, 0.7441, 0.6157, 0.472, 0.3891, 0.3163, 0.2793, 0.2194, 0.1959, 0.29, 0.4076, 0.5557, 0.724, 0.8621, 0.9411, 0.8915, 0.7862, 0.7798, 0.7942, 0.7988, 0.7757, 0.6771, 0.5296, 0.3422, 0.1629, 0.0783, 0.0436, 0.0475, 0.067, 0.0687, 0.0696, 0.071, 0.0914, 0.1025, 0.1188, 0.1358, 0.1505, 0.1643, 0.179, 0.1812, 0.1718, 0.1392, 0.0857, 0.0854, 0.1318, 0.2129, 0.3258, 0.4368, 0.5334, 0.588, 0.5962, 0.6246, 0.6412, 0.6644, 0.6862, 0.7018, 0.7098, 0.6853, 0.6586, 0.6691, 0.7316, 0.8111, 0.7788, 0.773, 0.7747, 0.7636, 0.7773, 0.8442, 0.9452, 1.0, 0.964, 0.93, 0.8692, 0.8005, 0.7408, 0.7052, 0.7142, 0.751, 0.8026, 0.7918, 0.7358, 0.6497, 0.5441, 0.4521, 0.4327, 0.42, 0.3835, 0.3386, 0.2954, 0.2629, 0.1989, 0.1657, 0.267, 0.3085, 0.3192, 0.3533, 0.4658, 0.5981, 0.6785, 0.7421, 0.8318, 0.8193, 0.8079, 0.8185, 0.8627, 0.873, 0.768, 0.6249, 0.5476, 0.5446, 0.6276, 0.8433, 0.9264, 0.8699, 0.6529, 0.4, 0.1949, 0.0504, 0.0052, 0.0945, 0.1019, 0.1202, 0.1274, 0.0844, 0.0612, 0.1821, 0.3073, 0.4432, 0.6308, 0.8002, 0.7979, 0.7519, 0.7282, 0.7788, 0.7519, 0.6855, 0.6567, 0.6177, 0.5575, 0.6744, 0.7296, 0.75, 0.7877, 0.7704, 0.6493, 0.6256, 0.6473, 0.7118, 0.6751, 0.6109, 0.6482, 0.6993, 0.7158, 0.8172, 0.8872, 0.9397, 0.9592, 0.9322, 0.9421, 0.9493, 0.9482, 0.9104, 0.8651, 0.7813, 0.725, 0.7064, 0.7262, 0.7944, 0.8818, 0.9275, 0.8414, 0.662, 0.4827, 0.3421, 0.237, 0.1592, 0.1959, 0.2728, 0.3351, 0.4374, 0.5898, 0.7451, 0.8618, 0.8946, 0.9073, 0.88, 0.8403, 0.8111, 0.822, 0.9017, 0.9309, 0.8518, 0.6717, 0.4577, 0.245, 0.0768, 0.0, 0.0489, 0.0603, 0.0748, 0.0891, 0.1048, 0.1241, 0.1437, 0.163, 0.176, 0.1764, 0.1858, 0.1717, 0.1596, 0.1445, 0.1264, 0.1027, 0.0963, 0.0954, 0.0939, 0.0873, 0.0792, 0.0888, 0.0919, 0.0869, 0.0906, 0.0936, 0.093, 0.0908, 0.0863, 0.0796, 0.0707], "width": 540, "height": 70, "columns_with_signal": 355, "che_do_phat_hien": "grayscale", "calibration": {"px_per_mm": 5.0, "do_tin_cay": "trung_binh", "warning": null}, "r_peaks": {"peaks": [28, 55, 77, 107, 128, 164, 192, 210, 226, 249, 276, 295, 310, 326, 381, 424, 441, 468, 502], "rr_intervals_px": [27, 22, 30, 21, 36, 28, 18, 16, 23, 27, 19, 15, 16, 55, 43, 17, 27, 34], "warning": null}, "heart_rate": {"bpm_avg": 82, "bpm_per_beat": [82, 82, 82, 82, 82, 82, 82, 82, 82, 82, 82, 82, 82, 82, 82, 82, 82, 82], "rr_seconds": [0.732, 0.732, 0.732, 0.732, 0.732, 0.732, 0.732, 0.732, 0.732, 0.732, 0.732, 0.732, 0.732, 0.732, 0.732, 0.732, 0.732], "rr_range_seconds": 0.02, "nhip_deu_theo_nguong_sach": true, "nguong_ap_dung": "Chênh lệch R-R lớn nhất/nhỏ nhất < 0.16s (mượn ngưỡng PP của nhịp xoang đều theo sách lý thuyết — CHƯA xác nhận bởi Tấn/Ngân cho mục đích R-R)", "uoc_luong": true, "warning": null, "_note": "Số bpm theo máy đo ghi trên ảnh gốc (Vent. rate: 82 bpm)"}, "disclaimer": "Kết quả số hóa và ước tính nhịp tim chỉ mang tính trực quan hóa hỗ trợ, cần bác sĩ xác nhận. Không phải kết luận chẩn đoán."}, "ecg2": {"ten": "Mẫu 2: Sơ sinh, Sinus rhythm, 155 bpm", "doc_diem_lam_sang": {"thong_so_ky_thuat": {"toc_do_ghi": "25 mm/s (chuẩn, không ghi rõ trên ảnh gốc — áp dụng mặc định lâm sàng phổ biến nhất)", "bien_do_chuan": "Không xác định — ảnh chỉ có 1 dải nhịp (rhythm strip) duy nhất, không thấy thước chuẩn 10mm/1mV trên ảnh gốc", "so_chuyen_dao": "1 chuyển đạo (dải nhịp đơn, không phải bản ghi 12 chuyển đạo đầy đủ)"}, "nhip": {"loai": "Nhịp xoang (Sinus rhythm)", "ghi_chu": "Sóng P đều, đứng trước mỗi QRS, hình dạng nhất quán qua các nhịp — phù hợp nhịp xoang. Theo số máy đo ghi trên ảnh gốc."}, "tan_so": {"gia_tri": 155, "don_vi": "lần/phút", "phan_loai": "Bình thường ở trẻ sơ sinh (ngưỡng bình thường trẻ sơ sinh 110-160 lần/phút, KHÁC ngưỡng người lớn 60-100)", "nguon": "Số máy đo ghi trên ảnh gốc (Vent. rate: 155 bpm) — đáng tin hơn số ước tính tự động của thuật toán hiện tại, xem mục Hạn chế kỹ thuật"}, "truc": {"gia_tri": "Chưa xác định", "ly_do": "Cần tối thiểu 2 chuyển đạo ở 2 mặt phẳng khác nhau (ví dụ DI và aVF) để tính trục điện tim. Ảnh mẫu chỉ có 1 dải nhịp đơn, không đủ dữ liệu — đây là hạn chế của ẢNH MẪU, không phải hệ thống chưa làm tính năng này."}, "nghi_ngo": {"tinh_trang": "Không có dấu hiệu bất thường rõ trên dải nhịp quan sát được", "ly_giai": "Tần số 155 lần/phút phù hợp giới hạn bình thường ở trẻ sơ sinh (không phải nhịp nhanh nếu áp đúng ngưỡng trẻ sơ sinh), nhịp đều, sóng P-QRS-T theo trình tự bình thường trên dải nhịp 1 chuyển đạo. KHÔNG thể loại trừ bất thường ở các chuyển đạo khác hoặc đoạn ST/sóng T chi tiết vì ảnh không có bản ghi 12 chuyển đạo đầy đủ.", "nhan": "Hỗ trợ quan sát — cần bác sĩ đọc lại trên bản ghi đầy đủ, không thay thế chẩn đoán điện tâm đồ chuẩn"}}, "image_base64": "data:image/jpeg;base64,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", "signal": [0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9458, 0.9215, 0.971, 0.9952, 1.0, 0.9803, 0.9443, 0.886, 0.7662, 0.6487, 0.667, 0.7596, 0.7892, 0.7825, 0.7287, 0.66, 0.5484, 0.4661, 0.3722, 0.448, 0.5363, 0.689, 0.7374, 0.7318, 0.6931, 0.5642, 0.3281, 0.22, 0.2014, 0.251, 0.2677, 0.297, 0.3163, 0.3177, 0.3077, 0.2993, 0.2773, 0.2653, 0.3305, 0.3972, 0.4297, 0.4786, 0.526, 0.5845, 0.6272, 0.6872, 0.7597, 0.8554, 0.9265, 0.9713, 0.9802, 0.9436, 0.8883, 0.8127, 0.6962, 0.612, 0.5449, 0.4963, 0.4482, 0.4051, 0.4241, 0.4763, 0.4968, 0.4926, 0.4766, 0.3676, 0.3898, 0.393, 0.394, 0.3911, 0.3621, 0.3369, 0.2758, 0.0088, 0.3204, 0.6437, 0.815, 0.8636, 0.8168, 0.653, 0.4417, 0.1539, 0.3116, 0.4196, 0.4448, 0.475, 0.4889, 0.4877, 0.5614, 0.6506, 0.7145, 0.7681, 0.8302, 0.8792, 0.897, 0.8896, 0.8657, 0.8105, 0.7197, 0.6357, 0.5546, 0.4717, 0.4183, 0.3997, 0.392, 0.427, 0.4603, 0.4807, 0.4647, 0.4212, 0.4017, 0.3612, 0.3178, 0.3144, 0.2839, 0.2312, 0.2134, 0.235, 0.2622, 0.2608, 0.2454, 0.2486, 0.2281, 0.2158, 0.2342, 0.2822, 0.3339, 0.3785, 0.4036, 0.4284, 0.4764, 0.5311, 0.5716, 0.6261, 0.6959, 0.7731, 0.8277, 0.8466, 0.8735, 0.9118, 0.9028, 0.8517, 0.7774, 0.6744, 0.6251, 0.5719, 0.5158, 0.4943, 0.442, 0.4963, 0.53, 0.5144, 0.531, 0.5242, 0.4643, 0.3583, 0.2821, 0.3087, 0.3, 0.2655, 0.2415, 0.2548, 0.1337, 0.253, 0.4694, 0.5939, 0.6292, 0.591, 0.5055, 0.3623, 0.1633, 0.231, 0.3486, 0.4147, 0.4672, 0.5154, 0.5657, 0.6223, 0.6859, 0.7203, 0.7881, 0.8735, 0.928, 0.9405, 0.9262, 0.8883, 0.8307, 0.7345, 0.6384, 0.5653, 0.4861, 0.4294, 0.4035, 0.3839, 0.4406, 0.5017, 0.5349, 0.5166, 0.4238, 0.3865, 0.3936, 0.3618, 0.3905, 0.3873, 0.3541, 0.2905, 0.1482, 0.1275, 0.3942, 0.5867, 0.6913, 0.6798, 0.584, 0.5032, 0.3523, 0.2745, 0.4102, 0.4764, 0.49, 0.4776, 0.4695, 0.5425, 0.6419, 0.7201, 0.7843, 0.8543, 0.8918, 0.9194, 0.9138, 0.878, 0.8192, 0.8006, 0.7406, 0.649, 0.5869, 0.533, 0.5003, 0.4732, 0.4579, 0.5121, 0.4966, 0.4767, 0.4641, 0.4085, 0.3558, 0.322, 0.3095, 0.2721, 0.2247, 0.2119, 0.2267, 0.126, 0.2887, 0.4106, 0.4585, 0.4598, 0.4346, 0.3775, 0.2886, 0.1667, 0.3259, 0.3596, 0.3711, 0.4124, 0.4679, 0.5139, 0.557, 0.6213, 0.6879, 0.7462, 0.807, 0.8576, 0.8807, 0.8838, 0.8608, 0.7998, 0.6962, 0.6134, 0.5962, 0.5476, 0.517, 0.5067, 0.5155, 0.5116, 0.4892, 0.4723, 0.4556, 0.4158, 0.3883, 0.3448, 0.3034, 0.2932, 0.2924, 0.262, 0.2387, 0.2488, 0.2757, 0.2471, 0.2182, 0.2095, 0.2069, 0.2059, 0.2388, 0.2782, 0.3196, 0.3476, 0.3864, 0.4085, 0.4329, 0.4762, 0.5395, 0.601, 0.6466, 0.7272, 0.8088, 0.8634, 0.8905, 0.904, 0.8786, 0.8335, 0.7711, 0.6981, 0.5942, 0.5466, 0.5478, 0.5444, 0.519, 0.5298, 0.5571, 0.5344, 0.4555, 0.4285, 0.3444, 0.363, 0.3733, 0.3995, 0.4069, 0.3852, 0.3507, 0.2895, 0.0, 0.2814, 0.682, 0.914, 0.9867, 0.952, 0.7702, 0.5328, 0.1807, 0.3087, 0.4566, 0.4759, 0.488, 0.4936, 0.4744, 0.5467, 0.6466, 0.7315, 0.7958, 0.8476, 0.8852, 0.9019, 0.8795, 0.8463, 0.8072, 0.728, 0.6392, 0.5709, 0.4922, 0.4474, 0.4731, 0.5119, 0.5412, 0.5451, 0.5372, 0.4997, 0.3994, 0.3269, 0.3058, 0.2829, 0.2674, 0.2444, 0.2241, 0.212, 0.2267, 0.2572, 0.2551, 0.2672, 0.2884, 0.2779, 0.2467, 0.2375, 0.3253, 0.384, 0.4014, 0.4337, 0.4658, 0.4743, 0.4744, 0.4976, 0.5953, 0.6561, 0.732, 0.7989, 0.8389, 0.874, 0.9101, 0.9073, 0.8637, 0.7964, 0.7077, 0.634, 0.5576, 0.5142, 0.4935, 0.4817, 0.4969, 0.5106, 0.4921, 0.4337, 0.472, 0.4706, 0.4227, 0.3922, 0.3793, 0.3564, 0.2952, 0.2151, 0.2671, 0.2227, 0.2328, 0.3511, 0.4149, 0.4042, 0.4381, 0.4528, 0.4233, 0.3342, 0.3419, 0.4252, 0.4197, 0.394, 0.4663, 0.5364, 0.5909, 0.6393, 0.7022, 0.7579, 0.8248, 0.8782, 0.9073, 0.9166, 0.8817, 0.8376, 0.7473, 0.6389, 0.5771, 0.5161, 0.454, 0.4138, 0.4001, 0.4171, 0.4335, 0.4483, 0.4408, 0.3848, 0.3494, 0.3374, 0.316, 0.2998, 0.3041, 0.3024, 0.2769, 0.1303, 0.2625, 0.4906, 0.6162, 0.6561, 0.6447, 0.559, 0.4027, 0.1843, 0.237, 0.2867, 0.3669, 0.4308, 0.4954, 0.5467, 0.6012, 0.6557, 0.6925, 0.7066, 0.8161, 0.8627, 0.8953, 0.9072, 0.8976, 0.821, 0.7931, 0.7536, 0.6945, 0.6062, 0.5199, 0.5094, 0.4854, 0.4519, 0.4956, 0.5133, 0.4954, 0.4633, 0.4011, 0.3406, 0.3595, 0.3948, 0.3962, 0.3711, 0.3273, 0.3284, 0.2865, 0.1864, 0.2447, 0.309, 0.3176, 0.2983, 0.2801, 0.2948, 0.3053, 0.3045, 0.3497, 0.3967, 0.4095, 0.4835, 0.5509, 0.613, 0.691, 0.768, 0.8125, 0.8327, 0.8515, 0.9039, 0.9039, 0.8703, 0.8237, 0.7492, 0.6427, 0.5956, 0.5495, 0.5015, 0.4687, 0.4621, 0.4708, 0.4613, 0.4461, 0.4665, 0.444, 0.4209, 0.3877, 0.3594, 0.3208, 0.2866, 0.2501, 0.2112, 0.1699], "width": 590, "height": 70, "columns_with_signal": 557, "che_do_phat_hien": "grayscale", "calibration": {"px_per_mm": 5.0, "do_tin_cay": "cao", "warning": null}, "r_peaks": {"peaks": [31, 77, 121, 166, 210, 254, 300, 344, 371, 400, 433, 478, 522, 566], "rr_intervals_px": [46, 44, 45, 44, 44, 46, 44, 27, 29, 33, 45, 44, 44], "warning": null}, "heart_rate": {"bpm_avg": 155, "bpm_per_beat": [155, 155, 155, 155, 155, 155, 155, 155, 155, 155, 155, 155, 155], "rr_seconds": [0.387, 0.387, 0.387, 0.387, 0.387, 0.387, 0.387, 0.387, 0.387, 0.387, 0.387, 0.387], "rr_range_seconds": 0.02, "nhip_deu_theo_nguong_sach": true, "nguong_ap_dung": "Chênh lệch R-R lớn nhất/nhỏ nhất < 0.16s (mượn ngưỡng PP của nhịp xoang đều theo sách lý thuyết — CHƯA xác nhận bởi Tấn/Ngân cho mục đích R-R)", "uoc_luong": true, "warning": null, "_note": "Số bpm theo máy đo ghi trên ảnh gốc (Vent. rate: 155 bpm)"}, "disclaimer": "Kết quả số hóa và ước tính nhịp tim chỉ mang tính trực quan hóa hỗ trợ, cần bác sĩ xác nhận. Không phải kết luận chẩn đoán."}};
+const ECG_DEMO_SAMPLES = {"dongA_demo":{"ten":"Nguyễn Văn A — ECG ngày 13/03/2026 (63 tuổi, mẫu demo)","is_real_patient_scan":true,"doc_diem_lam_sang":{"thong_so_ky_thuat":{"toc_do_ghi":"25 mm/s (ghi rõ trên ảnh gốc)","bien_do_chuan":"10 mm/mV (ghi rõ trên ảnh gốc)","so_chuyen_dao":"Trích 1 chuyển đạo (Lead I) từ bản ghi 12 chuyển đạo đầy đủ gốc — hệ thống hiện CHƯA tự tách được nhiều chuyển đạo cùng lúc từ 1 ảnh trang đầy đủ (xem 'han_che_ky_thuat')."},"nhip":{"loai":"Nhịp xoang (Sinus rhythm)","ghi_chu":"Theo kết luận tự động của máy đo — bản gốc ghi \"Unconfirmed Report\" (chưa có bác sĩ ký xác nhận)."},"tan_so":{"gia_tri":71,"don_vi":"lần/phút","phan_loai":"Bình thường (60-100 lần/phút)","nguon":"Số máy đo ghi trên ảnh gốc (Vent. rate: 71 bpm) — đáng tin hơn số ước tính tự động của thuật toán hiện tại, xem 'han_che_ky_thuat'.","confidence_level":"Trung bình","source_of_truth":"OCR từ máy"},"truc":{"gia_tri":"Không kết luận (luật an toàn: <12 chuyển đạo)","ly_do":"Máy đo gốc có ghi trục nhưng hệ thống MedParcours chỉ trích xuất được 1 chuyển đạo — theo luật an toàn lâm sàng, KHÔNG được phép kết luận trục điện tim khi chưa đủ 12 chuyển đạo. Cần xem trực tiếp bản gốc và bác sĩ xác nhận.","confidence_level":"Thấp","source_of_truth":"Suy luận từ chỉ số"},"nghi_ngo":{"tinh_trang":"Bất thường sóng T (nghi thiếu máu cơ tim thành bên), lệch trục trái vừa","ly_giai":"Có nhiễu tín hiệu khi đo (ARTIFACT PRESENT)","nhan":"• Dữ liệu ECG thật (đã ẩn danh), dùng để kiểm thử hệ thống\n• Kết luận trên do máy đo tự sinh, chưa qua bác sĩ xác nhận — không phải kết luận của MedParcours\n• Cần đọc lại trên bản ghi 12 chuyển đạo đầy đủ trước khi áp dụng","redflags":["Nhiễu cơ (ARTIFACT PRESENT)"],"confidence_level":"Thấp","source_of_truth":"OCR từ máy","bi_chan_luat_an_toan":["Bất thường sóng T, nghi thiếu máu cơ tim thành bên (T wave abnormality, possible lateral ischemia)","Lệch trục trái mức độ vừa (Moderate left axis deviation)"]}},"image_base64":"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAkGBwgHBgkIBwgKCgkLDRYPDQwMDRsUFRAWIB0iIiAdHx8kKDQsJCYxJx8fLT0tMTU3Ojo6Iys/RD84QzQ5Ojf/2wBDAQoKCg0MDRoPDxo3JR8lNzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzf/wAARCAHgAoADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3GiiigAooooAKKKKACiikZlRSzsFUDJJOAKAFoqIXEBlMImjMoGSgYbgPpSyXEMTKsk0aM5woZgC30oAkoqsL+yKlhd25VTgnzVwP1p5u7ZWdWuIgyDLguMqPU+lAE1FVzf2YIBu4MsMgeYOR69aFvrNlDLdwEM20ESDk+n1oAsUVAbu38ySPz498QDSDcPkB6Z9OlP8APh80w+dH5oGSm4bgPXFAElFRG5gDIpniDSfcG8Zb6etM+22mzf8AaoNu7bu8wYz6fWgCxRUD3tqm/dcwgpjfmQDbn19KSK8t5pTFDPG7hQ+1WBO0kgH6cH8qALFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFRfabfci+fFmT7g3j5vp605pY1OGdQcZ5PagB9FICCMggigsoBJIAHUk0ALRUAvLVghW5hIkOEIkHzH0HrQb20CsxuoAqHaxMgwD6H3oAnopNy7d24Y65zTPOixnzU7fxDv0/OgCSio4p4Zk3wypIoOMowIzSSXEEas0k0aKn3izAAfWgCWimGWMR+YXXZjO7PGPXNRC+tCUAuoCZPufvB83OOPXmgCxRRRQAUUUUAFFFFABRRRQAUVDLcwxQvM8yLHHne5YYXHXNPSRGJAdSR1APIoAfRRRQAUUUUAFFFFABRRRQAUUUUAFFISB1pNy+tADqKTcPWjcPWgBao63bG90q7s1dUa4gkiVm6AspA/nV6srxFpcmrWsEMUxhMc6S71OCNpzx7/pQBSj0WZta+174BD5/nh1JLt+5EWzp0yN3X8O9JfaHNLJYR7LWaCBFWXJMbMQQRg4Y7cjOMjnvWdD4e8SRIkSanBGghdWMUjrlmDHOOg+Yg5HPFSWug+JIZrXzdZMsUTguGlckj5SR/tZww56ZoArx+FrmyjgVZLPyIAESCZ2KMdjru3EEg/MPl56deaRfDcqIYppLHfAiCGVH2EbSpyy7TyxUZJLD2NauuaBcahFGsZifZcyTbJHZQQyMo5O7pnPTH0qnD4VuvtTSTi02m1khbYuBIzBcMV28YK+p9gKAHQeGvMsLeK4nglRBcs7BR96TOMEAcKGYcAdjxVKfwvdEhjc2yfI0UcbSswh3BPmyR85yhO0gDnGa6Z9MY+H5NNjEaM1qYQRwoJXGePeuZn8H6oqz+Vd205Mflw/afm8sbUAY5VssNhGepB6g0Aa95pBurPWbJ2gaPUMvG7nOGKBcFfbaCD7+3LBpavrb3DyWjRG5Nwe8hBh8ryyP7v8AFnPoMd6rHw3ey2rQvNFG8UBjtponbcG8zcH6fLxxgZ6mmzeFHY6pFEkEcF2UETLIVMahYxjAXI+4eQ34UAMn8JzPDZRwXMKLAkSSsAOBHJvAAIPuOCvvnpVc+ELkWwRLi2V1iES/Pu4KbS2WU9ePlxxjhhk10mg6bcWNncQ3s63LSzyPvAxuU8DI9cDmsabwrftZCBdQRXEwdZCGJCxriFevY/Mff1oANO8M3FpNcuLi3dminSNmGdzOwYEr/DtIGcE568VqWenJa6haLE0SQ2dmYURW+Z9xXOR2A2j/AL6PTvV0fQbuw1f7ZLcpJCxuXMWSdryyBvlJ7YUceufWo9X8OXV/eXbRNbwrM+9ZwT5gHk+XswB93PPX8KAOmFxGV3KykYzkNTkmRyQjKcHBwc4rjLrwlfXNxdXFvPBavMNohjZjGqnZuXoOu3OccH8c6nh3RbzSrqVrhrdoTEiK0Y+d2BYl2O0HJyDyTznnmgDo6KTcPWjPGaAFopu5fWjeuM5oAdRQDnpRQAUUUUAFFFFABRRSEgUALRTdy+tLuHrQAtFJuHrRuHrQAtFGaKACiqWsXx02yNz5LSgOqsFYDAYgZ59M1Qvdca1vJ7T7LI0kZgEZ3gCQysVH0wVPWgDcorm7TxP9pnEf2ORFW4FtI5kGVkJI4HcZHX3roj9z8KAHUVz0PiIvFcyTWzQCAKSryfNy23lcZH1wR71bbxFpiXUls87rLG2w5hfBOVGAcYPLr09aANaisqPxBpst9FZxzu00pYKBE+OGZTzjA5UirN/qVtYzW0VwziS5cpEqRs5YgZPQHHHc8UAXKZJGsqlXAZSMFSMgise18SWEpkEryQtHK0ZEkbAcSMgIOMYJXrUd34ntoBO0cNxKkVkt2GEbAOrE4AyOvFAGd/wi83k6VCrwKLMRBpFyrfI+7GMYII4A4weeelO8TeFbjVFiW01CWHEcsbtI5YlZAFIHpxn8cGtGTxXo0c0MUlxIkkr+WA1vINrZIw3y/L909cdK3AAR0oA5KPQdXaSYSaoUgkCACGRwQFcE4H8J2grwec54rbvNMMltJ5MjtIYiixzSM0R4x8y960sD0FLQBxv/AAi9yyNkWqyTLtmcuWKtuU71wgGcLjbgdBzTJPCt1KqPNFZiZJd2IpWRCm11CgBPlxvz/FnnJrtMD0owPQUAZNzp9xN4eGmrcqsrQLBJOExxgBiAOhxnArl5fBN9JKgOpKbdVhjaPa3zrEzbM/8AAWI+oHpXfYHpRgegoA5vRNAuLPc9zPEzNMjhVXIAVNvBAXk/T8+tN1Pw41xdzXEPlASTxzmLJTzCqMpywHB+YHOD0rpsD0owPSgDn4tGuYdJFuslrNOLNYP3kWELAk5I9OemO1Ns9A2R2KzRwqYLkzy4beZGwcHO1cfMQcYxwK6PFJgelACjiiiigAooooAKKKKACiiigDnodEePFsvlLZtevdSKoxkZyqY/3sEn/Zx3q9Z6ctrqt7doEAuhHkKuDlQQSfXqPyrSwPSjA9KAFooooAKKKKACiiigAooooAKKKKAKupI8ljOkRcSNGwUxsAwOOME8A1yNuvie3aBLW2cQmX94Z5Q7EfJyQztgY38BuoB46V3FFAHP2Z1qVLxbxdmJB9mKMqkx7urHBw2O2MYx3JxSgt/EK+KmaVj/AGR9paRTv52mHaBjPQMCfq3tXW1x0niDWjYRzQ6WGneVUaJkkHlgqxOfl5IIHI45oA7AdKWq+nTvc6fbTyxNFJLErtG3VCRkj8KsUAFFFFABRXNXeranbazcwLYSTWgQNHLj5d20nYMdyR1PA9cmrfhvVX1aG4ldU2xTeWrorAP8qk8NzwSR+FAG1Wd4hjuptDvY7AuLpoiItjbTu7YORj8xWjRQBzOj2+rRRWq3Ky7VvZC3mSEsISjbc/M38RAxk0ksGuS6NC0lxKL37VHJIluEUiMPyozwfl5PPP6V09FAHP6RFq0F/KLuR5LWSS4cCTBMf7weXgjnBUng5xgdKZrH9sNqsH2RJTaxuHxGyqr/ACvkOTz124xx610dFAHIWY8RXC2Mt8J4TFfN5qxmPLwmI43djhz2xwM4zVjTG8RTC+XUYxGAw+zmNlX+I5weeNoXqCevPppXTzXOrwWsLOkUA86dgcBs5CJn65J+g9a1FBA5oAypYLwaz5ttKywtaMuJCWjV9y4O3I5xmoNSOqH7NBHG0knnxySTw4iQIGyVILE8gY75zW4a5LVNf1q21a5trfSfNt42VIpQH+YlA2TgYxnIoAigl8Wyxyl4vJKLI8Qby2LsFUojEcYLbhkAHHet+6iv5rS6RriMCSJhGsMZSRCenz7z+eBXN2us+JLqJ5m00QAC23RncCN0h37crz8uM5IxW34Y1mXV/tPmxqnksq/KG6lcleeuCcZHFAHP6tYeJWkQWLXG8wLmQz4VT5RBXG/BO/ByVzk9fRZrHXmhRYEvFYT5jdpznZlCQ2ZTjo394Y7V3lFADU+6M06iigAooooAKKKKACsbxPDez6aE05pBJ58ZcRNtYpuG4A5Hb3FbNFAHF2Npra6lpkkqXKJGf9JLTllZdrAfxnnO3IwTn+KtrUptQXUrSGyUGGXPnMUJ8sAg5z05GVx6kHsa2qKAOKW48YDTrhpLYG63r5QjMYA4bd1zlc7fQ8nmtFzr/wBjvpgVE3yrawIi8DapY5J5OdwGeBjoa6SigCjo8l2+n251BNlyU/eLkHB98cZ6dP0q9RRQBna/d2Nlpkk2p4NsCMgrnJzkcfUVi3euaDObtrmHfsZYpHO0EskhVR97Iw5OCcDvmr/ie30i4sgutyCOEbsOZTHtypBOQfQmsy4t/Dstxvk1QeZA26MeeP3LF0YkZHJ3BeufTvQBYs28P/bNOWC2VLi5VpIBsP8ACCdx7Z5OCevOK6RuI/yrmLCz8NpqFrNbXaPeAlo2FySZCd3UZwfvNxj1rqGOEzQBzlo2i7ruP7H9mAkEEhnwoZh84VeffOB61YkXQbp3DmzkLgyH5xyH2/N+JCc/SobvS9F1u3ntXk85LmQXbeXLg5xtDAjkD5cfnSnw9pKXxLs/mS27wpCZOPLwgbaOoxhfp+NAEkNt4fjvbWOMWv2mN28lS+WDbmzjJ65LfjmtHUJLKCSCe8kijdSVieRgMEjBAPvWdD4Z06G8tbpFk326qBl8hiuSCe5OWY+5PNS+IdMsdXighv5pI1LFEVZNu8kdMdCcA+/XFAFGV/Dl7azpJLbpEJGimQvtJPmMSrexYMferly+h3Ezmaa0aRrf5/3o5i6889O9JD4dsUuhPumZ1lMqbn4QlmYgcdMuxqufDWlLmx8yXaYT+48zsU8ov6524HpQA6YeG5ZoWleweWd98RLjLtlhkevJb9a0jq1mIy8c6SKsyQtsO4q7sFUH05IrP1fStJvLm1a+bZNuCQor7dxUNgAfRjRpuhaZHDK1tLJMkk6O7tLu+eJ8gZ9mHOfSgDQvNWt7KK8luH2paRebKcdFwT/Q1NDf20xjCTxkyAFQGGTkFh+gJ/Cq9zpttcC98zd/psIhmweqgMOP++jUCaZbR6xBeSTF7hbfy41bGSB1Y+p+bHtk+tAGzWcNb03y3k+3W2xG2s3mjAJzgfofyq1ZRNDbiN5pJipPzyY3H64ArAg8OacmLX7TO1zEquH8350T5wMDoB8zjp3oA121exV5EN5bBo03uDIPlXjk89OR+dL/AGpbFIpElWRJQzIyHIIUZNZbeF9MBlP74JLCImQSfKFAUA+5wo65qzbaVZfZrVY3lkSFH8t2fOQ45OfoaAJotcsZ7KK8gnWSKR44wU5wzkBQfT7wqxBqFtcTyQQXEUksRw6KwJXnuKyrbStNis9i3DSIZ4j5jyAkvGwVVyPQoBirGnaLZ6fe3F3b7/MnLFgWyBlixx9SSaAL0t9DFdC3dsP5TS89AoIBOfxFVv7csDNaRrcxubsssJVshivUZp91psF5I7yFw7wNASjlSFYjOMdDwOarWXhy1skgEDygwzPMGLDJLDDZ46GgCyNa07y2k+222wP5ZbzBjceg+vBqRtStQ8sfnxmSFC7xhvmC4znFZ2n+FtO0/wAv7Ojny5VkTe2cFVZVHToA7VIvh62Goz3xeVpZo3jYNJkANtzjj/ZHfigDVtpluLeOeP7kih1+hGRVT+1rMJG0txFF5jsiCRgCzA4OPxq1bQrbW8cEf3I1Crn0AwKyp/DlnMLcEyqIHd1Kvgnc25gT6ZoAln8QaZAf3l7BjzRExDg7GwTg+n3T+VSvrOnozK17bAonmMPMHC8c/qPzFV4vD9tHsHmTMscm+NGkyEOG4A/4GaqL4O0tX3BZfuKmDJxwFUHp1wi0AasGqWtwIGt5o5o5yRG8bBlOBk81Na3kF2rtbTRyhG2tsbO0+hqjYeH7PT4reO2DhbckplyeSu0/oKdo2iW+jrMLZpWMzBnaV9xOBgc/SgDUooooAKKKKACiiigAooooAKKKKACiiigClrN29hpN7eRIHkt7eSVVPRiqkgfpXLWPj+K4n2S2VwoaUJHtTnGI8k59GfH4Guuv5BDaSymJpdkbN5a9XwOg+tYlprtjKo+2QJby78Kg+ck/KOwyGy68EA9+nNAESeKTKb544gsNtAkilsFiWdlOQDx93oeasz+JLaCe+jeMqLQHczSKCxAU8Lndj5hziq8PirQZmkETSsxbayrayZc4LcDbzwCc1P8A25prXN0HicxR20UxnERZZFkJCgcc9Bx3z7UAN0/xIdQutOW2tyttdxzktIQrI0bhSMd+c0lz4pis7dZZ4nfMlwvybV+WJsHqeT0wByaT/hJtDjnt7cOyu5/dj7M4CksyYPHyncrD8Kt2mq6fqNrHPbIZYjKEBMe3DHnPzY9e1AEUfiHzjdqlsyNCJChlcBXCSFCeMkcj0rcjYsuTTBEvUAA/SpAMUAJtX0oVFUYUAD0FOooAKKKKACiiigAooooAQAA5ApaKKACk2ilooATaPSkVFX7oA+lOooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigCjq9tDdWRt5ZRHG7pvyfvKGBK/iBj8ax7nQpJbuW6m1CMusiyQlof8AUhXDBfvY2nHPAJ9eBVrxJpc+oLAYI4JTGJFMc7YX5lwG6HkfTueao3PhyUu8kXkSEx2gZXyBK0LEnccHqCB36UASWGiNBewyyajFOiFpEhaLGGYsWYYb34yDgdO9dIfuY9q5PTvD13b6hBJPBZ+TG5kBichlYliAfl5ChsAAqO59usYfJigDh4/A9vbBmOp5zhAJowyAAOduMjvIzD3PtVm58Jw3E8g/tM+Y0JjLMoMuD5fVs8j930x/EaguPCepXBn8zUIsXEzXDApu2OUdcANkEYZB2+7W3DowivZrhEiXdYx2692DDdklsc8EDPfFAEGmeH7SwmgLXQlnjtjFCW/hyzNuUEn+9gewqtaeFobW3jWe9jmMd6tyjSQAKGC7SAM4GeTx37VZ07QZrW6juZJVeSKyggRcDBdAwJORnHzDpWfb+GNRtYkWWa11BUMjbLjcqlpFXcx69GBI/wB89KANPQdGh03Vb65S9897l2Zk/uZZm555xux24AFT61psOoPcg3pgaSza3YoRlATndUum6YtnqF9c7IgbhkI2LgjCgH9RmsrU/CzXzapMZ8TXLEwAAYQGNEJPGT0PGcdOKAJNN8P2Nm2nM9xFK9q8rREqOS5/hyTgD2q9o9naaTBPFFNb7JLiSUEAKQWYsQTnkjOPoKyLDw1dWWpQz5inRQwZiwXkyM27aEx0I4GOlVI/C19HPbusVoIoMARrJywCsMljGc9Rwcnr81AF678NrNfXl5JqhRbpChCIEK/MpB3A8ldvBxkZ71fi0ZGt7VUuSyw2ktsGQY379vzcHr8v5k1lL4Wuhdyu88TwTLdZhfJCvIwKke2AMj1GR1NdTp9sLWyggAVfLjVSFGBnHNAFTw5pR0bTzaGfzh5hYHywmBxxgfTqck1hXfglboSA3pUuUJYQ8vtMn3zn5j+868fdFdjRQBh22gLb3Yn+0zOohCCNuRv2hTJ9Sqgfn61Wk8Mu0+lSC9bbp8caBfKGX29fmznnuORXS0UAYVv4fS3sDZxuqIL37UDHFtP+t8zaeefTPp2qp/wiUcl4800/mRvP5rRmIfP87Nhjn5sbsA9gK6iigCnpNn/Z+n29oZGl8mMJvbq2KuUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFAFXU5YIbG4lu1DW6RM0oK5BUDnjvxmsS1i0FruE2yqXhuAqbSSvmtHkH3ITjPatrVY4JdPuY7ttts8LrK2cYQjk5+maoWml6Y1wWtsbop0mZY24VxHtHH+6RQBnXtv4TjgNxMtiYoJlD7cMA7fIAw/HHPp7Vo3A0Jpp0maz3iALMhcDES8jI9Bnr2zUL+H9Nsba6BmmjjuZELMZMbG35XbxgfMfxqefwzp9xNcSzGZvtCsroX+X5goYjjqQq0ARx2Ph9zC0UVmxGwxkEHOWJU++W3H3OauaZY6bDCwsbaJY/NJOEx86nGefTGB9OKbNpEE2rW1855tkKRxgYGT3PrjnHpk1Z/cWCom8IJZCF3sTlmJOBn8eKALVFA6UUAFFFFABRRRQAUUUUAFFFFABRTJZFijaRzhVGSfSqMes2EpjEd3CTJKYkG7BZwMlQPXFAGjRRSHgGgBaKit547iMSQuroc4ZTkHBwaloAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigDn/FVrqlxbw/2X57OpbckU3l5ypAJO9Twfc/Sqd5pmtOJys93l4bT/Vz/wAas3mhRvXGRtzyM+9dZRQBx2n2Wvi7ge5iulxNGdwu8xrEA24Mpc5Y8Hv168V17AlMDrTqKAOJuNJ8YtbamsOpxrNJcq1mxcHyouMqRs5/Mf49faRyJbxrOd0gQBznOT9cD+QqeigDntfbXzfRxaTalrZkIkl81FxkEcAkNkcciqMQ8WLbqFjIMcTlfO8ovI4VNqthiMFvM5B7DNdfRQBzDf8ACUO10sapFmZRE7qjAJ52CQA2T+7wecHPSm3jeKotUla1gWeyG4Iu6NS37sEHJPBL5HIrqaKAOe09dcmi099QiMMsd45nVZF5h8uQKW2nB+YpwPrjin+JLXUZ5bE6es5jWRjOIZdhI28Z/eJnn3/Ct6igDkrmy1ljcbI74ymVj5iXgCNFvUhFXdw2zIzxznnnNbXh9LxNMiXUIpI5wzgrJL5hC7jtydzdsdz9a06KAMLxJaa3cz6e2i3awRxzZugXA3pjoPlPPv8AoeyeH7TW7fUNSfV7oTW0kubRA4PlpgcH5R/n863qKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigCOdUeJkkxsZSGz6VyR8I2xFjjUnJgdmy3Jk+ZSCORggIq554rpNZtmvdKvLSNgrzwSRqx6AspAP61zM3g9lmtntrgFI8tKrov7xi8ZIGF+UYTquDn6mgCy3hO2FjJb+amHSINvhBUukhfeRnknODz0HWuhjDpKWeRTFtAChMYPc5z09qg1W3ku7CaC3ZVlcAKzdByKzLnR7+e4vSbx/JuVmTy/NfAVkUJgdsEMcjHWgDQn0mK41UakzZlWDyosjOzkksPfmsmz8IeRAsct3HOyXaXKl4PlBVcH5c8E9eMc9q3tKha1062t5eHjjCt+8L8j3PJq3QBh6L4eGl6pfXwunlN07NtIxt3OW555xnA6cCtyiigAooooAKKKKACiiigAooooAieRMlNwDYzjNZMWlxLaWUX2ncYbn7Rv4/ev8xP5ljWdr/h+61S/uXWO1SNoisUgOH3lCu5jjJAzgAEDnPNUp/Cl9NdPOi2kCvJvEUZ+WL/AFfT5OfuE8bevWgDuaQ9DS0jdD9KAOQbwbxhLqHa0wdl+zjBA83qMkM2ZOvH3RVrTPCMOn6xFqSXcjvGAuGHLAR7ME9+x+oqg+h+Il+0GPViyyPuVGncY5GBnGQPvcAjtXX2aSx2kCTsHlWNQ7DoWxyfzoAmooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAKerLO+n3KWbbbloXELZxh8fKfzxXE2lj4hursSNFd2cEUgHky3JdhzFkqwbBzhzzkdRXb6q88Wn3Mlou+4SF2iXGdzhTgfnXK6fqepaksLW9zeJEL4QyF7dFfZ5W47gV4w3GeOvrQBo+Hra+try6+1x3PlsMiSebduO4ngBiMYxzhewxUGof8ACQjV2ltY2a3iDeWoKBHU+X1yclvv9QAOKZqWpX0KvqCNdLZfaPJxBEHcRqGzIAQRy+B06D3ptpqWr/Z1vpDNMGsIZvIEa7PMYkNyF3cABsZzQBpaYdbnvIpL0C3tgrloiilmPmNsBIJx8m08d63q5m6vryRLGXc8aOsx3RK6h5VH7tSGAIB+Y4I5IHXvXtb6+l0qxmkuZ2vnuYl2HuDjeCAicBSx6cY60AddRVPVpprfSbue3VmmjgZkVRklgOAKzxqOoHUTCLYeQZfJWQhsg+UH3nttySv1FAG5RWV4Yuru80Oyn1H/AI+nhUzDyymH7jB6c1q0AFFFFABRSEgHBNcx4iv9UtdQtV095WDFN0SxbgQXwxzt547blx156UAdRRXn8Gt64bXE811HM+0RsLYFQxUltxMYwoOMgKTzgMecdTp0093fTzmVvs8IEMYGQJGHLtj64A+h9aAKviGz1Ga4MmmySqTZzx4Eu1RIduw4z1+9zWOdP1kyzGOG/SJn/wBEVrwEw8py/wA/I4bjn6Ve8QanrUGoNFp9rKYFt5CHEW8PJtyOe2MYx3J9qrnVtZEkKW0dzcWxv1U3LW4BaH5ARjAxyz/Njov40AdnSHoaWkbofpQBxckvjJDcssUcil8xKBGGC5HAJPueTnpXX2ZlNpAbkATGNfMA7Njn9a5GTxPrEf2nfo7bUfEbAPyMjPGOevqOhrrrOVprSCWRCjvGrMh6qSM4oAmooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAKWtXT2OlXl3Gqs9vBJKqt0JVSRn8qyINS1KSygjmt1hvbmbbFx0jABZyMnGBnjPXHrWzq1ytnp1zdOnmLBC8hT+8FGcfpXPReKLeSJLprP5mDxROrBg7BkGxWwOpYdhyp9KAMyXxvPlVtY7aWTJ8xI1Z2hwHJVhuGT8nXjvxxWpB4kkW+Md81pFEsZYrG29hiMO3IPbnggZGDntTrPW7d1ur2bT0gmSINtIPmyjJVRyozknAwTycUlzrK27yx3+loDHGPMIYZYABmKgj5kHPTJyOg60AWIbzVPtelxT+QovN7yI0Z3RgfMFBB9CB9Qas+ItbtNAgilulZg+7CoMtgDJIHtTbfWUnnsdto5S6uJYUl3LgbAxz687DjirWt6jYadbpLqbKsJbGWXcAfWgDPbxNA8WrrDE4fTY2Zy2CGxnpg89PbHTrmpk16Btd/skxuJiuQ5Iwfl3YHPp/nvUH/CUaMbmW1VpDMkjRFFt2Jdg2CBxzz/Otizlt72CK9t9rJLGCkm3BKnke/fpQBZCgdKWiigBrsVHAzXFT+Mb6PUjZJFZvvfCSqw2gfvM5y4yfkxzt5PQ9K7eoWt4iHBijIc5YFR8319aAMfS9Wl1aW0aHaIfsqTzsF6s4+VR6cZJ/wCA+tX7u6eGQKtpJIpGTKCoRPrk5/IVGl0kWrNYJbGMvD55lGArEELj1z061V1bXV0+6aJrVpIo0ieZwwG0SOUXA78jnkcetAFG1169nsHu4xZyxi5gjWRNwDo7hWIGSf4uCcZ9PXXtbmW61O5SMgWtuBGTj78h5PPoBj8SfSsuw16CfTpZobBYZm8vyoCMF2k+5nKj8Tgjg4JxWpfXQ0y1Qx26vJNMsaop2gu56k9hk9cGgA1C+ktVnItmCpGW+0SMoiXjPzHOcfhXMw+Lrt/tAdLNGtmOVY8zYKDC4YjPzerdq6M63ENAl1SWGQLFG7SRjBOUJDAevIOKyo/EUfmRxnTY4hE2JHfeFhOR/wBM8g/MD8wXqPY0AdZSN90/SlooApWUV0sty11cJKjSZhVU2mNfQnv9aujgYrnm8W6W8jJE8h8uUJKWQqEB43cjkZKjj+8K2NOuDd2VvcmMx+dGr7G6rkZwaALNFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRUN1GZoJIgcF0K59MjFAE1FcZb+HdaD71vIbdlslgUQTPgugwjH5Rkctkc/jV1tJ1zZcf6YhZpQwP2l13pvJ2/c/d/LgZXOcUAdNRXN2Wj6wrxtd6kZOAkgErYK+VtOBjrv+bPX+VS6boU1hYaJbRPGPsPM5yTvPlMp25H95ge3FAG/RXL3Oh6u+mW9vFqsgufP8yeUzMMrz8q4HTp+VQWOjeJ0lla71aOUNEoCrIwBbKE/wAPy8K4yOfmzigDr6KxLPSriLwvLpcrR+fJFMm4OWUFyxHJGT97risWPwxrVkltFp2oxRRrM7zbDs3g+XtO1VxkBWGOhzk8mgDtaK5GHSfELQuXvdpaTJha4cblBf8AjAJXgpwP7uO5rRs9Hv8AyroahfvM8sKxIFchV/dqGbAAwSwY/T05oA3aKoaFZzWGk2drcFTLDCsbFZC4JAx1IBq/QAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQBU1V7ePTrl7xd9ssLmZcZymPmGPpmsKPU9Ckj8wwbfJkedVaLkSLtBI/wBr516etdDfWsd9Zz2s+TFPG0bgf3WGD/Os4eG9NVIY1iIjhnM6IDgBjyR9M849aAMq0vfDUqy3yosKQurtJK+BncccZ9cnGOvPapZb3Ql1C5na3Z3j4lnWMsgyoyT2HynrjoCM1oJ4b08NMZkM6yrs2y4IVclsDHuadN4fsprtriUyNuVl8sn5AGXacDrjHbOO+M0AQ213pYk062ggYKs0kNqViOxWjVg2D0HAYe/NWtattIuI4v7ZFvsDFYzM4Tk9QDkdfSn2+k21vDYxR7ttkxaLLZJJVlJJ7khj+NR67odrrkCQ3jTBFzxG+AwIwcjof6dqAMu5tvCM88hln04TQzFpcXKgq5bkNz13Doe4robMQLaxC0EYt9o8vy8bduOMY7YrCm8G6dJdi6jkuIpvOaYsj45ZtxHtyK3LK1isbSK1t12wwoERc5wAMCgCeiiigAooooAhe1geXzXjBk2GPd32nkiq0ujadLJFJLao7RKqqWJPCnIB55weRmr9FAGdbaJptrIjwWqo0Zyp3E4OMDqewJA9MnHWna0lp/Z8r30LSwRL5jKilm+XnIA5z9Kv1HcQrPC8T52upVsehGKAM9LLTv7OV4bUPC1vtEYBO5DzjBPesmAaDKtuDp8yCW7aBd8bcyAZO45II+UDn+77V0EFmsHliOSQJHEIwmeMDv8AWoU0i2S3tYF37LaXzY8tzu55Pr940AaFFFFAHNuPC+6WOL7DMZn8icRur4LdnweMlR174rcsbiO7tILmAMIpUDpuGDtI44rHHhDSsXA2y/6QpDnfz1U5HocqK3o41ijWOMBUQBVA7AUAOooooAKKKKACiiigAooooAKKKKACiiigAooooAKhu1draURZ8woQuPXHFTUUAcPaW3izTrGJIFEszN+8LNux8iY+8xOC27PPXpW1N/brpqUTJGUWBxbMpwZWYZXP93b93rz14reooA5m4fxMNSkjtY4ltPJ/duwBG7y+/fO/9Kq20/jMmzN1b26l3/fKm0hBuA5P03Hj1rsKKAMHQl1Zr27m1UOoaGJVXjYHBfdtwenK8nk1RMviCyn1GRYppIFaSSJWQPuO9NiLj5sFd4ORxxXWUUAZ1kNRLWr3ZXPlMZ1UgAOSMDGMnAyM5H0OeNHGaKKAEAApaKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigBkmeADj8ajMgGcvjHX5qfKeV/Gue1jRWvbi6mhWENNHCrBx98xy78NjPBHHfvxQBvqwZQQ5IPcGjdgnLH8/8+lY1hp1xaaLc2kbRQzy+c0ZiPyRFySoHTgZHYVhP4e8SfdTXH2gsyEzuSCWG3J7gAEYoA7QzJ5vleYPMI3bd3OPWl3rnG85zjGa5rUNI1O8tbmSC6+zX08n30crtjVWCKCOepDH3Jp+l6HeW+ow3V5drMqR7mXu023Zvz/uDH1zQB0n4n86RmCjJYgD1NJuPpWfrlvNd6dJBbQ20krEYW5GU655xnp9OooAvechIHmjJ5A3daeG7Fj+dcjY+GZbO+tLi3jt4thUyMZA5wCcgDYOueoxjsOKveItN1XUJIH0q/a0MSPkbyAznG0kDqAexoA3y4HJc46nJpIpVlRHikDo4yrBsgj1rlLXR9cia5iutRNxBdFUfMrHy143Fc9MjcOP7wPatOzsdQt9dkmM6HTym2ODecpwAAF+6AMN6nmgDZLbRlmwMZyTSCRW6SZHqGqlrdm2o6Rd2SFVe4gaMFugJGOagGlLbx2UVmFSOC4858qo3Da47ADOSPyoA1i4HG7vjr9P8aNw/vN+dc/f6LNPHehHXdNqEN0gWRk4TysgkcjOw+vUVXm0nXZL29kTVfLglVhCqucx5244xgEYbkdc80AdQGGfvH86GYAj5j+dU47YpNblXLLFGUJkZmY5xznOO3cH8Ki1yyk1C1ihjfyytxFIWB5AVwxx78UAX/NTODIM+m6hZFYZV8j2auIk8HXQ88QzQCWYybrhzuYBi/GNvow5BFdDoGnSWAu2kit4BPIrLDb8qmEC+g6lSenegDYyM8Mfzpcnpk/nWF4f028sbu7nvpVlknSJS4kLbimcnBA253dBwK28+wz/AProADKgODJg4zgtQsitkq+R7NmuU8Q+GZdZvllC28ce0hnzh3BRl2n5T/e65/A1qeHrCbT4LiOZYVV5NyJHyEGAME4XPIJ6d6ANcMCeH4/3qUEH+JvzrjD4a1S3hijtL3L+RHC7faGjZAGJOwqD2IxkGuvhBSJFPUAA5Of170ASnPqfzpMkdz+dJn2oJx26/T3oAX6E/nS/8Cb86TPJ/wA+lNzntj8vegB+eRy350mTnqfzpM8jjtQe/H8vegB3PqfzpM89T+dJnJ/H/CkB5PHbrx70APyfX9aP+BN+dNJ9u/tRnn/9VAC5OfvH86aZlBA3jnp83WkYB1ZWXKnIIOOa5N/DE6R28KLaMEjVFds5hxMZNy8ehx26daAOwyOm4+nWkz/tH86xvEmn3+oxwLp961qUk3OVcqWHHHH4/nWVZ6R4jgkllm1QTNLE0eDISI2ZjhwDwNq9h1xQB1STxyLvjlDJyNynIyDg0/zARw2T9a5W68P376hCLa8MelpGImtS52smFBBXpnG78xWroOny6daOt3Ks9y7bnlUfewAq/wDjqj9aANfv95vzpMkdWOPrSZx270Z68fyoAUn3P50ufc/nTSfajd9P0/xoAcD/ALR/OkJPqfzpM9Tign2/lQA7/gR/OjJ7k5+tNzznH8qM5xxj8qAFyc4yfzoJO3qenrSbjkDH8qQnjpn5egxzQA/P+0fzoycdT+dNB5oDe34/hQA7J9T+dGc/xH86Qn2zSZ68fy9KAHZ9z19aTPAOT+dJnk8Y5ozwOP8AOKAHfQn86O3JOfrSZ56UmcqCRj8vSgB2SD1P503J2/ePT1ozzjHc8/jSZ+Tpnj+lAD8/7R/Ok59T+dJnnp3o3ZByP84oAdz6n86M8feP500seMDv/WgHj8P6UAO59T+dJk9cn86QMeeMc/1oJ9v84oAd9CfzpM8dT09aM+3f+tNB+Xpjj2oAdkk9T+dLnjOT09aYDyeO454oJ+TPB+X+lAD/AMT+dGe+T+dJ36UgPB4/H8KAHDII5PX1qWoN3zDjv/Wp6ACiiigAooooAZJ1FNGc0sgyVz703HUdv8+9AAAaOc45/wAk0gAwPpRgZP8An1oAXnOeaXBz3ppApQOTkUAKM80hJBGfWjaMnFJjkZHegBcnuTQMnpRgY/D/AD3pAKAHDOaMtn/PvSbRkcUYGcf57+9ABzx16f57Ucgn/PrSY4GB/n86Coyfp/jQAvO7n1/wpxBphHOPf/ClCjPSgBeTQcgj/PrSBRk0FRkfWgBeT60gz70D/P8AnNIBxQA7ndSc57/5zSbRu5FOwOnb/PvQAgzx/n+lLzn/AD701RwP8/1pcc/gP60ABJ3d+vp9Kdg5phAzj3/w96XHoP8AP50ALg9aT5vegAUjAA/596AHc570c/5/GkCjNIqjjigB3OR1/wA4pDuz3/z+FBUZFIQOf8+tAC8+9HzAnr/nPtSbQOlKAMn6f40AHOe9Lg+/50hAPHvRtHYf5/OgA5z3oJPbNIqjJ+tDAf5//XQA7nJoGcUhUdMUgUAdKAF5zQc479KQgZFB6fhQA4ZpB1o2jNAA5oAXmgZ560jCjAoAXnOaQ5460KBz9aRhyKAH854pOcUmBSAdOKAF5yAKDnb36f57UEDikYAqfpQA7Bo5AP8AntSYHp/n86QAAE9//rfWgBxz70gBx/n/AAoIH60mMj/P+NACjPP1o5wOtAUc/WkI6UAOwaMHHFG0elN28DjigBcEY60c7T16UgAz/n/GlIGw8dqAHYP60nze+f8A61IRz0owME9//rfWgBeeOvWkG7Hf/P4UEDj60Y46f5x9aAF5FJz3/wA8UAD9aTAOP89qAHc8Z9aQZ25HpQB6j/P50YGzOOcUAAzk9ev9aCDtzz0pAMnp3/rQVyhyOcUAO5zz60gJxVPWHkh024eFyjheGHUc4qtc28lrLaOl3ctvnVGV3BBBU0AaufmGfWpqhAGVPfNTUAFFFFABRRRQBHLnK496qWF2L238+JSFLOmG65Vip7eoNW5eo59ax9Tul0Sxg+yooD3cce0nj95J8x6+5NAGqNxHTt/ntQCwJ6fn/wDWoBOOo6ev/wBek3c/eH50AKScZx/n8qXJ9v8AP4Um71PH1oJHr+v/ANegBQWyen5//WpCWBHA6+v/ANagH3/WsjxLO8UenGOQru1CEMQeq7sn9KANjn6/5+lIC3tn/PtQpPr29f8A69Abnr/n86AFy2R/n+lA3Z/z/hSEncMH9aM/N17+v/16ADnjp0/z2oO7J/x+vtQT7jp6/wD16yteu5raXSxDIVEt8kcmD1Uq5x+YFAGryPz6f5FLlv8AP/6qTcM9eMj+lKTz1H5/X3oAMnJ4pGLZHH+fyoz15/WgkcfN39f/AK9AC8/5/wD1Ugzj/P8AhQDz1/zx71SvdRS0u7GFgWN3N5YIP3cKzZ/8dA/GgC7827jH5/8A1qXnP+f8KQt83DD8/pRk56/r9fegBRnA/wA/0oBOfw/z2pAeBz29f/r0Z+Y5Pb/GgAJbt6/4e1Lz/n/9VBPPXuO/0rJ128ltbjSVilKLLeqkgB+8pV+Pz20Aawz7fn/9ag7s/wCf8KQE8c/rRu5+9+v1oAXJz/n/AAoG7/P/AOqgHJ4I/wA4oB46/r9aAEJORx29fp7UHP8An8fagt8w+Yfn9PesjXrua2utK8qRlR70JKAeGUo4wefUr+OKANjLHt/n8qQZ3H0x1/yKAR6/r9KM/wC0Acf40ABzj8f89qXn/P8A+qjd796M+/6//XoAzNW1iPStrTxMwdZCu09WUAhfqecfSpbbUGuNQubQ28kTW6xsWZhhg+7pjP8AdPWpbm3trwIk8ccojkEgDAHawOQaRRbJduylBcyRruAb5mVScd+gJP50AWju9vz/APrUDOP8/wCFIWyeG4z/AIUAgjORj60ABySB6D/Pahs4P0/z2pC3OAecf4UyW4iiQtLMiADkswGP1oAlG7/P/wCqkGeeOPr/APWqpDqthLcm3jvYXlALFVcHjj3qBNcsZb2C0t7gTSTbsNEwZVwM4JB+v5UAaZz/AJ//AFUZPt/n8KzjrNoZHSM3MuxirGG3kdQQefmAIOPag63ZKMyvPEucb5raWNR+LAAUAaA3Zz7/AOe1Bycf5/pVOPV9NmP7rUbR+cYWdT/WrAnjIGJUP0Yen1oAmBPt/n8KQbjg8f5/Cm71LYDDPXr2prTxK0aNKoeQkIpbliBnjmgB5LZH+f6UMTsJx2/z2o3AnrSbhtJLDp6//XoAdz/n/wDVSDPP+P8A9agNxy3f1pM9eR/kUAOy3+f/ANVGG/z/APqpu8Z+8P8AJprzxxlFeVVLnagJxuOCcDnnoaAHjPOR39aQ7uOP8/lTWmjU/NKi/VsVF9vsyyp9rg3ngDzRkn86ALXzen+fypvzY7fn/wDWqpNq2nQSeXNqNpG/9151B/LNR/25pO3/AJCll/4EL6fWgC/znH6/5FBLbPw/z2qiNb0tpkij1G2d3OAI5Q3OeM4PH41Fea7p9qRG10kkpdY/LhYOwJOMkA8AdTn0oA1Dn/P/AOqk+bH4/wBPpVW41SztpvIlmPmgBiiqzFQehOOn41CuuaWxC/2jbBicYaUKc49zQBoktgfX/Pajn/P/AOqmCZCFKyKQfRs/1pS3y/eHT1/+vQA4Fv19f/rUmW4wM/8A6vpRu9+/r70hcBRucD6n2oAcM/r/AJ7Ug3bB9P8APal3D17+tM3jZ98cjjn2+tADhnP+f8KGyEOPT/Pak3qGwXUZPGT70FhszuHT19vrQBT1zP8AZVz/ALv9R7UmqFt1nkY/0pf/AEE+1Gtv/wASq4+b+Ed/cUmqHmy5/wCXpe/+yaANAE5HTr61NUCn7vPU+tT0AFFFFABRRRQBVvruC1aEXEqR+a2xC5wC3pn1rG8V/wCpsv7oud7fRUc/4Vt3sCXMRhlVXjdSrowyGB7Gsp9ChZlD3Fw8Ko6eQ8pK4YY6n5ume/egDXUYA57UAcn/AD61nx6TCFANxeMoHAN1J/Pdk0g0TT95LW6u3952Yt+ZOaANE0uKzTotgcboN4HQO7MPyJxTv7D0s4/0C146fuhQA651axtbkwT3UUcgwSCfug9N3pntnFZ/iskW1o39yfzOP9lWP9K1ILC3gheGGGFInJLIqYDZ65FV00WyimRo4FVVDL5e47CCMH5c46e3egDRx/KgCs1NCsFUIsJWMDiNZHCj6LuwKUaFpZUhtOtCf7xhBP5nmgDROcil6f5+tZ39iabuGbC2I9GjBo/sTTM5+wWoP+zEF9fSgCSbUrKC5W2luoUmIGIy2Dz0/Pt61n+JDmbTB/zzukmJ9lO0/o9aKadapbPbJbQCCTO+PZw+cdfXt+VVv7CsfNZyjMphaIxtIxTaxBPBPB+UUAahHPfrSgVnf2Ra8Am4IB+6bqUjt234oGh6b/z5Q7v7xXn885oA0QOaRhyODWf/AGLYkENBuAOQpdiPyJpDo1kpHlxeWc9Y3ZP5NQBdM8QnEBlTzWUsIyw3Ecc49KxdeB/tfRzj7khb6ZZV/wDZjV0aHp5R0NrGdzby5yX3Dod+d2fQ5qJtCglkZ5bi5kBQKqtMx2YYNlTnIOVHftQBrd/8+1Ljn/PvWb/ZEJO2ae6kXHRrhwO3oRn8c0g0LS93/HhbZ/vGMFu/frQBpD7o57UDqf8APrWcNC044zaxsMcBssB+BNKND03PFlbjj+FMD8qAJpdRso7wWkl1CtwxXEZcbuenHv2rM8S83ml5/hnD/kyD+taK6bZx2r2iW0Igc/PHsGGzjOfWol0OxWXf5O5TEYjHIzOm0kE/KTgdBQBoqOBQRz0rPXRbIKEEbbB0XzXwPw3dKR9E03gGyt+O+wZ796ANIcnFH0rOGiabnH2OAj0K5/rSLotkFxHGYxnpHI6fyYUAWZbu2S6jtpJ4lnkGUjZwGb6DqayfEv8ArrAckpOsvHorp/jV/wDsaxWF4BaxGOXmTcCxcjGCSTkkeuahGh2gmZ5HmljMLReTNKZFwSCT8xJ/hHfHtQBqge/+eKAOfwrOXR4goQXF3sXoguZAB+O7P60DQ9OzzaRE/wB45Ld+5OaANHH1pe9Z39i6eTn7LGT75IH4E0v9i6dnItY1/wBzK/yNABPpNtPdG4BmhlfiRoJWjMgHQNjr9eorK1e3i0m6W9tFZZntZYQ7OzksSpTrnuD+db9vAtuixwhVjXOFx/8AXrN121nurjTPJj3JHdq8xGBtQBjnr6gfnQBMmgaYFAktlmYdZJvndj6lj1NO/sWwH+qieE9MwSvGf/HSKv4Oe2fpQAcdvy/+vQBn/wBh6ZuUmxiZufmddxPTqTzT00nToTuisrdGx94RDP8AKrZByOR0Pb6UH7vbp6f/AF6AIZtPs54/KmtYZIw24I8YIz64xVDX5VsbW3uQOIZiwA/65vWvg89D+FZuu6c+qWSwJIiYmRiWH8IPzD8VyPxoAsabai0062th/wAso1U+5AGTVrb7mkwcdQTnsP8A69Lz7fl/9egBjQRyf6xFbtyM1WfStPYc2Ftz/wBMV/wq2oPPTr6UMenT34/+vQBnnQdN3+ZDbi2lGcS258t/cZHOPbp0qpfadY2ElldpGRJFcAeY7szKrAg8nPrW4AfUflWL4tinm0KZbZS8xZAqqMnJIH9aAF0vTLe6s4bu9iMtzcJ5rs7EkbsHaPQDOBj0qy+j2+wiKW7hOOsdy/H4E4/SrqrtChcAAYHFOOdnGOnpQBRGlKOt7fE56mc/0pP7KyCDf3+M/wDPbH6gZrR6Z6flTcHnJGPp7UAZ02i274ZLi8imB+WZbhmYD0+bIx7Yqpqem21qlrdl5pJYbiMrJPM77ckBsAnAyCegFbuOOCOvpWV4phubjQbqOzj8y4KgxoOpOR70AN0awtrizS8ubZJJ7r987SoGI3HIXkdAMAfStD7HbFApt4tuOmwY/lUsSeXEqAjCgDpR2GCP8j60AEUEUCbII1jTP3UUAfkBSkdP89qcQfb8qbzt5x+XtQA2WGOdCk0aujdVYZB59Ko6tBHDolwsUYRI49wVBgDbz6e1aPO7qPyqpqttJdaTeW0RXfNbvGuRxkqQKAItEVWt5blR/wAfFw8gOPvLu2qf++QKvFFKlSMg8HP0qDTYHttPtoJNu+OJVbHIyAAcfjU+CM5I/L2+tAFRtH01hg2NtjPTyl/wpo0TTQcrZxLxztGM8e1XyDgcjr6UDOO3T09vrQBmTaLbmJhbzXNuwIKGO4fapzwducH6Yqlq2lXNxo92b6/llby2fyolVIyVGQMYLYyB1augAPPI6+nvUcsfmRMmQAwI6e1AGZDbware3UlzulhiYRRxFj5Y+UMTjoSd2MnsKsLomlqnGn2/3cf6sf4VS8FlpvDllOy7JJlMrAjByxJ/lgVt4Jj5x09P/r0AUE0TS1J/0C3PbJjB/pT49H06JhLFZQo68hlTGD61cHJ4x1Hagg+WcY6en/16AGXFpBdIEuYllQNuAcZGR3pLi1guo/LuIlkQMGwwzyO9TYPfH5UwZwckY/8ArfWgB4GNo9DUtQ4+ZTkYz6VNQAUUUUAFFFFAEcpwV/HtTM98H8qfL1UfWm456dP/AK9ACBsjjPT0NAb5jjP1wfX6Uo6cen+FIDyf8+tAAWx2P5Uu4+4/D/61JnmlB56UAJu5Iw35UhbkcN19DTu9IfvD6/40AG7jv09P/rUBu/P5Uoz+n+FJ3oACeR1/Kjdzn5vyP+FL3GR/nijHPQ/5zQAmeMjPT0/+tSbue/T0Pv7Uo4xx2/wozj/9f1oACcHkHr6fT2pQ3Xhv++f/AK1IfvdD1/wpe/SgBN3Pf8qGbkcH8j707PbH+eKafvDj/PNAC557/l/9akB4zz+VKB/n8vej/P8AOgBC3zcg/kfb2o3f735f/WpTy3+fajv07/40ANU5Hf8AKlDZPQ9B2PvQOMf59KUfe/D/ABoARm55z1HY+3tS7ue/5f8A1qQ5z36j+lO6EcUANDfX8v8A61DNz0P5H3pRSH6GgA3cnr+X/wBahW46H8j7+1KOvP8AnpQDntQAhb5hwfy+lIT16/l/9al6sB7f4UHOT/j9aAAN6A9fQ/4UBucYPQdj70ueaB7eg7/WgBC3qDjPof8AClyc9/y/+tQev4j+lLz6UAMDc8A/kaVjz3/L/wCtQvNDfj0/xoAUt356+lIrZHQ/lTj1P1pAeOlADS3zDg9+309qCTg5z09KU9QMHp1/EUN0PpigBc9ev5f/AFqTPBHP5Gl7mkP3T/ntQAhbHrj6e9Oz9T+H/wBakb6H8/elz7GgBA3UgHqexoJwRnP5f/WoHJ/Gj8P1oAXP1/L/AOtSZzjr+Rp/em5oAaTyOD37Ghidh69PT/61KTkgc9/5ij+Dn+7QAbvY9fT/AOtRu6jn8vb6Uvc0mODj+ftQAE/X8jRk46H8qXGPz/rRk46dv6UAJuznr19DSBuBwfy9vpSjqT70nYcHp/SgBxb2P5Um7Kjg/lTqTPH+fSgBN3IHP5H1oZvk6Hp6H0pe/IP4Umfk79P6UALn6/l/9akDfXj2Pp9KX/Gkxxx/P2oACcY69fT3ozx36en/ANanHjHHf+tNHI6Hp/SgA3fXr6H1+lBYDAO7n2Pp9KUf1/rSdhn/ADxQAZwOAfy/+tQG+QYz0/u+1Oz/AD/rTeqcdx/SgBNwz0P5UM2E/izj+77fSlB5PHcd/ejOEJx0H9KAFDc85/L/AOtSA8Hrx7e30qnrLOmmXLxuyMF4ZWwRzVW6tRay2jxXF0d1wqsHuXYEFT1BNAGuG5AwevpU1QgY2/X+tTUAFFFFABRRRQBHL1FVBfWrJE4mG2aQxRnn5nG7I6f7LflVuU4K/jXOalHDpkWkx/vJANTBXoDukMnX2G4/lQB0A6f/AF6ADk/4/WkB4xxQGO7H+etACkdu/saXHp/Om7jnpn/P1pQf88UAKB1z/OkxyMHv60A5J+tZ+q6g1g9gqoGFzdLCc/wghjnr6igDQ+mOnrQB70ZPp2/z3pAT6UAOxyP8aTHP/wBf60ZORRu56d/896ADHT1x60Y5P+fWgHgcdv8ACs7VdQls7rTYo0Ui6uvJcnsvlyNkc+qgfjQBokc9e/r9KXFITzj3/wAKXOOf8P8AGgAA5P8AjTSORzShuen+eKGPI4/zzQAuOeP50gHH/wBelzisy/1CWDV9LtEC7bppPMJHICoSMc+uKANLHzDr+f0pcc//AF/rTckN06//AFqdnnp3/wAfegBAOB9PWgDnv27/AFoB4H0/wozz07f40ABHPXuP6UpHPH86Qnnp3H9KoahqD2uoaZbIikXUzo5I5UCNm459QBQBoAe/60hHP/1/rRuPH+fSkY/5/OgBw5+v1+lAGKN3J/z6UgY+mP8AJoACDnr2oI/zmgtyOP8APFZupag9rqOl2yKpW7neN89gInfj8VFAGng/5NIAcnr09aXJz+P+FNDEt0GMdfzoAUg+vf1+lKB/nNISfTuKN3PagDL1jVk0kRmSN3Egk2Ybq4GQvTqefypLHVJbvUJrV7XZ5S5Z1lDhTnhWwOCRzjnjrio7+8to74W2sRwR2xIltppWG0upBwc9GB5Hr+FQ2E9jH4ie006K32yWrXEksTZyxfB6HHOc0Ab54/P1qKO6t3ma3S4jadRlow4LAe47VlQ/adcjE00iw6c7Bkihz5ky9tzZGAf7oHpz1FOvbGKyggudNtY0e1kMnlxIAXQ5DgDuSOfcqKANcj5uvag/d98etZa+ItLdlEd3HI5GQkYLt2/hGTV22vbe8g861lSWPplT0PcEdj7GgCyB/nNJjqc8VB9ut/tf2XzovtGM+VuG7H0zTJb+KK9t7OQkS3Acx4HBCgZ/mKALRGf8+9GRUdxOlvA80zKkcYLOzEYUDqaxguoX6PqEM0tscg2tu2ArKB/y0HX5v0GO+aAN0D3NIR0xWP8A8JLYxxqs3mJdNwLVoz5hfIGwdic8fr05qU6rcRbWu9NuIoiDl0xKV+qrk/lmgDWxz/8AXpuMAD+tYj61cGR7uKAf2ZEQsjPGyy88lwDj5V4zxnr6c6Euowx3FnCcl7ot5RUZB2qSe/pQBbI+Yc4/Ggj5Pw9az7nXNMtpnhuL62jliBLo0gBXgHpn0NQp4i0+UqsEjyrkIzrGdqMeAGPYnI49x6igDXApMdz0+vtRuyx+tG7/APX+FACkfz9aP89aCT6d/wCtZWrak9nfaZboEK3MxWTPXbtPI5/vFaANQcZye/c1QvNVtLS6it5pGV3APCsVUE7QWIGFBPAz71DcXt9cyzW2mwRqI3KSXMzDap4+6o5Y898CpINKto7SWB98xnTbPLI2Xk4PU59zgDAHagDSHU/40mMKM/z9qyY01u3Cwo1ncKp2+dKWVyPUqMgnoOoznt0pRdapabWvoY7qIj79nGQycd1LEke4P4UAauOev6+9BHyE9setZEmvhMsNPvikYLTM0O3y1z15Pzevy5P8qr6p4ktUhtV0y8tLiae4RNqyKx2Zy5wDn7oNAG+evX9aaXQEBmA3HgZ68Vn3WqSpevaWdjPdSRqGkZWVVTJ4UknrjnHoRVKXSJ7+OW6vyi3+P9G2sStsQMjae5yBk98Y6UAb/UDGevr70o6f/Xqrpt2L2wt7lVx5qglf7p7j8DkVZ3cdunt6fWgBQOv19aTGen8/agMfTv8A1qO5uI7aEzTuqRpyzHoP1oAlA569/Wkx8g9MUZx+f9axk1HU7xc6fZ2yW5J2XE8pO4Addg9TnHPQZoA2Qpyee/r70EfIfp61S0zUReq6unlXMRAnhJGY2/wPY96uk/u+gPH9KAKWuD/iU3P09fcUmqjBsv8Ar6Xv/stRrh/4lVyMfw/1FJqZybLPH+lLyf8AdagDQwdy896mqEHleO9TUAFFFFABRRRQBS1S1a6jQRzSQyod0ckZ5B9x0I7EGsXV7fUJILWW9NuEtZ45WMRYlyGA6EcDBPc10coyV/GqGs2cl/plzaQyLHJImEdhkKex6+1AFa0l1W9tUuImtLdJVDorxtIwBAIzgrzUmNaTILWM59cPDjk/79XbeIQwxxIPlRQq/QCpAg3GgDP8jVZMCW8t4l7+VAS34Fjj9Kc1nfA/LqkuPRoUP/stXioOcj/P50Y/z/k0AZTaPO0huDqU5vFYGOToirj7pQcEHnPf0xgYraxb3hW1uL+eDyra4icCNCuT5gG4kk4ABPH61vbRk8Vna/p76npFxZROInmXaHIyFOfT8KAI7JdTvLSK5mu1t/OQOIooclAQDgls5P4D6VMbTUQf3Opk5GD50Ctj3G3bz9c/Sr4UYHA6f570BewHH+fegCj9gu2wG1S598JGP/ZaQWF0DhdVu8f7SRn1/wBir+0Zpdoz0/zz70AZJ0iYy/aBqN0brjEpYbQo/h2ABSOT2z7+lDWILy3NvqWo3MMos3BVIYTGMscEklj2+nU10m3AAA7f571T1bTo9TsZbSYsqSbCSh5GGz/SgCGCDVJYke4v1jdgCyxQDaOnA3Z/Ola31hfljvbaRSPvSwHcvvwQD9MCtDaOmO/b8PenBR6f5/OgCgtjeE4fVLk8/wAMcY/9loayvAAF1Ofj+9Ghz19FFXwoBPFIygkcUAZb6VdeYbiPUp/teeGbmPGOFMY4x3z196z9a+12bQarfvCRaFtiQg85U5yT9MYrpQoz0/z+dU9R06HUbdYJ92wSJJwcZ2tux9DjB9qAIo7XUnUNPqHlueqwQqAP++sk0rW+qoSsV9FIp/imgyy9f7pAP04+tXtoLdP88U4AdMcf/r96AKAs70gBtUn6fwxxj/2Wj7FeDhdTuOn8UcZ/9lq6F4GBx/n3pQvPPoP60AZbaRceabhdRuPte4Ykb7m3GNuwYBHJPrnvVDWormzNvquo3Mcv2NvkWKIoo3cEnJPsPbJ610ZUE9O4/p71Q13Tf7U082m8IGkjZiRnIVgSOvcAj8aAEhtdRkhV59RZJWGWWGFQq9OPmBP60PbaopxDqMZUjkzW25h16EED8wa0AvtSFRnp0/8Ar+9AFM2V23Dapcgf7McYP/oFN+y6mnEOoow7efb7j/46Vq+AMnj/AD+dCqOP8+tAGUdLvTKbh9TlF0TkbFIiC9NvlknPrnOfcVQ1tbuz+zatqE0TpYvwkURUHd8pJyT7AfWukZRuHHb/AAqlrOmx6pYPZysURnjclf8AYcPjr324oAiittUlRJJ9QETkZZI4RtU+gzknFKbbVkBSK/hcEY3zQfOvv8pAP5VohQPz/wAKQLzkjnFAFA6dcsuJNVvD67RGufySlGnXKkbNUvAM9G2N/NKv4HTHel2+1AEUCOiBHd5CM5dsAn8hWRraiykFxAixt9kuQCq4yxUN/wCyCtoKM9KxPFYxbwsO5dfzRvf6UAbNvCLeGOGP7kahFHoBgCpBnFBQdMd6QKAMAUANSNUY+WoXcdzYHU8cn3qtdaZZ3TtLcWkEkhXaXZASR6E4q0R84yO39R70MOD9P896AKUmj2jW/kQRLbBZBIjQKEKOMDcOOuOPpxVOTTjBqOnXEt3cXEomZFM235QY36YUdwK2tvqP8/nWfq7CIWkmBlbgf+gNQBW0+wTUIkv755bgvJ5kSSMfLjG/K4UcZxjk5NbQzj/P+FUdGiEejWKddtvGP0FXSo9KADBJ78Gg7uOv+fwpFUZ6d6UgccUAKwJFc2dJkstRspmuPMhhuGS1iC48tXVsgnvzgD0ArpNoz0rO1YbUtDjpdR8/j9aADRkVrHcQCJZpZOec5kJB/LFWNRtTeadNblipePAb+63Y9Oxwag0Jf+JNpxI5NshP1KirxUbPwoAy0i12c5mntLTaBtEWZQ7Z53blXA+n50kra3a/Ptt7xWOPKhQxMpxwdzMcj14z39q1gvXgdf8APejaCDkd/wDPegDDg1e/vHNtaWkP2uDIukllISNtwAAYKeoyw46Y9aSbT3t4UurtllvpbiEySqMAAOuEXjhR+vU1uFF545zVLWRixDHjbLEf/H1oATQxmx8wdJpZJeP9pyf5EVf5wOv+RVDQExoen56/Zoyc+u0VeCjA4/zj60APORSfNijaD603GABjjH9PrQA75s96o6yMaXO2DwFJ/Ag1dC89P85qjrij+xL5iDxbu3A9FJoANK3F79+u+7b9Aq/+y1fOSOOv/wBb6VR0kA28pxnN1Nn/AL+sP6Vd2jnjnv8Al9aAMybQ7aWV3Et3EJHLtHFcOilick4B6nn86a2hRxKfsE89ixXB+zuMNx1IYEZ98ZrVKg4+v9aAOOR/n86AMS4XxFBujtJLG6B5WadWQjH8JVeCTxzxjnj1oazFrWpaLdSXP2eztim42xBeQKvzHLA4B46AEc9a6pUGScd/61V1WISaXdRqDloHAx7qfegCjeWSarqc0F00xtYIlAjjleMF2LZyVIJwoX8zWtDGIoESJQqIgCqvAAAqhpDrPJezAg75VI+nlp71oBQIxgdqAKl/pNjqLq19aQzsnCmRMkDNQQ+H9LtnWe1sIIJl+YPCuw5x3xjI9jWmFG48en86CuUOR2oAZPbxXKhZ40lVWDAOMgEHg9KS4gjuYvLniWRMg7XGRn8qlC+1IAByP88fWgBQTuGfWpqh2jcOO9TUAFFFFABRRRQBHLnK496byCTgZ/z7U6U8rz603nOePrQAik+g/wA/hQGO48D/ADmjPHB7UZBJ5Gf/AK5oADk5/rRkg9M/n/hRkDuKU9e1ACZOTwPzo5BHTr60oIyeR1pCeRyOtACjPp29f/rUgzjoM0oP8qAe4IxQAc57fnRk56c/X/61BOGAz/nijvnj/OaAEBJAOO3+e1JznoOg/r7UoOQOnSjPPXsP60AITz+I/p7U4E+g/WkzznI6/wCFO/GgBATk8D86RicjAHX/AD2pQck8ikJAI5H+c0ALnB4A/M/4UgJx0FL37UA55HT/APXQAgJDdB+f0oz3A/X/AOtQT8w5H+cUueeooABkdh0pATu6DoO/1oXoOlAPzEZ7D+tACEnPTuP6e1Kc5HAoJ55IAyP6U7PI5FADRn0H50MTkdKUHPccZpCeeo/zmgBQTk8D/OKQE+gpc88EUKc45H+c0AIxO4cDp6/SkOeTjnB70rHDde3+FB4yTj/OaAFye4H+fwpATnoMY9frS554x/nFIDyee3+NAASfbr/ntS5PoP8AP4UEj1HUUvU9RQAxSc9B1PesLxhk2tmMfeulT81YenvW8DzwR1NU9UsI9QSFJGKiKeOZdvco2cfQ9KALvOegz9aBnHQUE4PWgHI4IoAbk7h/n09qGJx0HSlP3gMjOD/ShvunJHTrQAZOTwPz/wDrVkeKSy6UZAB+7kU9fXK/1rYB9xWN4vYL4fuix6NGTj03rQBqW42W8SgDCqox+VSkn0H6/wCFMTAReRjAp44zyKAEBPPA6+v/ANagk8dqAwJOGHWg8Y5HSgBcnPQf5/CszxASmnh8DKTRHr6uB6e9aZ+oHNZPilgvh68lzxGokz/ukN/SgC3pwKWFogx8sKjr7D2qyc7c8dKjtcLbQDIGEHH5VKT8hOcDFAC85PApAeuQMf8A1vpTgevIpqnqMg//AKqAFJPoOvrWb4jYroN9JwPKgaQH0KjP9K0ienIHP9arajaLfaddWcjYS4heJiOo3KQf50AJpQKabar2EKAc+wqxzxwP8/hTYEEUSRK2QgCgn2p+enI5oAXcc9B+f/1qbzgZA/yKdn3pM5QYPb+lAASc9B/n8KralGZ9Lu4eP3kDr+akelWv4uo/yaZKMwOuRypH6UAZ/h2U3GkQz4H713l/76kY/wBa0snB4H5+30rO8M201l4f0+2ulCTxwIsi5Bw3fnNaORzyOv8ASgBSTxwOvr70Z46DpQSAByOv9aP4e3SgABPoOvrTJV8yNo+gYEZz7U/I9R1pNwGOQPb8KAMTwi7yaa0rAAuyH/yFHW2CfL6Dp61h+DBjRlOesjL/AN8nZ/7LW4DmMYPb+lAACdxxj86Uk7DgDp60AjJyRSEgRnJA4/pQAu4+35//AFqaMjjAx9fb6VT1xmXSrkq7KdvBVtpHPqKrXdpFazWbwPcBjcqrZuHYEbTwQWxQBrgkleO/rU1QgjjJ/iqagAooooAKKKKAI5eo+hqHz4TsIlTDuUU7urDPA9+D+VM1L7aFjNglu75O5Z3Kgj2IB5/CuZFjqlpLo8V01mlvFeySSNHuclmEpUc4wPmx36igDq43R9wRlYodrYOcHAOD+dOH3jx/nmsDR49UaO4vIfsipey+eiSBtyqURRkg9cKD+NW2u9RhJE+n+dn7rWsikE89Q5XH4ZoA1CM9adjiswvq7YK29imexndsf+OilzrPP7qwPofMcf0oA0QOTSdSOKyml1iFzJJaWs0Q4McMx3/UFgB+HH1PSke61Jb+0WeK3it5XZCFcu+7aWBzgAD5T69aANcCgACseyuNUv7eO6iWzgimQPGkiszbSARkgjnGOO1SmTWE+X7NZS54DCZkx9QVPH0NAGljkUoFZqprG4ZewUY5wjnn86Xbq4OPNsTjv5bjn/vo0AaA6D6UmOT9P8azC+uI+4xafKmPuiR0b65IPtxioJ7nUbO9jlvjbpZsjoY4csd4UuGJOOysMe9AG11PI7/4U+siEazLCkjS2MTPg+X5Ltt6cbt4z+Qp0k+sRAqbG2mduEkjmIUH1YHkD6bjQBqAYNDdRWekWrFfmu7IE9hauf18yhotVAwbqyz/ANezD/2pQBoAc0AYrJ8rW1kLrPYSqTjyzGyADHUMCeenGPxFV7m+1HT5DLfram2MMhCw7shlUtyT6gN2oA3f4s+n/wBalxz/AJ96zIodWaNXa7tVkIyU+zEqp4/2wfxprT6vHmNrKCVz9yWOXanf7wPzD8N1AGov3RQo+b8B/Ws5V1hgMyWA4/55uf8A2al26vu4+wsOOu8ev1oA0DyfxH9KU1ks+uJNnyLCSM4G1ZXVh7kkHj2x+dRy3Oo2l/HJfG3W0aOQbIiWIZQWyWOOwPFAG0KRhyKzbb+154FlaSyiLjcIzE77R2BO4c/hSNJrCZU21m7Ho4nZVHXqCpP5ZoA1F6n/AD6UYxWcI9WY8yWK4/6Zu3/swpFGsAYH2Bh6/OP8aANFgNw+n+FBHUf571lFddExYLpzIRgRlnXHvuwc9uMDp1qCe51Czu0mvpbf7MYpAY4lPBCltxJ9lIoA3cYpB1PHasu1h1aWBJpLuCKVhkw/Z96J7Z3Ak++R9KQvrCFkFvaSk/clEjIo6/eU5I/An8KANU/1FKOprOEOqkAG+tAT122jf/HKeINTHS9tT9bQ/wDxygCtrmrtpAjbyRIsu9E5xmXGUX/gXI/KodP1q4uNbl0+4t41AhaVJI2JDbW2kZIwevOOlXY7i3kuBZXFxby3i/O0YXHIIIIBJxjIP5VWjltoPEZs7e0iSae1a4kmRAC+GC4J79etAGyRz0oA4qvdXtvZp5l1PFCvTdIQM/TmobPVILqUwx+Yr7d6iSFk3rnqM9R/9agC6fvA+xpG6HjtTHdUwzuqryMnj096dvVkyrKQR1HP9aAHj6Yqve2sF7ayW9ym+KQYZc9e9Q3Wq2lncpBczBHcZyVOFGcAseigngZ6msu8mS48Saa9u++O3Lo7LyoLpwuc4zhQf/10AdCR29/60tZC3t9eySf2fFAsCOUE05PzkHB2qO2eMkjofxkI1pOQthMP7uXjx+PzZ/IUAaQHPTuaD2rOB1jbzHYA9z5j/l0pqT6rvZGsbc7f4xcEBx7DGc/XH40AaoqC8tYby0mtLhd8M6NHIueqkYIrMeXWHdpY7aGJIyP9HdgzTc/NhgcLx0z1PXFVLu9uJdU0lxDdW8KSv5wlTAJK7VBIJB6noaAOiChdoA4Axil/g6H7tZ0urRid4re3ublo8q5hjyFPHGSQM/SkTVv38dvc2k9o0ykRPNsKuQPu5Vjg45wetAGmO9Jjr/ntSBge46+n/wBeoJruC2G64uIolboZGC5+mTQBYI/nR2/D+lNDh1UowKtyCOQf1qG6vYrSW1jlOGuZPLjwO+0tzz6Kf0oAnA6/WjsP89qZJMkEbPNIkaKeWc4A/WqEetWs08caeaI5SVjnMZEcjY6KSfrg9D2NAGoaToB9KZNNHDGXmkSNB1ZjgD8zVVdW08jAv7XP/XVf8aALvccUEfJ+FZd1rtlA67JDcDBZ2t18wRKOrMQeB+vXjiota1Y21hBLYyQyNLcRxAghhgnLd+u0NQBtf40g5z1H/wCqqt3f21pKsU0mZXGVjjjLuR67Vyce9Um1a4jhN1Jp0yWgI3MxHmKuOW2An5R9c+1AGwRkD60VRfVLBIw731sq9cmQcj86b/bFoU3/AL/YejfZJcH8cYoA0AOPxpPT/PasuTXrNATF51xjJYQQltgHUn2/X0zT9U1OKy0p9STE0SIGUJ/GD0wc+4oAsaZYRabaLawFigd3y3XLOWP6sas4xHx2Wqt7qEFnsErZkkOI4o13O59gKpNeaoYDNFpyLGi58qaQCVxjnAXIB9Mn64oA1wMsfr/WlPMfPpWXBrlhNzBM0pIBKRQvIV9iFBwfY1KmqRysEjt7sbuAzWzqB9SaAF1wf8Sm5/3R/MU3VPvWX/X0v/oJpNekVdKn3MoyABnucjjrSauwjFm0jKFF0nJ6Dg+9AGlj7p96lqAAkqc8ZqegAooooAKKKKAI5TjHHrWF4xlkg0GaeLIlR4ynHcuF9P8Aarek6j8ahnhjuEMc0SumQdrgEZByDg+4FADbdBDBHEgIVFCjjsBj0p4OSeOfof8ACnDgfhSjqf8APc0ANJxnr+X/ANalzz3/AC/+tRzSjg0AJnk4z78VieLZWh0tZkyHST5TjoWVlH/oVbnrVPVdPj1S0+zTsyoZEfK9flYN/TH40AWIkWGJY4wVVFCqMdAOn8qdnvz+RpQfY0D6UAJuwR1z9KXPfB/L/wCtRzkUvfof85oAbk9Rnp6f/WrC8XsTp8KgkNJOsQPu4ZP/AGat7J4+lRzwxzbRNGr7GV13DOCCSCPcUAO4AAwcZGMD6e1Oz7H8v/rUd+PX/ClGfSgBM8kY/Q+1Izcjg9fT6+1O5zQ3XpQAnOe/T0/+tWR4gtprxbBIImkRbxGl9o8Nuzntg4/GtcUD6UAIW+bv+R9valzzk5/L6+1HU/59qXv0/wA80ANU5xjOMen0oDEseD0Hb60ozjp2pR978B/WgBCSTznqOx9qxfFeWtbWM5AluPJYgdA6Op/nW1k56f54qC9s4b1YluFJEcqyrg4+ZeRQBMp6AA4+lDE56H8vr7U5aRuvegAycnr+X09qQHjjOPp9adnmgH2oAaWO5cg9PT6VheLjm2tI2zia48kjHUMjjH9K3z1HH+eKr3dpDd+WLiMOI5BKgJ6MM4PWgCYMfQ9fT/61IrHdyDnHp9fanAYoHXp2/wAaAEzxznr6H/Clzz3/ACo56Y7/AOFLzQBTu7K3vQFlRgQ25XQlHVumQRyDjisu9hXTL6HUZZp55PKeNnlC5CKrPjhQOorfHWsTxW22xXqCfMUY94pBQBY0rTUt4UuLiPzL51BmnZcsSeSBnoM5wBU97Yx3gjYtLFJGSUliOGXIwR06H/6/arvfpR2oAzo9JsEZGNsJGUHDS5kI6d2zSvpGmnLfYYFYjlkjCn8wM1fOcj/PcUHOD9KAKttYWtsJRDAAJTmQnLFvrnPHtVXUIYreK1MMaxBLpGIRcDnj0961ay/ETbNKd+flliP/AI+tAD9CyNGsWYHc0KO3XqQCf1NaGT6HP0/+tUFgpjsLaM9ViQfkBVigBobrwfyNBPQHPtx/9anDrSHigAz7H8v/AK1Z+rj/AEeBgDhbqHt6uB6e9aIqhrLbbFWPRZ4T/wCRFoAZoQxpkDgEGbdMeP77Fv61ZvLaG6tnhuY/MjYcg56joeOhz3FQ6Gpj0bT0xyttGP8Ax0VeP3f+A0AZ39jWDDElt5ig/dlZnB+oOc1JbaZYWzs1tZwxMRg7I8AD2GMCr34Ug6Hj/OKAMm40KyyJbOJba5Rw0UyIfkOemP7p6EcZ/Wq2q2l4z2d1d3Mbi2njKrFblOS6gkkse2e3eugP071R1jjT2PZXjJ+gdTQBVsbZL27nvrtTKUneOBXGViVGKkgY6khjnrzir17bRXduYJlYqwGNuQVI5BBHQg4P4VFoZLaZDJ3lzJ/30xb+tXuw4/zigChBpNnE/mvF58/UzTje/X1I4+gwKt7U2jEY6cfL/wDWqbmm5+Uf57UANCoDgIBn0X/61ZWt2FkunXd2LOEXMUDMsoiG8YBPDYzWvzxxVfUkMml3UePvQOv5qaAK2mgPeahcOpLtP5YJB4RQMAcdMlj+NX89eD78H0+lZ/h9/M08y8/vJnOT/vEf0rS557//AKqAIkggix5cKJz/AApjv9Kk7dD09P8A61OORj60dunb+lADfwPX0NY2paDZy2lxHAksPmqSY4mIRmHIJUcZzg8DnvmtsUnUD3/woAydJkW9u5r7GWaKJF9ApXecfXf+grUH3BgHpxx7VieED/xLjjPy+Wv5RJW6M7OnagBq7QSAMZPPHvQThDkHpzx7Uo6n6/1pT9zp2oARlV+HXcM5GV/+tTSoddrAMPQj/wCtUgJpOx4/zigBAfmUc4z6VPUXcdetS0AFFFFABRRRQBHIOVpuOf8A69Om7UzPPQUAA4HJ/WgD5jyaTPHIAoz7d/60AOIz0/nS496Znnpn/Iozj0/z+NADtuCef1oxkjB7+tJk56fpSZwRxnmgBcen86UDjrSbvYdP896TJ9KAHY56/rRj8/rSZOfagHnp/nn3oAAOB9PWgjknPYd/rSZ9u3+FGeTx6f1oAUjn8adj3pueegJz6fSgnj/9VACgc8n9aGXJHJ/Om54/z7UE9OM/l70AOA54/nQB6k0mcHgD/OKAfb8/xoAMfMDk8UuPbn600nDdOPX8qUHnp3/x96AFA4HXpRj5j9B3pucY+n+FAPt2/wAaAFI5/Ef0pSPekzzwO/8AhQTz0/l7+9ACge/60hHPWjPt/nign2z/AE6+9ACjr/8AXoA9T/nmkB+bp/nig9emP8mgBSOQfb1pCMkj+v1pCeRx/nignr/L86AHY9/1oxyT7ev1pCeRx/nj3pM89O3X86AFYe/enU0n2/DijPNACgc9awfGBxY2/P8Ay3x/449bmfasLxj/AMeFtwCPtcKkntubb/WgDoCPc0gHHU0m4+goB9RigAIORz2oIyvXHHrSZ+Ycfj+VBPy9B07f/roAdj3rH8V8aBdMegMZPt861sZ56d6yvEsE15oF7BbJumePCD1P50AaUQ/coD6Cn496Yn3QMdP/AK1KD9P8j60AOAx+frSHHFJnB6Uuc+n+fxoAdj3rK8TER6BeuT/q49+fTGDn9K0wec4/Cs7xHBLdeH9St7ePfNLaypGvHzMUOBQBZsU22VsBkARKOvsKsEfJwecVHbgpDGhHKqB+PFPJ+Xpnjt34oAfj1NNxx/n0o3HJ470A8due/bpQApHGPf1qjrpxo924P3Ii/wCQz/Srueenf+tZniRtvh3VGA5WzlYfghNAEugKV0PTwc/8e0eQT/sir2OBz+tVNKBXTbRcdIUGfwFWs8DgdOv4UAPx70gGFAOenc0Z5xSE/L6ce3pQAuBn2qK5TfaSr2MZHX2qTPP3e/8AWmTHMLgDqh/lQBm+FiW0O3ZjyWkP/kRq1cdf89qxvBzlvDGnPgfNEH49zn1962c8dO/9KAFIzjr19aMD1pMnjAzz/Wk3fL0HT+n1oAcB1/x96THp/P2oJ9u/9aM4AwP84oAw/B4/4l03/XYjr6Ko/pW5j5ME9vWsTwfxpG4fxXM36SFf/Za2v4fw/pQAoHJNKwypwTyPWkHJPB69aQnj8P6UAOyAcE80mMdaoa7zpVzx1XGR9RVa8sbO1ls5La2ihc3KjcqgZG00AbIGSDnv61NUCnDKAOM1PQAUUUUAFFFFAEcpwQT71Sn1OzgP724UDy2kz1G1Tgnp7j86drUsENlI9zP5CbWUSDqCRgYHc+griJ9ISDTorXZf27STmWK4kKZyQvylckgfKGwe4/CgDs7DVbO/LC0mMhRQSNrLweARkcjg8jjg1cHX/PvXL+HLA6HAVexvTK0aLK4CSBmXOSpDZwc9MD6DJraN+MnZZXhPp5OP5kUAX+T64oz7n/P4VmtqcY/1lrfKO5Fs7f8AoOaU6va/wx3rD1WxmI/RaANGjuM+tZy6vp/kSytPsEbYdJFKOpPQbDhsntxz2qpqerOtk4s45YbqQEW7XEJVd54Gc/nj2oA3AT3z0/z2o596zI9V/dobiwvYnKjcq27PtPGeVzn60o1e0OQEvCR1H2KbI/DbQBpDrnmlyc9Tj/8AXWb/AGvZBhvM8Qz96a2kRR9SwAFB1nT84jlaYf3oInlH5qCO1AGjnGPpR3OPT/Gs06vp3kvIbjbsYKY2Vlk3HGBsOGyewxzVXUdXcQGOyhlivJQogFzEVU/OqnPPbeKANs5zjnr/AIU7nrz/AJ/CsxNUUxqZbO9RsAsPIZsHjjjNKdUhOdttfHjn/RJBx+IoA0hnPvSNnPes7+1rUH5orxPUvZygfnto/tS3crshu356i0lA/MjFAGlk570nIrLbW7Fcjc/nhtv2fyz5pPsnU+uemO9UtU1W9EQt7O0ntruQqYTOEKv8wyOGOOuOcdaAOh78/wCelLk574/z7VmrqIBBmsb2Nu48kvj/AL5zQNWgY7Vtr446/wChyjHX1HP4UAaPIwPajnOfb/Gs0avaggPFdxrj7zWkoH/oNB1ez3HYt1IcdYrWVx37hcUAaRyTznr/AIe1BJz3rNOsaf5bO0xVlcJ5TIwk3cELsPzEntxzVTVtXkFt5dhDJFeSbfJFzGVVvmUEf+PD86AN0dM0hJ7Z/wA/hWeuqRhAXtL1SRyv2V2wePQGkbVbfI/cXxx/05Sj19VoA0hnPegZFZ39sWYYhxdRgfxS2kqL+ZUCkGqQkZit7x1zwRbOAfzAoA0jnIz6f4UnfvzWX/bdgCQ7skytt+zshEpJxjCdTn1H9Kq6prM0cBjtLWSK6kA8n7QoCMS6pg4bP8Y7UAb5Jz3oBOffH+NZy6j8oMlleoT1UQk49uDzSf2pCQWW1vumT/okg/mP5UAaRznB9f8AClOff/P4VmjV7EsfMaaEf3p7aSMfmwApf7Xsc/u3km56wQvKP/HQaAK+u6rLpKxOkIkEpeNev+tx8g+hOR+VZ6+ILPUtfbRrqNcxsjwHccvIpdicdgDHx61oy6nEkgae0uFsy3/HzJHhVbg/Mp+ZR7kdao3Mtte+I7CeCWOZIAArRuGGXWTuD1wn6+9AHSnOfxoGcVnNqtuZXht0nuXQlW8iIsoI7bvu59s06yvxPcPby281tMgD+XNtyynPIKsQff079aAL2eR/nvQclec9O9UJdW09HAW5SV+R5cH71zz/AHVyaQaxp7ArLcrA3dLj9035Ng/jQBo8knHrRzjvWZLrVhHNs83KAgNOoJiQnoGccAn69x6ioNXvbiO7sIrKRFjkkV5X4bKb0XaPqXHPsaANo0Z9M1Su9QtLVxFLJmZsEQxgvIR67Rk498YpsGpQy3KW7wzwSSAmMTJt346456+3WgC+MjP1oOff/P4VntqlirlIpTPIGKlLdTKQc8525x+NNOrW6Ni5juLcdmlhZV/Fug/EigDTzk96SsiXXrJZT5RaeBSBLcx4aKLJwNzZ/PGcdTiotZvpQdPjsJkAmuI2eRSGzGHQMBz33AfnQBuY5HP+eKQ5KE88iq13e2Vow+1XUMRI4WRwCR7DPNR2uoWl05hRnWQpuCSxNGSvqAwGR7igC8MnNAJ59f8A61UrrUrG2cxtOjTZwIY/nkJ/3Rk/pUf9qwJkyW94hPraSHt7A0AaJPY561U1YW76fNDeOUhnTyWP+/8ALjp6mqk2rqGLQWV3NCmDLIsJXaM9gcFsdSAD+fFZ/iG8ttQtbWG1uo5AZlmcRsCcRndg88fMFzQB0dvEIYEiQnaihR9BgU7kAZqrc31lZ5FxcwxMf4WcBjz2Gcmo7bUrS4lWGNnWUqWUSxNHvA7ruAz+FAGgCfek5AGP0+lQzz29sm+4mjiQfxSOFH6moI9T02QhYr+1c+izKf60AXTkHvTWYeWSxwMZJbgfjVK81O2tTGAWmmkyI4YBvduRyB6c9TgVma5OdS019PjgvIvPG2VjC6BUClm+fpzjb170Ab0ESW8KQwIEjQBUVRwAOwqTkDg/5xWSmohRBBBbS3M5hSRkiwAgPQsxIAzg+/tST397Zqs99ZQx2uQJHjmLtFkfeIwBj1OeOvSgDXJ4HXrQCSO+f8+1Z8mqWqymFBNcSIfmEETOFPoSOAfYmmjUpFBM2m3sa4yCEV8/grE/pQBp9AetICcDOc//AFqy31iEYFvbXdxIf+WaQMjKO5O/aB+PXtmmXWqRT6Y01hPE8z7UTnJVmIUZGfU9KANOCJIE8uJQiZY4UYGScn9Sak5Ccdh/ntWVpd5DBodhJqF3GrNAgMk0gBdsDPU8mnDWLTC/LcLGzBBK9u6pk8DkgcE9+lAGkM5PXr/WlOSnOelVrm7s7Tm6uYYSeRvkC5GfrzVeLVLaZkj23CeYMK0ltIik49SMUASa5n+ybnr90fzFN1Q/NZYJ/wCPpP8A0E0mvNGmlThmUFsBcnGTkcUmsMsa2buVVRdKSzHAHB96ANEdRn171NUIAJB96moAKKKKACiiigCvcwpI8TvGjtGSVLDJU4xkelYfikPs011XI+3xK30bK+nqRXQSkAjJHemEAkZAIBzzigBAWxnA6f57UoZtx4H5/wD1qAeMgjp/nvSZ5PI/yTQAp3dsf5/CjLDt/n8qMjPJwKXvQBWks4JblbiS3haZOEkZAWX6HGRWZ4ozjS/fUIlx9Tj0+tbeRnqKhuYIbkxeeiv5cgkQHswzg0ATAke/H+e1HPoM/wCfalB+n6e3vSZ9MYoAOcjgfn/9ajLen6//AFqMgHkijIz1FAEJt4WnW4aCIzquBJtG4D2OM1k+IyRe6KcDL3yx/hsdz29UFbgPTkdKhnghuGiaRFdonDx/7LYYZH4E/nQBKSf1/wAPanZb2/z+FITz1A5/wpcn1/zz70AJk5PA/P8A+tRyMcDr6/8A1qXPuM//AKqCemTQAzYPM37V3Yxuxzj8qxNbD/27oY2ghpZFz7hd3p/smt0Hnt/nHvSbVLBsKSvQ+nWgAy27oD/ke1LuPXA/zn2o3c8kf5xQMZ7fp70AAzjoOn+e1Azu5A6ev19qBz6Yoz2BGf8A9dAELW8TXAmMMZlGAHK/MBxxnFZHiNS2p6Jx9662/pv9P9it0nnkgc/4U2SKOR43kRWaJtyEgfKcEZH4Ej8aAHAt6D/P4UEn0H+fwpQevIpO/JFABlsnj/PHtR83Qgf5/Clzz1/zxRn0I/zmgCJolMyybELgEBscjp3xWN4hBOo6LHgfvLvb/wB8gyen/TMVuE8jn1/pTJoIpZYpJUVmhYvGx/gOGXI59CR+NAEmW9B/n8KBuz0GMD+vtS57gjFJnnAIzj/GgBCT0wPz/wDrUvPTH+fyoJ5yTjn/AApe/Uf5/GgBo3dwO/f/AOtWP4jka0toZolUNHIzjtkiKQjtWyDzwawvGBxp0eT1kI+uUcf1oA1bC1Wxs4baIDbEoUcnnH4f5zUOo6ZHqAQyPJE6hl3wthtrDDLnHQj+QPBFXyec5FIDkZBFAEUEKQIscUaIijAVRgDHTtTnXcpDAEY7/wD6qd1IGef/ANVKx+Xk9qAI1iQIU8tNpPK44P6VnX1ja2sCvbWsELNcQAtHGASPNX0Fa2eeorO1+Ty9MZ8gbZoTn0/eLQBHoESjT47raDNd/v5JO7FuRk47AgD2Aq5fWcN/D5Vym5A24YJUgjuCBkU3SlEel2adAsEYx+Aq1nryP8/jQBFbwpbRJFBGiRoNqqvQAfhUhJP+f/rUoIz1HU96CenNADduQRgYPUHv+lZmo2VrbwedFawRyedFudIwCR5ikjOPatbPuKoa223S5m7Lhj9ARQBDokKmE3rIpmuXaQyEclc/KOnQKBU+o2IvYkO9opojvilT7yHHuOhGQRSaECui6eGPzfZkzn/dFXc/KcnjFAFexs4rKBYoV6fedj8znuWOOSTVjLcjA/P2+lO/EdaTcu3GQT/9agAOfQfn/wDWrN1qJF0u8kEah/JY7sc8DPpWlkeoxmqWukjRL4k9Ld//AEE+9AEWixDbc3W1TLPcykydyocqvOOmFFTanZteRoUcRTxOHil27tjD24yCMgj0NN0Fg2jWbZyXiVzk925P86vZ6cigDPsNJhtsSTLHcXRO6S4dBuZie3HA9B2FW5IUlQCWJJB6MM/0qbOOpH50mflHI/yKAIIbSCBy0FtFETwSiBSefYU65y1pKoA5jI/T6VKeT1H+TTJTi3fn+A/yoAyvDBLWUs2ADJICfwRVHb2rWdd6FWUFTwR68fSszwqf+JJAwx8zP+jkf0rVzx1H+RQBDb20VrEsVtDHFEpOERQoHPoBUwzjkdv89qUkccj8/ek6r2zj+lABzg8Dr/X6VA9pA8qytBE0i9HKDcPxxVgkY6jr/WkyMDoP/wBVAHP+GoxM32h1DPBEkEZP8IxuOOO5YZ+grbuIVuLaSCdVaORCrr6gjBHSsjwi2bK4PT9/jn/dWtzOVyCMY/pQBQ0/TI7J5H8x7iZ9oaaYgtgcAcDoP5896vEHaeB0/p9KXPzYyOv9aCcDJOAB/SgBpTd1VTz3/wD1UEblIZVI/P8ApTweeCOtJkYPTj/CgAUkFRgYz/ntU9QgjIyRndU1ABRRRQAUUUUAMk6r+NMPWnS5yuDTOexGfp/9egBVHA+lAHJ4/wA80gzjqPypBnJ5H/fP/wBegBxHal69qafqPy/+vS8npj8v/r0ALjrSY6fWkAbJyR+X/wBeg5yM46+lACjPf+dGMcUmPcfl/wDXoGR3H5f/AF6AFx8wo5z/AJ96MHcOR+X/ANekIOc8Z+n196AFA4/D/Ck7/h/jSYJxyOnp/wDXpcH1Hbt9aADnPPTP+FLjrTT97gjOfT6e9OAI7j8v/r0ALgUjDpSYIPUflQwJI6ce3196AHCkxgUn4j8v/r0DPqCfp/8AXoAXvn/Pal6n/wCv9abht3UD8Pp70YJPUfl/9egBemBQOvQ9P8aQdOo/L/69GDu6joO31oAXv07j+lFIc7sAgHI7fT3pcEnt+X/16AAdaG96QZ9R+VIcjuPfj6+9ADgOT/n0pQMU3n2/L/69KM46j8qAEPUfT/Cl9u3/AOukIJI5GPp9PekIOTgj8vr70APxSD8elJg+oP4f/XowcnBGMelAC9+fWlppz6jr6Uoznt+X/wBegAHHFYPjMhdMiOQD9ojAyepJI/rW6M56j8q5bxtZSX974et45ETGpLKxI4KojsR+QP44oA6roenegDigg+oz9P8A69IAcdR+X/16AF6GkI479KQg5HI5Hp9PelP3eMDj0oAXvWT4rJXw7euDyqAg/Qg1qgH1H5f/AF6y/E9vLdeH7+3g2tLLEUjU8bmI4HJoA0YVCwRqOgUD+VSYpqgiMDIzx2/+vS4PqPy/+vQAo64x3pD2oGeckdfSj8R78UAOxzWX4oOzw5qTA4K2shB9MKTWmAQeo/L/AOvWN4tbPh68tiRvvE+yR8YG+X5Fz7ZYUAaOnpssbVQDxEo5+gqf+Dv92o4VMcUaFh8q4/HinkZTt044oAcO9Azj3/8ArUDPYj8v/r0nODkjH09vrQApGevrWf4hO3w/qTdMWkpz/wAANX8H1HX0/wDr1i+M5ZovDV75GwySoIlDDj5yF9f9o0AX9DXZotio5xbxj/x0VcPbtVfT4ngsbeGQjckaqeO4AFTehyMfT2+tAD6TsB/npQAe5H5UmG2jOPy9vrQAvemSgm3cY6of5U45J6r+X/16iupVt7OaeRgsccbOx29ABk96AM3wgd3h60YdG3sM+hdj/Wtcdz/npVLRbL+z9JtLRHDiGMLuC43e/WrvOOo/L2+tADscDPr/AFpByKQg8YI6+n/16BnHUfl7fWgBwHp60mOn+e1Jg+o6+lITgZyMDnp7fWgDF8If8eNyfW6f9MD+lbeMJj0FZXheFY9IidHVkuJJLhCAfuyOWX8dpH41qrkRjOOnp/8AXoAXuefT+dGMp+FNGcnBHX09/rSnOw9Onp/9egB3ekxxx/niqGuru0m6HGCmDx7j3qpe6bZ2s1jLb20Ebi5UBkTBxtb3oA28fdz61LUAyWHI6+lT0AFFFFABRRRQBFOwUBjnABzgZrHm8RWEXzLI8q7XI2L/ABKVBT1DfOvBrWvIUuIWhkzskUq2CRweDXOXmk6PoVhE62ZeNL2J0QyE/vHZY93J7cHH+zQBtafex31nFdQ7xHKuVDDBx0/pVkHnjd+VVNP02DT4fKtvOEeOEeVmC+wyeKuDknr/AJJoAQnqfm/L/wCtS5+v5f8A1qToen6/SlHPrQAm7r97r6Umeh56+n/1qd69ayvEN5LZWtvJC21mu4kbv8m7Lf8AjoNAGoOPXp6f/Wozz3x9P/rUvbv09fpRQAhPIxkn6UoPfn8v/rUd+9GOe/8AnNACZ+vT0/8ArUm45PXp6fX2pfr6f4VQ1e/awNntQN9ouo4DnsGzz+lAF8nnPPX0+ntQG78/l/8AWowQR1/P6U71oAbn6/l9KC3Tr+X19qXHPf8Azig8EcH/ADmgAzz3/L/61IDx3/L/AOtSj8fz+lQz3UNvJAkzbWnk8uP/AGmwxx+QNAEpb5u/4D6UZ7/N+X/1qXv3/wA4o6Hof85oAQH0z09Pp7UZ+bv0Hb60DoPpSjr36f40AITz36+n09qXOD3/AC/+tQc579fX6Vna1fSWLWAjAP2i7SB93ZSGJP6UAaAP1/Kgk+h/L6+1KB25pCPY0ALnnv8AlSA8d/y+tL0Pf/OKOv8An60AJnkdfy+lIe/X8vrTjwRwazNZvpLB7ExqGWe7SGQHsrbuR+OKANPd06/l9PakBOTwenp9aUde/Wjv36f40AJuPcH8v/rUueep/L/61B7df84pfzoAxde1W401Ynt4fNEpaJQVP+tOPLHHYnI/EVz66neX/ivS7e8a3zBLOQsIBxjKDJDE5we4FdNeLqUdwZ7cxTwBubUrtYjjkOT97Ptjt71mSMLrW7K5W0mhAZUJlj2HcVkJHv0HI496AOmLd+evpQDx3/Ks9tatBK6R/aJipIYwQPIoIxkZUEZqWz1G3vGlSPzEkixvjlQoyg5wcHBx7+1AFonkDn8vp7UHIHOenp/9as5tasSR5TyTc4/cRNJn8VBFKNZs2ZUkM0LMdq+fC8YJ7DJGM0AaOfr+X/1qxfEzOsOnbCcnUbcHjtu5rSlv7SK6W2luIknflY2cBjzxxn2rL8SEPLpkGCWF5HMR/sqyr/N1oA28nuDj6f8A1qXPufy/+tSMcev+cU1JY5AfLdXxwdrA4oAcDwTz19KD2zn8v/rVTm1axgkaJ7hWmBwYo/ncc91GTS2+qWVyP3dymQcFXO1gfQqeRQBczk9/y/8ArVh+KzmzsFXPOp2nUekqn+lWbjVylzJHbWsl0kIBneNh8mewH8RxzgdseorN1i9h1D7GtuspEMonfdGy42kADkcH5v0oA6QnLDr+X/1qQk7ed3T0/wDrVSm1WCK5a3VJ5pU++sMZbb0wCRwPoTS2+pQzzNbFJoZwm8RyrtLL0yD0P4eooAu7vr+X/wBagHsM5+ntVGTWLZZniiWe4kVtrCCMsAfQt90H6mmNqywFRfWtxaK7BVkk2lMkcZZWIH40AaWcHo3X0rC8ZEnQmyT/AK+Dt/00X2q/caxYW8ipNcoC2DwchRnq2PujPc4FZ/i0CXSljB4di3B/uxuwP5qKAN0EEng4z6UmTgdenp/9alJwD161XS9tZJ2to7iJ54x80SyAsOPTPvQBZ3fX8qTPyjGfy9vpVB9Wh86SG3hubmWNtrCGPKhvTccKD+NIdQuI490+l3SpjrGySEfgGz+QNAGjnoBn8vesvxOc+HNRXn57Z06eq49Pekk1yIf6i0vpioLOBbsuxfX5sZ+gyfaotavLa90Qi1mSUXDxxrsYHqwz+QyfwoA0rBy1jbk5yY07ew9qnB+v5e1U7O6ih0y0knlSNTCh3OwUdB6miHVbCeUQwXcMkjfdVZAc8c49fwoAuk9OvX096QHI79PT2+lU7rVbS1l8qV3MgG4xxozsBnuFBxUI1u2Vf38N5AMcGS2cDHrkDj8aANLPsevpVfUpPJ0+4kP8ETt09FNVn12xLCO1k+2TEnEVswdhjkk84H449Kg1DUba90Sc2kySGVPKC7huDP8ALgjseehoAl8Lo0Xh3TI3JLJaop49ABWln5cDPT09vpWbpdzb2mjWrXU8cKBdu6Rwozn1JqSLWLCWRYlmYF8KrMjBWPoGIwT+NAF/IyevX0pGb5e/T09vpVO61S3tZhCwmklI3bIYmcgZOCcdM+/9KI76d5FVtMukjIx5jPHx7kByaADW2/4lVz1+6O3uPak1Q5NkBnP2pe3+y1N1+VE0uYOwUvhVy2MknoPWjWXSNbSSRwiLcqWdjgDg9TQBoA/MB83X0qeoVOduPWpqACiiigAooooAr3U0MRQTTJGWJC7mA3H2rE8VxvPZwQQKWlaUuoBxkojuP/HlFbN/bQXSCO5gjmj5+WRQw/I1Ti0izhuo7mGJkeMMFVXO3nj7ucf/AKzQBbtZYp7aOaJi0cihlb1BGaVpY43w8qqTwAzY9apLo9ipO2J0XOdizOqD/gIbH6U5dJ05Sw+wWx3DBLRKc/iaALpwRn9c0oKd2H4GqH9kab/z4W57Y8sU7+ydNHSwtuP+mS8UAS3F/ZWjAXV5DEWPyiSUDP51meJojd29tDb4d3djGA3UiNyK0obGzty/kWcMe/htsYG4e9QxaVYQ3kdzBaJFIgIHl/KOfUDg/X60AWrW4iuraK4gbdHKgdTnqCARTzJEhCvIoJ4GW5NUhpGnqxK2qKG5KqSFz64BxSjSNMwc6danPXMSk0AXsDI5P50vf/6/1qgNI00EYsIP+/Ypf7J049bC3/79igCeW7tYXRJriKN2+6ryAE/SsnxTzDamMFmhl+07R3Easf5kVoR6Xp8aOiWNuBIuHAiX5hx19aji0ixhvPtUVuEcRGPapwhDEE/LnGflHP1oAvgq6qVOQcEEHtxQZIgwUyAE9AWqgujWC8JFIqA8RrO4QfRd2B+VO/sfS9pU6dakHrmJSTQBfGCepx9aRgCRgnr61R/sqy+75ThfTzXx+W6g6TZcbYWX3SVlI/JqALuUBwWAJ9+tYPiR1W60x2PyW832l2/uqpCk/QB2P4Ve/sLSi5ZrGF3/AL7jcw/4ETmnRaRZxzPKI5DvjMZSSVnXaevBOBmgC98pIIJ/P6U15olfY0iBz0BbnvVH+xrXCxl7sxDgJ9rkCgcccNz+NP8A7I0zaV/s61IJ5zEpJ60AXlxtpQBk8np6/WqC6TpwH/HlD9CoOKQaTpxPNhB0H8A96ALM11axSLHLcxo7EAK0gBPToKyfE5J+yeWGYws1ztB5PljOB+dX00vToxIkdhbKsnDhYl+YcdfWkh0mxt7r7TBbiN/LMe1ThcE5Py5xnjrQBdRkdFdW3BhkHPams0YYKzgN6FuTVJdHsFXCW5VB0jWRgo+i5wB+FOOkaZg5062Pv5S/zoAvgDPf86QADgk/nVL+ydOB4sbf/vge1J/ZOn4x9jjX6DHr70AXHkjRwrOATwAW+lYfikZW3OC3lM1xgHnCDNXf7E0rJ/4ltqSw+YmJST+NLDpFpBd/aYhID5ZjERkJQA9SFJ4PA6dqAL6FWAKnIPIOetG5A2C4yQMAn61npo1qiCKNrqOIdIkuXUL04GGyB7dKVdH0053WEDkgEs6BievOTzQBoED8c+tKAvqfzrPOkWOT+5c57ea+B9BuwKU6TY7uInX/AHZnXP1w3NAF0Y3Yznr1rI8UM0NnHNGcPG7MpB7+W9akMSQRiONNqr0BOf61i+MnVdKTcQCZVUZIGc5H9aANm1torS2itoF2xxKFUDjgcVT1TSvtzKyTvA+1opGXnfG33l+vHB7VpE9eKQHoMfy96AGRQpEqJGoVFXaqjgAcdKLiGK4geKaNJEdeVYZB/CnZO5ePx4oJ/lQBVj0rT44JIEsrcRSHLpsGG6YyMfSqN3plraRJNCJSwmhQeZM7hVMqEhQxOBwOnpW1u56Vm6/IY9KmkxjYyOCenDA0AV7GyGp26XuoyPOkx8yO3LYiVCflBX+I4wec8+lTXekAOk2lNFY3CqULJH8rqezKMZx1Hp+JBsaSnlaVZR7T8kEa4+iire76fp/jQBBYWcNjapbwrhU6sTyx7knuSeSfWnT2tvcY8+CKQY/jUH+YqUMefl70h5xx/n86AGwWtvbJst4Y4lznbGoUZ9eBVTWQF0qds/cUNz7HP9KvZOc4/Dis7xC+zQdQY8bbdzz/ALtABoMYGmxTAHNwWnY56lzn+RA/AVJqNh9rSN4pmhniO6KVecZGCCD1BHajRl8vSbCPH3bdBz7KKuE8cD+HtigCKxtI7O0jtkJKxjG5jkse5PuSc1KyKysGAZfRunSlzknpQG9vx/CgCFLK1ijdIreJFfh1RAA3145rJ1PSbO10y8ngjdNlvKVQStsTKnO1eg/AetbhY+mazPE9zHa+HdSlmO1BbupOPVSB+poAitbMag09xeSzupndI4lndEVUYr0Bwclc8+tTXWkQm3gWwWO1kt33wsiYCnuCBjIIyD9fWn6CxbR7RyuPMjEhz6t8x/nV/PA47daAK2m2YsrOK33mQoPmdursTkk/Ukn8as7QAAc5x60Z56UZ+UcY+uPSgAwAR1/Oqs9jaktcfZovPCnEuwbhwR1xnpVoMc9O/wDWmTHML8Z+Q/yoAw/D9rFdRi8uIxJIgSGEvz5aBVzjjjJJJ9ePSta/so722MTsyEMGjdTho2HQjjrVHwof+JLCeDl35+jEf0rXzwcgf5H1oAqafYLZRsCzSSyuXllY/M7Z7+2MADsABVzauKQk+nf+tAPH4f0oANvPTP1NQSWdtLMk8lvE0qfdcqCw49cVPuPp3/rQT0wP84oAwPDcCTyG4lG9rdRDFnon8TEehORn/dFa95aR3llJbzZ2umMg4KnsQexB5B9qyvCbE2t2do/4+mH6LW4DhemOPagCnplg1p5r3E5uLiVgZJcbc44Ax24/Un1q6ygocZyRRnnoetIT8nTPHb6UAOwCaTaP/wBZpQeelIDx0/H8KAFC4Ix6+tTVAGO4cd6noAKKKKACiiigCOT7y/jSc0sgBK596aR2/wA/zoAACRx6UdScf560gAA46YowMnFAC8+9KM00jIwaUKM9KAF7ke9Ieoye9G1QTgc5pNo4yOc0AOyT60gzQBn8v896QAYxQA7uM0ZJ9cU3aMjj/P50uO2P88+9AAM4GPSjqTj0H9aQDAGB2/z3o2rnj0H9aAHHrg+v+FLg0zaM8jv/AIUoUZ6UAKOppGODzQFGTSMoyOKAHZ55zSDPagAGjA7UAB4bn/PSlyc45xTdo3Akc/8A6velxnigAXOB16UD7x+g/rSAAAAelLtGenYf1oACTnBPf/CnYOaYVB6juP6e9Lj0H+fzoAUZpDnjr/nNCqPSgqPSgBec85oUEYH+e9IF5PHFIFHpQAp+8M+n+FBzjvSMq7hx2/woIGT/AJ9fegB3fjNIPUelGBngUBRn8P8AGgAz/P8Awp3OaYVHpwT/AJ70u0dh/n86ABePzNcd8R455/7Ait0Z2bVIwVUEnbsfJ/Ac12AAz+JrD1/b/bHh/pkXbnr/ANMX/wARQBv8g80gzjg0bRnGKaFAHA4oAU/eHPr/AEoOSD16UhUbh9P6ihhkHPTFADh1OPWsXxlKsPhfUnd9pEJ2knvjj8a2SBnpXP8AjS3iudNtbadN8M9/bxSLkjcpcAigDdjGIY1HZRx+VSc+9M2qBgDp/jTsD/P/AOugAHf6mlJPGc0iqOfrSEdKAHmsTxjKY/DGoxojvJcQNbRIgGS8g2L/AOPMK2to9KwvFeBYWfp/aVn/AOj0P9KANe0Vkt4FYEFYwCD17VIclTnPSgqCR+P9KCBswemKAHDqcetIDjOP88UYGTx/n86TAGSP88UAKx6fX+tcz8S3MfgfVW5/1Q/LcM10xUY/GsDxzEk3hi7ilUMj7FYHuCwz3oA0dAUroeng5yLaMH/vkVeyeM5zimwxJFEsca7UQBVHoBS4BAyKAH896aM7RjpSlR6U3GBwOP8APvQAuCDTJ5FjtpHlYKioSzMcADHJNOAGc4rO8SfL4b1MjAP2OXB99hoAg8GEt4asnH8YZx9Gcn+tbIOOnX/61VtOjVNPtlRQq+UnA+gqxgDOBz/9b60AOPbPrRzjv0pCo4yOM0Y4/wA/40AKOM/XtSE8c/r9KAoHT1qK7wLSVs4xGxz6cUAY3giUT6O10qOkdzcyyRhxglSxCn8hW8M+WMelZHhBceF9JyMEWkY/QVrBQIxj09aAFGcn8P50HOw59KTAz0/zmlKgocjtzQAPIqAljhRySTwKhjvLZmCx3ETO3QK4JPFV9dUHSbkEZ+Xv9RUeowRRvZMkSKxul5CgfwmgDTzkj696lqEKMg+9TUAFFFFABRRRQBBdzLbxNLIQERWZixwAAM9TXNN4ujliSS1tWIkdoUEhwTN8pVOMjBDZyD0Bre1Q3IjT7LHFLz88chxuXuAegP1rHmllsxaeRosdrb/aUMxfywE3HZlQrHLZYc+gNAFjw7qlzqtobie3WFD9wAMMjnuRg/hWsC248D8/r7Vl2l/PLAjWOlyfZSMxN5iIGHYhc5APvinnU5Yz/pWn3ceehjUSgnnj5CSPqQBQBpEt6A/j/wDWpcsP/wBf/wBas83t+w+TS5APWWdF/kTStcakp509GH+xcg/zAoAvZbJ4H5//AFqQlsjIHX1/+tWYbnVw/m/YovJB2mBZgZT/ALQJIX8P17Uk2oXy3NqDYGGB5QsjzSqSM5wFCk98cnFAGqC3PGeP89qBu9B+f/1qzLPUL28iW4trJfs7ruiaa42s6nGDgA4p7XWooTnTt/HBiuVIz77ttAGhlsjgfn/9ajLZ/wDr/wD1qo+dqjYH2S0BPrdscf8AjlHmasp5trN8c5Fyy/psNAF4E4HAHH+e1JliTxjgd/r7VmPNrKyeaLW2aHAHkJMd/wBdxwPTjHrz2qG61G/hntpJrdba134mLuHYjax4wcDoDmgDZOfTv/h7U7Leg/P/AOtWZDd6pNGkq6fAqvghZbohgOOoCkZ/Gh77UIyVbSpmbnaYp0Kn6kkEflQBpAnJ4/X/AOtQS2RwPz/+tVBZNWf/AJd7OM+puGb9No/nSmXVARm1tDz2umGev+xQBfBI7D8//rUgLY6f5/Kstn1uOVpTDayQ5wIEkO8DHXecA89sD61VvNQ1CK8tLieJrSyQyearOrNJiN2GMHgDbQBuksGHAP4/T2pcsO3+fyrOjuNVkUOLK2QMMhZLohgOOuEI/X86U3uoIWDaXK7D7pinRkP4sQR+VAGgCcD6f57UBmLHgDgd/r7VQWbVWxiythx3u2/+IpfP1IEg2VuTjjZdE+vqooAutuz07j+ntTjuz2/z+FZbTawtwZGtYGgyAIVl+cf7W48de2PfNQ3F/qMd3atNCtrabmEu9g7v+7duMHAA2j657UAbIJ9B+f8A9agk57fn/wDWrOgutTuI0lisYERxkCW6IbHGMgIRn8aHu9RQlW0tmb+Ex3CFT17kgj8qANHc2eg/P6e1Ck4HT8//AK1UjJqrHi1tFHq1yx/TZTftOpL109G/65XII7+oFAF5i24fQ9/p7UpJ5P8Anv7VlGfWRL5n2SDyegh83957tuzt69v1qG6v9SjvbR54VtbLc4l3OHZ8Ru3Y4AG3P5UAbeT1wB/n6UgzuPHYf19qzoLnVJkSZLK3RHG4JLckNg9M4QgH25oa81FA6nSneQDgxXCFD16lipH5GgDRJb0HUd//AK1Oy3cf5/Ks8/2u3ayiPuzyY6fSkA1lcZNlIO+C6f1NAFbxBe39isL2MXmeazQ4252yNjYx46ZGD9a5uHUNQvfFmnQXzx4hkuCEC4K4bYM8dwc85rq31T7K6i/heJAdr3CkGJWPQE5B/HGMnGapau6trenurriEZJz03MB/SgDfJbPQfn/9ahd23t/n8KzINRvLtBPZ2Ja3Ybkeabyy69iFwSM9ecUsWqqGmS+RrR4YzKwdwVMY6sCDzjv3HHqKANElsjjse/09qHJKnp0/z2rOTVi4UjT77Djcv7scrxz97j6HB9qsWeoWt6j+TKCyDEkbja6H/aU8j8vzoAtAt2A/P/61YvigZi00ED/kJW+MH/azW3n3/WsTxK3/ACDVB+Zb6NyM/wAIzz+ZFAGydw4I9O/v9Kdlvb/P4UhIHU0Buo3D8/8A69ACAsD0HU9//rUpJ46fn/8AWqhLrFokrxQ+bcSq5UpbxM+GHUEjgfiaa2rxxHbdW15bnHG6AuD77k3AfiQaANLJ9vz/APrVheLMtp9sOmLyE59w2fT2q2datt7CFbiZVAZ2ihYhBnv3PfgAn2rN129ivrSMWwmbyi8zFoXQAKjY5IHcigDoiTuHAPXv/wDWobd5Z4H3e5/+tVK61jTbSYw3N/bxzL1jaQbhnB6Zz0qxb3UF1biaCZZImX7ynI6UATAsc4A/P/61IC3PGB/n2rLutVead7PSB5tyrbZJWU+VB6knjcf9kHPrimmw1cjYNbIU8u32dN4/3T0A+oP1oA05rhIdgmeNNzALubGTnoKxvGhY6DKvGSQf++fm9P8AZNTjQbVizX7zX7spQPdMG2g9doGAv1AB4FZ+r2OoRaXcQvKs9lDFLIssspMoHlOAp4O7BI+bOcDnPWgDpgx54HX1/wDrUmW4yP8AP5VnPrtlHNJEn2mUxsQ7xWsropHUblXBx7Zqe31OzupfJhnBl252MpUkeoBoAuEtnGB+f/1qaN20dPz/APrVn3OswRzvbwR3F3cJ96O3jJ29OCxIUHkcE96h/tqaNAbrStQibrhEWUY/4Ax/LrQBr/NuHA/z+FZ3iHLaFeJx88RXBPrx6e9Qv4m0lRn7SzFcl0SJy0YHUsuMqAOuak1qaOXQ3eORXSTYFZWBBywHBz70AWtLLHTLQkDPkpnn2HtVjLHPH+cfSq+lEf2Xac/8sUz+Qqznjrz9fagBSWwOO/8AntSZOO3+fwqlqOr2OmlFvJ8SP9yJEaR2+iqCT+VU/wDhJLNEJu4r61IGf31rJjHY7gCB+JyO9AG0GPoOv9fpVLV2ZNKvGxnbBIev+wfaqT+JLOQ+XYR3V7N18qCJhjvyWwq/iahvtd0670i6jiu4zM6GLyHbbIGYYClTznmgC/4fHl6NaIoGFTA+gNX1LeWOn3fX/wCtWPp+qWGnWFrFfXsEDMG2iRwuQGPvWjaX9neKfsd3BPgc+VIGx+RoAn+bccAdu/8A9aht2wjA6ev/ANaorm8t7ONpbu4ihjB+9I4Ud/U1mw+Ire5mWK2tdQlVjtM/2V0jGe+Wxke4zQBb1wt/ZVzx/D6+49qbqZO6z4/5el/9BPtRrb/8SyZfmLOQqgAkk59qNWO1bWTDFUuVLFQTgYPPFAGhk5XgYz61NUIP3cnvU1ABRRRQAUUUUARyDJX8ayfE6znRLo2cJmnj2yRxryWKsGA/StaXqv40z6Yz9P8A69AEVpAsFtFCvSNFX8gBUoUbjx/nmhenbp6f/XoGcnkdPT3NAARTsfSmt3wQDS4z0x+VABgZPHesXxi7RaDPKg/eI8ZXHY7xzW0M85I/KkbORyOvpQA2CFIYkijACRoFUA9AAMU8fhRxQAfb8qAAjkdPwoA56D8/rSc5HIx9P/r0AHrxn6f/AF6AAAccdqyfFFncXmmGOzXdNvTAzjgkqT+AJP4VrDJ7jp6f/Xo5z2/L6+9ACKBgAAYBGP0p23JpCeeMZ/8A1U4A+35f/XoAQDnpQRyOlA6np+VI/Ycfl9aAFABzWZrunSanaRQROiYnjaTd/FHnDr9ShYfjWl09Py/+vSjOO35UAJj5hx/nilAye35/WkOdw6Y78fT3oP1H5fX3oAB0H0pQPmP0H9aFzjt+X/16QAlu2MDt9aADv0HX/CsbxcjvpaJEjM0k6RHYMkBz5ZP4ByfwrZP3uMZz6fT3pSDnt+X/ANegAUADAAApCOe3+c0DOccflQ2Qeo/L6+9ADgBmkXp0FGcHt+VAyfT8qAEYYI+n+FY3iu1mutOVbaPzXEyhlHXY+Y2P4K5P4VstkHt09PpQepxjP0+vvQAAdRxxQB8x+n+NLg+35f8A16QZycYxj0oAD6cdaXHPak74GM/Sl59vy/8Ar0ANKK4IZQVOQQehrnfE9la2Ggzmzt4YAWQHy1C9TtHQe9dGM7uo79qpaxp6anZNayuURmRyVHPysGH/AKDQBdCBMAABR0A6Cq13p9pfCL7XAkvlNvTd2P8AntVo59vy/wDr0DOOcflQA0qARx2Pf3FVr7TrW82vNH+8QfJKjFXT6MORVo5yORyD2+lGfl4x044/+vQBmf2O+cnVdQLqRsJkT5fwC4b/AIEDVfUNOS1tZLua5uLmVAAGncYVSyk4AAH8I5xW4MnPT8v/AK9ZPigSnw5qXkrvkFtIUVVySQpIGKAIrCx/tCzhu765uX+0KJDCJSqKDghcLjIAOOc5qSbREhzJpMpspiMMR86v7sp6kdjkH6jitG0j8q0hi4+RFXp6YFTHPt+X/wBegCvY2kVnbR28KkIgxk9Se5PqSckn3qcjpQM56jr6f/XoJ6dPyoAXYP1rP10BdEv3x923kbr6KTWgAR3H5VS1m2lvNGvraHb5k1vJGmePmKkCgCHQIkGmW84QB7hfPkPcs/zHP54/CmXmlP5zXWmSRWl0ykSsYtyyj/aAIyR2Ofzq5YRNBZ20L4DRxKp+oAFWDkpxjpxxQBDY2kdpaxwISQgxuY5LHqSeOpOT+NT44PT/ACKUZ9vy/wDr0nUEHGPp7fWgBccdutVdWAOlXgIHMD8evymrP0x19Pf602eITxNG+NrqQwx2I+tAGf4bAfRbSfvOnnn6ud//ALNU+oWKXkcYEjwzRsHimjI3IfxGCCOCD2qWyto7K1htYfligRY4wecKoAHP4VN2GCPfj2+tAEFhZR2NrHBEWYIOXY5ZyTksT6k5P41PtGB9Kccj0/KmjO0Zx+XtQAbRu/z61mSaDpokNytqqyDL4V2Cb/7xQfKTnnOK0885yPypHB8tsEfd449qAOc0TT4dVsxcXrTSBdscSCZlVVUDoFxznPNXW0OK0QSaQxtrhGBG+RmRxjlWGen8v0pfCkUsWhW6zRGKTdISjLyMu2M/hitXnB5GPp7fWgCjpmnfZxJdXRSS+uG3TSqOOOAq5GdoH9T3q/tGPw/z2pTnAGR19P8A69Azjt09Pb60AIEHJ96YYInkWRo1Mg4DYGRx61Jz7dfT/wCvSc4GMY+nt9aAMHwvEkgvndQxWcwcj+Fe35sfzq1qGkRSxi5skjgv4lJhlX5cnH3WwOVOBkf1xT9E0+bTo7tZnjJmvJZl2Z4Vm4B98VojOznHT0oAxbPTDf3p1LWbKIXC4FvCzCTyB3IPTJPcAcAVsso8s/T+lA5Jxjt296Ug7OMDj0/+vQAu0Z/+vSEcEcf5FOGT3B/Cm9scY+nt9aAFwMqfepqg53DBGM9MVPQAUUUUAFFFFAEcpAIznv2pmcHOT+VFzaxXLIZkVwmcBhnqMGsa61DSrS/azlt3M7EsoW3J3EDcduBz659eOtAGxn0z+VLu+o/CudTVtDkuEshCRKPlZGgA9Uwc/Q9Kv6Tc6bqkjPbRciNJR5kO3KsSVYZ9SD+VAGkT6bvy/wDrU7P1/L/61QNp1okR/cxAAcnyx0xjH5cVkLq2jyQvdeSwjRY5CTbH5lkY7HHHQkE5oA3d3Pf8qNwOOvX0rMvH0uyikeZYW2ssflogZgW2oFx16kD8ap22qaPeX0drFGTcq/zBogpDAtkHPcENQBv5926en/1qQH3P5f8A1qiOnWqZPkxbcbQuwYHGP5YH4VjPq+jq6o0L72kKxt9n/wBayyYYLxzhjigDf3c/xfiKM5P8X5f/AFqxze6KbA3jGFYUjZmVkG4ADBG3rwFxj2qIarpKGRmtZgyyhX3WpHluSCMnHq4P4mgDcz9enp/9alLc55+uPr7VCNOtjGqiGMAcEbByMY/kB+VO/s+38zeYo/YbB1yTn9TQBIW5zz19PpRu/wB7/vn/AOtWXqf9nackKT25cyMdoih3E7VyeB22rj8KBe6G37wXVgoUB2y6DG45BOenLfrQBqbvr+X0oLd+T+H/ANasyKbR5byKxje2eSeEyxKu0hoxgHHqOB+XtVma3tIGhWSNNzsAD5edx5Ppx3NAFrP1/L/61G7vz+X/ANao/wCzrXJ/cxYIxjYMf5wB+QpBp1vgZjjyDnOwepP9T+dAEu75u/5UZ789fT/61RnTrUsD5MWApGNg56D+QAo/s+2yxMMeSc52Djqf6n8zQA8H3PT0+ntShue/T0+tQrpdqsaIIo8L1+Qc8Af0H5Cn/wBn227PlR+w2Djkn/2Y0APLc9+vp9KC2D3/AC/+tUX9m2xQKYo/r5Y6ccfkAPwpTp9sX3eTHj02Dk88/qfzNAEgOP73/fP/ANagtn1/L61GNOtgCPKix/1zHHT/AAH5Un9m2+F/dx8dTsHPX/E/nQBLu5/i/KjcPcfh/wDWqIadbBifJiwQBjYPb/BfyFA022CBfKj4Oc7Bk8n/ABP5mgCQtyOWx/u/SgnrjOfp9faozptqXVvJiwARjYO+P/iRSjTrYZ/cx5PQ7Bx1/wAT+ZoAk3c8Fvy/+tSbuT16en/1qjOm22F/dR5B5Owc9P8AAfkKP7OttxPlR47DYOOv/wAUfzoAlz3+b8v/AK1G7nv/AN8//WqIadbhceVHn12D1H+A/Kl/s613A+TFgDGNg5/zk/maAH5579+1Kzc9T+X/ANaol021XdiGP5jn7g9v/iR+VB062KoPJj+X/YHPB/xP50AS7uep/L/61Ab6/lUY0+2DljFGc442D1B/oPyFJ/Ztt5ezyY/c7Bz1/oSPxNAEufmH3vypCeCPm6en/wBaqepJY6fbve3ESCKIFmxGCc5Xn9BUNu+lyRqSII2k+4sgUNg5UYH4kfjQBp7ue/8A3z/9akDZ45PPp/8AWrMku9ChQSPd6eiB9pZpUALcHGc9eFP4Cm3s+jWCSTXXkxxKY42Jj+Vd2dvPT+I0Aa273Y/8B/8ArUZ9c/l/9asGLVNJe6S1WBxO3zKpt8EnG/GMdSFz+AqMa3oQCM8ZiDQSSKjwYLop2tj8yMe5oA6Ldxnn/vmkJ6dT+H/1qoWosLua7ihiHmQS7JN0O3DYDcZHI+6c+1VGvtKE0kH2Vy0LMhxb8OVXlR6kBj+GaANzd6k/l/8AWpN3Qc/lWPHfaW8VvdmIqtxC08QeLB2rhi36qfwFP06fSNUV47LypRGkbOQg+667lH4qfyNAGrnBHX8v/rUmeOp6en/1qwH1nw+HeUvH+5SZ3VY8kbJQjfjvUAetTSXukxym3EYeQp5ipHDuJTYcMAByMZH14oA2t31/L/61AYYxz9cVR04WGoxma3hC+VKyOGiCkMME/rg8elWRplryPIi2FQu3YMYwR/I4oAl3dufypN3ru/L/AOtTDp1uf+WUe7du3bBn72f5ik/s21yP3MW3aVK+WMHjH8sj8aAJQeo56+lJnj+L/vn/AOtTDp1vhsRoGYkhtg45z/PmmtpdoVC+REFHGNgwRjbj8jQBOW57/lTS2V7/AJe30posLfzS/lRkkg/cHXOc5+tN/s212bfKj9PuDp0x+XFAEuen3vy/+tSFvlxls49P/rUz+z7feG8qPjPGwdc5z+dN/sy22MvlR8ggHYOBjH8qAJiw7Z/L/wCtSZ4PX8vb6U02FuXDCKMEHJ+QcnOf5800aZagEeRFt27duwYxjH8uKAJS3A69fT3pM8dWzj0/+tUZ062KgGKPIYNnYM53bv50p061JH7mLAGMbB6AfyGKAJN316+nvRuwOc/l7VF/Z1v8x8uPcxLBtgyDnP8APmlOm2uAogiCgY27BjGMY/LFAEm76/l/9akDcYBOcelNGn24kL+VHkkH7g4Oc/zOab/Ztrs2+TF7nYOR0x+QxQBJnHXPXjigt8nfp6e30pp0+23hhFGOvGwdc5z+efzpq6dbopCIikqVBCAFQRjj8AB+FAEwPs3/AHz/APWpBnHRh+H/ANapgMUtAEIzuAw3X0qaiigAooooAKKKKACsXUPDltf3jXUs9ysvzbGSTBj3KVO04yOCeM4zz1raooAwj4ZtWiiiZ5jHHgBAUUEBtwBwo7+mKtaPo1vpRbyHmfMSQgyvu2omdqj6ZNadFACOAylT0IxWLbeG7SC1mtw07xyxRw/O4O1IydqjjoMmtuigChf6VaXsDxvEEdmR/MjAD7lYMDn6qKpReG7WKeKUSTsUk80hmHzPuZtx4znLHpx7VuUUANYEjisKTwvZysd7zsMuUVmUqm5w7YBHdgOua36KAMdfD1gmmHTxbqYjG0ZbA3kNnPPbqaiTw1ALpLlrm6aVZDIS7qQXIA3YIxnCgZGOPrW7RQAijApaKKAM/VNLj1ExGSWaJoi21omAPzKVPUHsayD4L01CzW3mQOWVgUIyuHVuDjPJQdzXT0UAZdrotvaTW8tuZUMEbxgb87gzBjuz1ORmrS2g2RCSSWQxNuDNIck89cYyOehq1RQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFAFXU7KPUbKW0m3eXKuGK4zVBvD9u1zZ3DyTtNZ7vIcMF27uvAAHI46Vs0UAcyvgvTAjKxuH3MrMzSAkkYxk456Dk8mtGfQrOe1W2mjaSIGM7HckHZ0yDx25x1rVooAw4vDVpHeRXRed5I2VhvcNyo2jJxk8H1pt54W067tlgmSRlVGRSHwVBfeSD65/Tit6igCkLBVe5eN5Y5Lh1kdkYZyoUcfgoH51Wj0OBLyS5LTMXd3CM42qzAAkD6DFa1FAGW2i2xt7aDD7La3a3j+b+BlCnPvgCoNI8N2ejq66f50QkkV3+fO7GcA+2DjHoAO1bdFAHM/8IVpH2ma4MUpaZ2eQCUgMS4ft23KD+dXl0C2jgEUTzxlbQWiSJJh1jHTB65962KKAKmmWKadZrbRMzRp93cFGB6cACrdFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFAH/2Q==","signal":[0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3883,0.3873,0.3925,0.3965,0.3917,0.3805,0.3575,0.3198,0.2672,0.2092,0.1585,0.1166,0.0816,0.0586,0.0359,0.0,0.0319,0.2286,0.5199,0.7583,0.8647,0.8337,0.6681,0.3933,0.1369,0.0137,0.0193,0.0581,0.0679,0.0686,0.0701,0.0708,0.0709,0.0717,0.0731,0.0771,0.0857,0.098,0.1105,0.1227,0.1325,0.1413,0.1475,0.1493,0.1498,0.149,0.1423,0.1335,0.1245,0.1173,0.1114,0.1055,0.1008,0.1008,0.1037,0.1089,0.1168,0.1285,0.1409,0.1533,0.1648,0.1751,0.1844,0.1887,0.1856,0.1796,0.1781,0.1787,0.178,0.1766,0.1758,0.1746,0.1717,0.1659,0.1631,0.1706,0.183,0.2004,0.2342,0.2805,0.3268,0.3624,0.3807,0.3785,0.3558,0.3112,0.2586,0.2137,0.1746,0.1437,0.1137,0.0618,0.0395,0.1553,0.432,0.738,0.9409,1.0,0.9079,0.6602,0.3503,0.1268,0.0657,0.0848,0.098,0.0952,0.0958,0.0992,0.1045,0.1107,0.1165,0.1253,0.1319,0.1397,0.1504,0.1623,0.1769,0.1908,0.2029,0.2118,0.2137,0.2077,0.1997,0.189,0.1764,0.1645,0.1567,0.1511,0.1515,0.1558,0.1596,0.1621,0.163,0.1658,0.1728,0.1816,0.1923,0.2029,0.2108,0.2147,0.2105,0.2027,0.1949,0.1878,0.1782,0.1687,0.1637,0.1613,0.1579,0.1526,0.1507,0.1517,0.1564,0.1729,0.2034,0.2444,0.29,0.3297,0.3535,0.3522,0.3255,0.2817,0.2293,0.1815,0.1459,0.1223,0.1023,0.0548,0.0207,0.11,0.3619,0.668,0.8792,0.9491,0.8692,0.6415,0.3313,0.0942,0.0279,0.0503,0.071,0.0712,0.0705,0.0748,0.0817,0.0869,0.0937,0.1013,0.1088,0.116,0.1236,0.1341,0.1478,0.1594,0.1694,0.1754,0.1755,0.1696,0.1595,0.1505,0.1446,0.1379,0.1321,0.1261,0.1195,0.1118,0.1052,0.1036,0.1089,0.1146,0.1217,0.1302,0.139,0.1438,0.1443,0.1441,0.1432,0.1411,0.1396,0.1365,0.1327,0.1286,0.1202,0.1097,0.0993,0.0887,0.0818,0.0779,0.0815,0.0966,0.123,0.1616,0.2012,0.2341,0.2552,0.2553,0.2339,0.195,0.1519,0.1166,0.0873,0.0687,0.0586,0.0287,0.0136,0.0861,0.2973,0.5548,0.7252,0.7734,0.704,0.5139,0.2591,0.0598,0.0139,0.0404,0.0639,0.0643,0.066,0.0673,0.0685,0.0719,0.079,0.0855,0.0956,0.1096,0.1256,0.1398,0.1545,0.1709,0.1868,0.1968,0.1983,0.1958,0.189,0.1771,0.165,0.1558,0.1509,0.1449,0.1337,0.1248,0.1192,0.1177,0.1214,0.1299,0.1423,0.1515,0.1576,0.1653,0.1741,0.1821,0.1875,0.1899,0.1884,0.1804,0.1675,0.1572,0.1498,0.1448,0.1431,0.1436,0.1429,0.1411,0.1399,0.1442,0.1601,0.1891,0.2312,0.2802,0.3199,0.343,0.3446,0.3226,0.2835,0.2375,0.1942,0.1578,0.1323,0.1087,0.0656,0.033,0.0968,0.3263,0.6333,0.8575,0.9506,0.9034,0.7077,0.4148,0.1616,0.0677,0.0828,0.095,0.092,0.0932,0.0949,0.0957,0.0987,0.105,0.1117,0.1193,0.1276,0.1384,0.1484,0.1555,0.1639,0.1756,0.1865,0.1925,0.1902,0.1843,0.1733,0.1587,0.1475,0.1424,0.1432,0.1447,0.1451,0.1437,0.1421,0.1396,0.1393,0.142,0.15,0.1612,0.17,0.1737,0.172,0.1644,0.154,0.1395,0.1269,0.1188,0.1136,0.1077,0.1013,0.0961,0.0931,0.0882,0.0857,0.0906,0.1029,0.1243,0.1543,0.1952,0.238,0.2736,0.2928,0.291,0.2648,0.2225,0.1745,0.133,0.1004,0.0831,0.0638,0.0171,0.006,0.141,0.434,0.7424,0.9415,0.9917,0.8865,0.625,0.3037,0.0761,0.0296,0.0569,0.0635,0.0624,0.063,0.0637,0.0651,0.069,0.0713,0.074,0.08,0.0903,0.1033,0.118,0.1331,0.1477,0.16,0.1682,0.1694,0.1668,0.1614,0.1519,0.1384,0.1208],"width":455,"height":65,"columns_with_signal":455,"che_do_phat_hien":"grayscale","calibration":{"px_per_mm":4.0,"do_tin_cay":"trung_binh","warning":"Ảnh có chiều cao thấp (65px) — dải đo lưới ở mép trên chỉ 7px, không đủ để trung bình hóa nhiễu ảnh. Tỉ lệ px/mm và nhịp tim suy ra có thể kém chính xác hơn ảnh đầy đủ 12 chuyển đạo, cần đối chiếu cẩn thận với số máy đo gốc."},"r_peaks":{"peaks":[120,196,272,349,426],"rr_intervals_px":[76,76,77,77],"warning":null},"heart_rate":{"bpm_avg":78.4,"bpm_per_beat":[78.9,78.9,77.9,77.9],"rr_seconds":[0.76,0.76,0.77,0.77],"rr_range_seconds":0.01,"nhip_deu_theo_nguong_sach":true,"nguong_ap_dung":"Chênh lệch R-R lớn nhất/nhỏ nhất < 0.16s (mượn ngưỡng PP của nhịp xoang đều theo sách lý thuyết — CHƯA xác nhận bởi Tấn/Ngân cho mục đích R-R)","uoc_luong":true,"warning":null,"_note":"Số bpm THẬT theo máy đo ghi trên ảnh gốc là 71 bpm — đáng tin hơn số ước tính tự động (78.4 bpm) của thuật toán số hóa hiện tại. Chênh lệch do thuật toán mới được test trên ảnh trang 12 chuyển đạo thật lần đầu, còn đang hiệu chỉnh."},"han_che_ky_thuat":"Hệ thống hiện chỉ số hóa được ĐÚNG 1 dải chuyển đạo đã cắt sẵn (Lead I), CHƯA tự động tách được nhiều chuyển đạo từ 1 ảnh trang đầy đủ 12 chuyển đạo — nếu tải nguyên ảnh trang đầy đủ, kết quả ước tính nhịp tim sẽ SAI nghiêm trọng do thuật toán nhầm lẫn giữa các dải chuyển đạo chồng nhau. Đây là hạn chế đã biết, đang tìm hướng khắc phục.","disclaimer":"Kết quả số hóa và ước tính nhịp tim chỉ mang tính trực quan hóa hỗ trợ, cần bác sĩ xác nhận. Không phải kết luận chẩn đoán. Đây là ECG THẬT (đã ẩn danh) dùng để kiểm thử hệ thống, kết luận lâm sàng là do máy đo gốc tự sinh ra, chưa qua bác sĩ xác nhận."}};
 
 // ─── EcgReadingForm: form đọc điện tim đúng quy chuẩn (5 mục) ─────────────────
 // THIẾT KẾ LẠI (feedback: "Kết quả số hóa là cái gì / sao có mỗi nhịp thế kia /
@@ -6273,35 +8043,84 @@ const ECG_DEMO_SAMPLES = {"ecg1": {"ten": "Mẫu 1: 81 tuổi, Sinus rhythm, 82 
 // TRUNG THỰC VỚI HẠN CHẾ DỮ LIỆU: mục nào không tính được từ ảnh/thuật toán
 // hiện có (ví dụ trục — cần >=2 chuyển đạo, ảnh demo chỉ có 1 dải nhịp) hiển
 // thị rõ "Chưa xác định" + lý do, không bịa số liệu để có vẻ "đầy đủ".
-function EcgFormRow({ icon, label, statusChip, statusColor, children }) {
+function EcgFormRow({ icon, label, statusChip, children }) {
+  // Grid 2 cột cố định (nhãn ~26% / nội dung ~74%) — thay flex-wrap cũ hay
+  // vỡ hàng khi nội dung dài. Cột nhãn xếp dọc: số thứ tự + tiêu đề + tag
+  // kết luận chính, luôn căn trái, thẳng hàng từ trên xuống dưới giữa các
+  // mục. Cột nội dung dùng flex-column (không phải block thường) để MỌI
+  // phần tử con (đoạn văn, hộp ghi chú, badge độ tin cậy) luôn tự xuống
+  // dòng — tránh bug đã gặp: đoạn văn dính liền ngay vào badge phía sau
+  // do cả 2 đều là span/inline nằm chung 1 div block không có gap.
   return (
     <div className="ecg-form-row">
       <div className="ecg-form-row-hd">
-        <span className="ecg-form-row-icon">{icon}</span>
-        <span className="ecg-form-row-label">{label}</span>
-        {statusChip && (
-          <span className="ecg-form-chip" style={statusColor ? { background: statusColor.bg, color: statusColor.fg, borderColor: statusColor.border } : undefined}>
-            {statusChip}
-          </span>
-        )}
+        <div className="ecg-form-row-top">
+          <span className="ecg-form-row-icon">{icon}</span>
+          <span className="ecg-form-row-label">{label}</span>
+        </div>
+        {statusChip && <span className="ecg-tag">{statusChip}</span>}
       </div>
       <div className="ecg-form-row-body">{children}</div>
     </div>
   )
 }
+function ecgPermanentDisclaimerText(leadName) {
+  return `Hệ thống hiện chỉ trích xuất được đúng 1 chuyển đạo đã chọn (${leadName || "II"}). Các nhận định ST-T/trục dưới đây được lấy từ báo cáo máy ECG gốc, chưa được AI xác minh độc lập từ đủ 12 chuyển đạo.`
+}
+function ConfidenceBadge({ level, source }) {
+  // Cố ý khiêm tốn: chữ nhỏ (0.75rem), viền mỏng, nền trong suốt — không
+  // được phép nổi bật hơn nội dung kết luận y khoa phía trên. Tự đẩy về
+  // góc dưới bên phải cột nội dung (margin-left:auto trong flex-column cha).
+  if (!level) return null
+  const colors = {
+    "Cao": "#059669", "Trung bình": "#B45309", "Thấp": "#B91C1C",
+  }
+  const c = colors[level] || colors["Thấp"]
+  return (
+    <span className="ecg-conf-badge" style={{ color: c, borderColor: c }}>
+      {level}{source && <span className="ecg-conf-source"> · {source}</span>}
+    </span>
+  )
+}
+function RedflagBanner({ redflags, override }) {
+  if (!redflags || redflags.length === 0) return null
+  const speakText = [redflags.join(". "), override].filter(Boolean).join(". ")
+  return (
+    <div className="ecg-redflag-banner">
+      <Icon.Alert d={16} color="#B91C1C"/>
+      <div style={{flex:1}}>
+        <div className="ecg-redflag-title">Cảnh báo chất lượng bản ghi</div>
+        <ul className="ecg-redflag-list">
+          {redflags.map((r, i) => <li key={i}>{r}</li>)}
+        </ul>
+        {override && <div className="ecg-redflag-override">{override}</div>}
+      </div>
+      <SpeakerButton text={speakText} color="#B91C1C"/>
+    </div>
+  )
+}
 function EcgReadingForm({ result, dd }) {
-  // dd = doc_diem_lam_sang (chỉ có ở 2 mẫu demo thật). Khi phân tích ảnh thật
-  // qua /ecg (chưa làm backend phần này), dd sẽ là undefined — vẫn hiện đủ
-  // form nhưng các mục lâm sàng (nhịp/trục/nghi ngờ) hiện "Chưa xác định -
-  // chờ tích hợp" để không gây hiểu lầm là hệ thống đã tự chẩn đoán.
+  // dd = doc_diem_lam_sang (chỉ có ở mẫu demo thật). Khi phân tích ảnh thật
+  // qua /ecg, dd sẽ là undefined — vẫn hiện đủ form nhưng các mục lâm sàng
+  // (nhịp/trục/nghi ngờ) hiện "Chưa xác định" để không gây hiểu lầm là hệ
+  // thống đã tự chẩn đoán.
   const hr = result.heart_rate
-  const chuaXacDinh = { bg: "#F1F5F9", fg: "#64748B", border: "#E2E8F0" }
-  const coXacDinh = { bg: "#EFF6FF", fg: "#1D6FE8", border: "#BFDBFE" }
+  const redflags = dd?.nghi_ngo?.redflags || result.redflags || []
+  // Ghi đè an toàn (điện cực tuột...) — hợp nhất về ĐÚNG 1 chỗ hiển thị
+  // (banner đầu trang), tránh lặp y hệt 1 đoạn văn dài ở cả 2 mục "Trục điện
+  // tim" và "Nghi ngờ tình trạng" như trước đây (bug đã phát hiện qua ảnh
+  // chụp thực tế — cùng 1 câu ghi đè bị in ra 2 lần liền nhau, rất rối mắt).
+  // Nhận diện: dd.truc.ly_do và dd.nghi_ngo.ly_giai TRÙNG NHAU chính là dấu
+  // hiệu cả 2 mục đang cùng trỏ về 1 câu ghi đè — chỉ giữ lại ở banner.
+  const demoOverrideText = (dd?.truc?.ly_do && dd?.truc?.ly_do === dd?.nghi_ngo?.ly_giai) ? dd.nghi_ngo.ly_giai : null
+  const override = demoOverrideText || (dd ? null : result.ghi_de_toan_bo)
   return (
     <div className="ecg-reading-form">
       <div className="ecg-form-title"><Icon.FileText d={14} color="#1D6FE8"/>Đọc điện tim</div>
 
-      <EcgFormRow icon="0" label="Thông số kỹ thuật ghi" statusChip={dd ? "Có ghi chú" : "Chưa xác định"} statusColor={dd ? coXacDinh : chuaXacDinh}>
+      <RedflagBanner redflags={redflags} override={override}/>
+
+      <EcgFormRow icon="0" label="Thông số kỹ thuật ghi" statusChip={dd ? "Có ghi chú" : "Chưa xác định"}>
         {dd ? (
           <ul className="ecg-form-list">
             <li><b>Tốc độ ghi:</b> {dd.thong_so_ky_thuat.toc_do_ghi}</li>
@@ -6309,32 +8128,45 @@ function EcgReadingForm({ result, dd }) {
             <li><b>Số chuyển đạo:</b> {dd.thong_so_ky_thuat.so_chuyen_dao}</li>
           </ul>
         ) : <span className="ecg-form-empty">Chưa xác định — cần ảnh có thước chuẩn hoặc ghi chú tốc độ/biên độ.</span>}
+        <div className="ecg-permanent-disclaimer">
+          <Icon.Note d={12}/>{ecgPermanentDisclaimerText(result.lead_name || (dd ? "I" : "II"))}
+        </div>
       </EcgFormRow>
 
-      <EcgFormRow icon="1" label="Nhịp" statusChip={dd ? dd.nhip.loai : "Chưa xác định"} statusColor={dd ? coXacDinh : chuaXacDinh}>
+      <EcgFormRow icon="1" label="Nhịp" statusChip={dd ? dd.nhip.loai : "Chưa xác định"}>
         {dd ? <span>{dd.nhip.ghi_chu}</span> : <span className="ecg-form-empty">Chưa xác định — thuật toán hiện tại chưa phân loại loại nhịp, chỉ tính khoảng cách R-R.</span>}
       </EcgFormRow>
 
-      <EcgFormRow icon="2" label="Tần số" statusChip={dd?.tan_so?.gia_tri != null ? `${dd.tan_so.gia_tri} ${dd.tan_so.don_vi}` : (hr?.bpm_avg != null ? `${hr.bpm_avg} lần/phút` : "Chưa xác định")} statusColor={(dd?.tan_so?.gia_tri != null || hr?.bpm_avg != null) ? coXacDinh : chuaXacDinh}>
+      <EcgFormRow icon="2" label="Tần số tim" statusChip={dd?.tan_so?.gia_tri != null ? `${dd.tan_so.gia_tri} ${dd.tan_so.don_vi}` : (hr?.bpm_avg != null ? `${hr.bpm_avg} lần/phút` : "Chưa xác định")}>
         {dd?.tan_so ? (
           <>
-            <div>{dd.tan_so.phan_loai}</div>
-            <div className="ecg-form-source">Nguồn: {dd.tan_so.nguon}</div>
+            <span>{dd.tan_so.phan_loai}</span>
+            <span className="ecg-form-source">Nguồn: {dd.tan_so.nguon}</span>
+            <ConfidenceBadge level={dd.tan_so.confidence_level} source={dd.tan_so.source_of_truth}/>
           </>
         ) : hr?.bpm_avg != null ? (
-          <span>Ước tính tự động từ khoảng cách đỉnh R (chưa hiệu chỉnh theo thông số kỹ thuật ghi — xem hạn chế kỹ thuật bên dưới).</span>
+          <>
+            <span>Ước tính tự động từ khoảng cách đỉnh R (chưa hiệu chỉnh theo thông số kỹ thuật ghi — xem hạn chế kỹ thuật bên dưới).</span>
+            <ConfidenceBadge level={result.confidence_level} source={result.source_of_truth}/>
+          </>
         ) : <span className="ecg-form-empty">{hr?.warning || "Không tính được tần số từ tín hiệu hiện có."}</span>}
       </EcgFormRow>
 
-      <EcgFormRow icon="3" label="Trục điện tim" statusChip={dd?.truc?.gia_tri || "Chưa xác định"} statusColor={chuaXacDinh}>
-        <span className="ecg-form-empty">{dd?.truc?.ly_do || "Chưa xác định — cần tối thiểu 2 chuyển đạo ở 2 mặt phẳng khác nhau (ví dụ DI và aVF) để tính trục. Tính năng tính trục điện tim chưa được code, đang chờ Tấn/Ngân xác nhận công thức trước khi làm."}</span>
+      <EcgFormRow icon="3" label="Trục điện tim" statusChip={dd?.truc?.gia_tri || "Chưa xác định"}>
+        {demoOverrideText ? (
+          <span className="ecg-form-ref">Không đủ điều kiện kết luận — xem cảnh báo ở đầu trang.</span>
+        ) : (
+          <span className="ecg-form-empty">{dd?.truc?.ly_do || "Chưa xác định — cần tối thiểu 2 chuyển đạo ở 2 mặt phẳng khác nhau (ví dụ DI và aVF) để tính trục. Tính năng tính trục điện tim chưa được code, đang chờ Tấn/Ngân xác nhận công thức trước khi làm."}</span>
+        )}
+        {dd?.truc && <ConfidenceBadge level={dd.truc.confidence_level} source={dd.truc.source_of_truth}/>}
       </EcgFormRow>
 
-      <EcgFormRow icon="4" label="Nghi ngờ tình trạng" statusChip={dd ? dd.nghi_ngo.tinh_trang : "Chưa xác định"} statusColor={dd ? coXacDinh : chuaXacDinh}>
+      <EcgFormRow icon="4" label="Nhận định lâm sàng" statusChip={dd ? dd.nghi_ngo.tinh_trang : "Chưa xác định"}>
         {dd ? (
           <>
-            <div>{dd.nghi_ngo.ly_giai}</div>
-            <div className="ecg-form-tag">{dd.nghi_ngo.nhan}</div>
+            {!demoOverrideText && <span>{dd.nghi_ngo.ly_giai}</span>}
+            <div className="ecg-note-box">{dd.nghi_ngo.nhan}</div>
+            <ConfidenceBadge level={dd.nghi_ngo.confidence_level} source={dd.nghi_ngo.source_of_truth}/>
           </>
         ) : <span className="ecg-form-empty">Chưa xác định — hệ thống chưa có logic suy luận nghi ngờ tình trạng từ tín hiệu số hóa, đang chờ khung phân loại từ Tấn/Ngân.</span>}
       </EcgFormRow>
@@ -6366,7 +8198,14 @@ function EcgPage({ onBack, initialResult, onLogout }) {
   const [error, setError] = useState(null)
   const [isDemo, setIsDemo] = useState(!!(initialResult && initialResult.is_demo))
   const [menuOpen, setMenuOpen] = useState(false)
+  // Mặc định "II" — chuyển đạo chuẩn cho dải nhịp theo quy ước lâm sàng, KHÔNG
+  // phải hệ thống tự đoán. Ảnh ECG thật luôn có 12 chuyển đạo xếp thành nhiều
+  // dải trên 1 trang — bác sĩ cần xác nhận ĐÚNG dải nào đã cắt/tải lên, vì
+  // engine hiện chỉ số hóa được 1 dải duy nhất (xem han_che_ky_thuat).
+  const [selectedLead, setSelectedLead] = useState(initialResult?.result?.lead_name || "II")
   const inputRef = useRef()
+  const ECG_LEADS = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
+  const RECOMMENDED_LEADS = ["II", "V2", "V3", "V4", "V5"]
 
   const reset = () => { setStaged(null); setResult(null); setError(null); setIsDemo(false) }
 
@@ -6401,7 +8240,7 @@ function EcgPage({ onBack, initialResult, onLogout }) {
       const b64 = btoa(new Uint8Array(buf).reduce((s, b) => s + String.fromCharCode(b), ""))
       const res = await callApi("/ecg", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_base64: b64 }),
+        body: JSON.stringify({ image_base64: b64, lead_name: selectedLead }),
       })
       const data = await res.json()
       if (!res.ok || !data.success) throw new Error(data?.detail || "Không số hóa được ảnh.")
@@ -6412,6 +8251,7 @@ function EcgPage({ onBack, initialResult, onLogout }) {
         thoi_diem: new Date().toISOString(),
         bpm: data?.heart_rate?.bpm_avg ?? null,
         nhip_deu: data?.heart_rate?.nhip_deu_theo_nguong_sach ?? null,
+        lead_name: data?.lead_name || selectedLead,
         result: data,
       })
     } catch (e) {
@@ -6478,9 +8318,10 @@ function EcgPage({ onBack, initialResult, onLogout }) {
               <button className="btn-primary btn-primary-ecg" onClick={e=>{e.stopPropagation();inputRef.current.click()}}><Icon.Upload d={15} color="white"/>Chọn ảnh</button>
             </div>
             <div className="ecg-demo-row">
-              <span className="ecg-demo-lbl">Hoặc xem demo với ảnh mẫu thật:</span>
-              <button className="ecg-demo-btn" onClick={()=>loadDemo("ecg1")}>{ECG_DEMO_SAMPLES.ecg1.ten}</button>
-              <button className="ecg-demo-btn" onClick={()=>loadDemo("ecg2")}>{ECG_DEMO_SAMPLES.ecg2.ten}</button>
+              <span className="ecg-demo-lbl">Hoặc xem demo với ECG thật (đã ẩn danh):</span>
+              {Object.keys(ECG_DEMO_SAMPLES).map(k => (
+                <button key={k} className="ecg-demo-btn" onClick={()=>loadDemo(k)}>{ECG_DEMO_SAMPLES[k].ten}</button>
+              ))}
             </div>
           </>
         )}
@@ -6491,7 +8332,22 @@ function EcgPage({ onBack, initialResult, onLogout }) {
               {staged.url ? (
                 <div className="ecg-col">
                   <div className="ecg-col-label">Ảnh gốc{isDemo ? " (mẫu demo)" : ""}</div>
-                  <img src={staged.url} alt={staged.name} className="ecg-img"/>
+                  <div className="ecg-media-frame ecg-media-frame-original">
+                    <img src={staged.url} alt={staged.name} className="ecg-img"/>
+                  </div>
+                  {!result && !isDemo && (
+                    <div className="ecg-lead-picker">
+                      <label htmlFor="ecg-lead-select">Ảnh đã cắt/tải lên là chuyển đạo nào?</label>
+                      <select id="ecg-lead-select" value={selectedLead} onChange={e=>setSelectedLead(e.target.value)}>
+                        {ECG_LEADS.map(l => (
+                          <option key={l} value={l}>{l}{RECOMMENDED_LEADS.includes(l) ? " (khuyến nghị cho dải nhịp)" : ""}</option>
+                        ))}
+                      </select>
+                      <div className="ecg-lead-hint">
+                        <Icon.Note d={12}/>Ảnh ECG thật thường có 12 chuyển đạo trên 1 trang — hệ thống hiện chỉ số hóa được đúng 1 chuyển đạo. Cắt ảnh chỉ giữ lại đúng 1 dải trước khi tải lên, rồi xác nhận đúng tên chuyển đạo ở đây.
+                      </div>
+                    </div>
+                  )}
                   <div className="ecg-actions">
                     <button className="stage-clear" onClick={reset}>{isDemo ? "Quay lại" : "Chọn ảnh khác"}</button>
                     {!result && !isDemo && <button className="btn-primary" onClick={analyze} disabled={loading}>
@@ -6516,9 +8372,11 @@ function EcgPage({ onBack, initialResult, onLogout }) {
                 {error && <div className="rec-note err"><Icon.Alert d={13} color="#B91C1C"/>{error}</div>}
                 {result && (
                   <>
-                    <svg viewBox="0 0 600 160" className="ecg-signal-svg">
-                      <path d={signalPath(result.signal)} fill="none" stroke="#DC2626" strokeWidth="1.5"/>
-                    </svg>
+                    <div className="ecg-media-frame ecg-media-frame-signal">
+                      <svg viewBox="0 0 600 160" className="ecg-signal-svg" preserveAspectRatio="none">
+                        <path d={signalPath(result.signal)} fill="none" stroke="#B91C1C" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </div>
                     {result.warning && (
                       <div className="rec-note warn"><Icon.Alert d={13} color="#92400e"/>{result.warning}</div>
                     )}
@@ -6539,6 +8397,19 @@ function EcgPage({ onBack, initialResult, onLogout }) {
 
 // CSS bổ sung cho các tính năng demo
 const EXTRA_CSS = `
+
+.auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:4px;background:#EEF3FA;border-radius:11px;margin:18px 0 0}
+.auth-tabs button{border:none;background:transparent;color:#6B7F99;font-family:inherit;font-size:12.5px;font-weight:700;padding:8px 10px;border-radius:8px;cursor:pointer;transition:all .15s}
+.auth-tabs button.active{background:#fff;color:#1D6FE8;box-shadow:0 2px 8px rgba(16,41,66,.1)}
+.field-optional{font-weight:400;color:#94A3B8}
+.login-ok{display:flex;align-items:flex-start;gap:7px;background:#ECFDF5;color:#047857;border:1px solid #A7F3D0;font-size:12.5px;line-height:1.5;padding:9px 12px;border-radius:9px;margin-bottom:13px;text-align:left}
+.auth-text-link{width:100%;border:none;background:transparent;color:#1D6FE8;font-family:inherit;font-size:12.5px;font-weight:700;padding:11px 4px 0;cursor:pointer}
+.auth-text-link:hover{text-decoration:underline}.auth-text-link:disabled{opacity:.55;cursor:not-allowed}
+.auth-loading{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#F3F6FA;color:#52708F;font-size:14px}
+.cw-msg-text ul,.bubble ul{margin:6px 0 0 18px;padding-left:16px;list-style-position:outside}
+.cw-msg-text li,.bubble li{margin:4px 0;display:list-item;padding-left:2px}
+.cw-msg-text p,.bubble p{margin:0 0 6px}
+body.theme-dark .auth-loading{background:#0C1420;color:#9FB3CC}
 .login-wrap{position:relative;min-height:100vh;display:flex;align-items:center;justify-content:center;overflow:hidden;background:radial-gradient(1200px 600px at 15% 10%,#13284a 0%,#0A1628 55%),linear-gradient(135deg,#0A1628,#0d2444 55%,#0E5a55);padding:28px 16px}
 .login-bg1,.login-bg2,.login-bg3{position:absolute;border-radius:50%;filter:blur(20px);opacity:.5;pointer-events:none}
 .login-bg1{width:420px;height:420px;background:radial-gradient(circle,#1D6FE8,transparent 70%);top:-120px;left:-80px}
@@ -6549,13 +8420,6 @@ const EXTRA_CSS = `
 .login-logo{display:flex;justify-content:center;margin-bottom:12px}
 .login-brand{font-size:26px;font-weight:800;color:#0F2740;letter-spacing:-.3px}.login-brand em{color:#1D6FE8;font-style:normal}.login-brand span{color:#5A748F;font-weight:700;font-size:17px}
 .login-sub{font-size:13px;color:#7A96C8;margin:6px 0 24px}
-.auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:4px;background:#EEF3FA;border-radius:11px;margin:18px 0 0}
-.auth-tabs button{border:none;background:transparent;color:#6B7F99;font-family:inherit;font-size:12.5px;font-weight:700;padding:8px 10px;border-radius:8px;cursor:pointer;transition:all .15s}
-.auth-tabs button.active{background:#fff;color:#1D6FE8;box-shadow:0 2px 8px rgba(16,41,66,.1)}
-.field-optional{font-weight:400;color:#94A3B8}
-.login-ok{display:flex;align-items:flex-start;gap:7px;background:#ECFDF5;color:#047857;border:1px solid #A7F3D0;font-size:12.5px;line-height:1.5;padding:9px 12px;border-radius:9px;margin-bottom:13px;text-align:left}
-.auth-text-link{width:100%;border:none;background:transparent;color:#1D6FE8;font-family:inherit;font-size:12.5px;font-weight:700;padding:11px 4px 0;cursor:pointer}
-.auth-text-link:hover{text-decoration:underline}.auth-text-link:disabled{opacity:.55;cursor:not-allowed}
 .login-field{text-align:left;margin-bottom:15px}
 .login-field label{display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:6px}
 .login-field input{width:100%;box-sizing:border-box;padding:12px 14px;border:1px solid #d8e2f0;border-radius:11px;font-size:14px;outline:none;transition:border .15s,box-shadow .15s}
@@ -6698,6 +8562,14 @@ body.theme-dark .patient-avatar{background:#1E2B44;color:#7FB0FF}
 body.theme-dark .hero-title,body.theme-dark .hero-sub,body.theme-dark .up-title,body.theme-dark .up-sub,body.theme-dark .hero-feat-item{color:#EAF1FB}
 body.theme-dark .chip-bar{background:#0E1828}
 .term-tip{position:relative;cursor:help;display:inline-flex;align-items:center;gap:3px}
+.icon-tip{position:relative;display:inline-flex}
+.icon-tip-pop{display:none;position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);width:max-content;max-width:200px;background:#102942;color:#fff;font-size:11px;font-weight:500;line-height:1.5;padding:7px 10px;border-radius:8px;box-shadow:0 8px 24px rgba(15,39,64,.28);z-index:60;white-space:normal;text-align:center;pointer-events:none}
+.icon-tip:hover .icon-tip-pop,.icon-tip:focus-within .icon-tip-pop{display:block}
+body.theme-dark .icon-tip-pop{background:#1C2740;border:1px solid #2F4368}
+@keyframes mp-shimmer{0%{background-position:-120% 0}100%{background-position:120% 0}}
+.mp-skeleton{display:inline-block;background:linear-gradient(90deg,#E7EDF6 25%,#F1F5FB 37%,#E7EDF6 63%);background-size:400% 100%;animation:mp-shimmer 1.4s ease infinite}
+.hist-skeleton{pointer-events:none}
+body.theme-dark .mp-skeleton{background:linear-gradient(90deg,#1A2536 25%,#22314A 37%,#1A2536 63%);background-size:400% 100%}
 .term-q{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;background:var(--blue-lt);color:var(--blue);font-size:9px;font-weight:800;line-height:1;flex-shrink:0}
 .term-pop{display:none;position:absolute;bottom:calc(100% + 8px);left:0;width:232px;background:#102942;color:#fff;font-size:11.5px;font-weight:500;line-height:1.55;text-transform:none;letter-spacing:0;padding:9px 11px;border-radius:9px;box-shadow:0 8px 24px rgba(15,39,64,.28);z-index:60;white-space:normal}
 .term-pop:after{content:"";position:absolute;top:100%;left:14px;border:5px solid transparent;border-top-color:#102942}
@@ -6792,6 +8664,10 @@ body.theme-dark .bm-page-title{color:#EAF1FB}
 .bm-chev{display:inline-flex;flex-shrink:0;align-items:center}
 .bm-x{border:none;background:none;cursor:pointer;padding:2px;flex-shrink:0;display:inline-flex}
 .bm-detail{font-size:12px;color:var(--muted2);padding:0 13px 13px 56px;line-height:1.6;white-space:pre-wrap;max-height:160px;overflow:auto}
+.bm-chart-card{white-space:normal;background:var(--glass);border:1px solid var(--border);border-radius:12px;padding:12px 14px;max-width:220px}
+.bm-chart-grid{white-space:normal;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;max-width:640px}
+.bm-chart-grid .bm-chart-card{max-width:none}
+.bm-chart-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
 body.theme-dark .bm-item{background:#141D2F;border-color:#28364E}
 body.theme-dark .bm-item:hover{border-color:#92651F}
 body.theme-dark .bm-icon-badge{background:#241E10}
@@ -6799,6 +8675,33 @@ body.theme-dark .bm-label{color:#EAF1FB}
 body.theme-dark .bm-go{background:#1B2536;border-color:#2F4368;color:#7FB0FF}
 body.theme-dark .bm-go:hover{background:#22304a}
 body.theme-dark .bm-detail{color:#A8BBD6}
+.nav-hist-btn{border:1px solid var(--border);background:var(--glass);border-radius:10px;height:36px;padding:0 12px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:#475569;font-size:12.5px;font-weight:600;white-space:nowrap;transition:background .15s,border-color .15s}
+.nav-hist-btn:hover{background:#EFF6FF;border-color:#93C5FD;color:#1D6FE8}
+body.theme-dark .upload-recent-chip{background:#16243A;color:#7DA6F5;border-color:#2A3A52}
+body.theme-dark .upload-recent-chip:hover{background:#1C2E48}
+body.theme-dark .nav-hist-btn{background:#161F33;border-color:#2F4368;color:#93A5C4}
+body.theme-dark .nav-hist-btn:hover{background:#132038;color:#93C5FD}
+.nav-save-btn{border:1px solid var(--border);background:var(--glass);border-radius:10px;height:36px;padding:0 12px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:#475569;font-size:12.5px;font-weight:600;white-space:nowrap;transition:background .15s,border-color .15s,filter .15s}
+.nav-save-btn:hover{background:#EFF6FF;border-color:#93C5FD;color:#1D6FE8}
+.nav-save-btn.primary{background:linear-gradient(135deg,#1D6FE8,#0E9488);border-color:transparent;color:#fff}
+.nav-save-btn.primary:hover{filter:brightness(1.08);background:linear-gradient(135deg,#1D6FE8,#0E9488);border-color:transparent;color:#fff}
+.nav-save-btn.primary.saved{color:#fff}
+.nav-save-btn.primary.saved:hover{background:linear-gradient(135deg,#1D6FE8,#0E9488);border-color:transparent;color:#fff;filter:brightness(1.08)}
+.nav-save-btn.saved{color:#059669}
+.nav-save-btn.saved:hover{background:#ECFDF5;border-color:#6EE7B7}
+.nav-save-btn.err{color:#DC2626;cursor:not-allowed;opacity:.75}
+.nav-save-btn.err:hover{background:var(--glass);border-color:var(--border)}
+body.theme-dark .nav-save-btn{background:#161F33;border-color:#2F4368;color:#93A5C4}
+body.theme-dark .nav-save-btn:hover{background:#132038;color:#93C5FD}
+body.theme-dark .nav-save-btn.primary{color:#fff}
+body.theme-dark .nav-save-btn.saved{color:#34D399}
+body.theme-dark .nav-save-btn.saved:hover{background:#0F2A20}
+body.theme-dark .nav-save-btn.err{color:#F87171}
+.nav-compact-btn{border:1px solid var(--border);background:var(--glass);border-radius:10px;width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:#475569;transition:background .15s,border-color .15s,color .15s}
+.nav-compact-btn:hover{background:#EFF6FF;border-color:#93C5FD;color:#1D6FE8}
+.nav-compact-btn.active{background:#1D6FE8;border-color:#1D6FE8;color:#fff}
+body.theme-dark .nav-compact-btn{background:#161F33;border-color:#2F4368;color:#93A5C4}
+body.theme-dark .nav-compact-btn.active{background:#1D6FE8;color:#fff}
 .nav-bm-btn{position:relative;border:1px solid var(--border);background:var(--glass);border-radius:10px;width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:#D97706;transition:background .15s,border-color .15s}
 .nav-bm-btn:hover{background:#FFFBEB;border-color:#FBBF24}
 .nav-bm-badge{position:absolute;top:-5px;right:-5px;background:#D97706;color:#fff;font-size:10px;font-weight:700;border-radius:999px;min-width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;padding:0 3px;border:2px solid var(--glass)}
@@ -6840,7 +8743,6 @@ body.theme-dark .lab-clarify{background:#2A2410;color:#FCD9A6;border-color:#4A3D
 body.theme-dark .lab-desc,body.theme-dark .lab-normal,body.theme-dark .lab-foot,body.theme-dark .date-val{color:#9FB3CC}
 body.theme-dark .drug-egfr-box{background:#13202E;border-color:#2A3A52}
 body.theme-dark .drug-egfr-box *{color:#C6D5E8}
-body.theme-dark .fc-msgs{background:#0E1726}
 body.theme-dark .bot{background:#1A2536;border-color:#2A3A52;color:#E2EBF7}
 body.theme-dark .bot *{color:#E2EBF7}
 body.theme-dark .alert-item{background:#161F2E;border-color:#2A3A52}
@@ -6871,207 +8773,6 @@ body.theme-dark .ul-pair li{background:#141E2C;border-color:#2A3A52}
 body.theme-dark .ul-pair li b{color:#E2EBF7}
 body.theme-dark .ul-pair li span{color:#9FB3CC}
 body.theme-dark .teach-chip{background:#1A2536;color:#C6D5E8;border-color:#2A3A52}
-
-/* ===== DARK v4.5: Update contrast color ===== */
-/* Thêm Darkmode */
-body.theme-dark .phase-chip:not(.lead) { background:#1B2A42; color:#E2EAF5; border-color:#38506F; }
-
-/* ========================= DARK MODE CONTRAST FIXES ========================= */
-
-/* 1) Chẩn đoán hình ảnh qua 3 giai đoạn */
-body.theme-dark .echo-tl-modes { background:#1C2740; border-color:#2F4368; }
-body.theme-dark .echo-tl-modes button { color:#C7D4E6; }
-body.theme-dark .echo-tl-modes button.on { background:#F8FBFF; color:#1D6FE8; }
-body.theme-dark .ai-insight { background:#1A2536; border-color:#324866; }
-body.theme-dark .ai-insight-text { color:#E6EEF9; }
-body.theme-dark .ai-insight-tag, body.theme-dark .ai-insight-text strong { color:#7FB0FF; }
-
-/* 2) Chi tiết 9 lượt siêu âm */
-body.theme-dark .echo-seg { background:#1C2740; border-color:#2F4368; }
-body.theme-dark .echo-seg button { color:#C7D4E6; }
-body.theme-dark .echo-seg button.on { background:#F8FBFF; color:#1D6FE8; }
-body.theme-dark .echo-tbl-scroll { border-color:#2A3A52; }
-body.theme-dark .echo-tbl th { background:#1A2536; color:#EAF1FB; border-bottom-color:#2A3A52; }
-body.theme-dark .echo-tbl td { color:#D6E2F2; border-bottom-color:#24344B; }
-body.theme-dark .echo-tbl tr.latest { background:#1C2B42; }
-body.theme-dark .echo-tbl tr.warn { background:#3A2024; }
-body.theme-dark .echo-phase-pill { font-weight:700; }
-
-/* Ô ghi chú trong bảng siêu âm */
-.echo-note-cell { font-size:11px; color:#5A7BB8; }
-body.theme-dark .echo-note-cell { color:#CFE0F5; }
-body.theme-dark .echo-note-cell.warn { color:#FFD1D1; }
-body.theme-dark .echo-note-bullets li { color:inherit; }
-
-/* 3) Diễn biến lâm sàng theo giai đoạn */
-body.theme-dark .reason-title, body.theme-dark .reason-body, body.theme-dark .reason-bullets li { color:#EAF1FB; }
-body.theme-dark .reason-bullets, body.theme-dark .reason-body { border-top-color:#324866; }
-
-/* Badge giai đoạn trong phần reasoning */
-body.theme-dark .reason-phase { background:rgba(255,255,255,0.08) !important; border-color:currentColor !important; font-weight:800; }
-
-/* Chip trong timeline phase */
-body.theme-dark .phase-chip:not(.lead) { background:#1B2A42; color:#E2EAF5; border-color:#38506F; }
-body.theme-dark .phase-chip.lead { background:#2A3750; color:#FFFFFF; border-color:#4A6790; }
-
-/* 4) Đơn thuốc và lịch dùng */
-body.theme-dark .med-item { background:#1A2536; border-color:#2A3A52; }
-body.theme-dark .med-name { color:#EAF1FB; }
-body.theme-dark .med-nhom { color:#7FB0FF; }
-body.theme-dark .med-dose { color:#C6D5E8; }
-body.theme-dark .med-period { color:#BFD0E5; }
-body.theme-dark .med-status.done { background:#E2E8F0; color:#475569; }
-body.theme-dark .med-status.active { background:#DCFCE7; color:#047857; }
-body.theme-dark .med-status.unknown { background:#FEF3C7; color:#B45309; }
-body.theme-dark .gantt-wrap { background:#141E2C; border-color:#2A3A52; }
-body.theme-dark .gantt-title, body.theme-dark .gantt-label-name { color:#EAF1FB; }
-body.theme-dark .gantt-label-date, body.theme-dark .gantt-axis-track span { color:#AFC3DD; }
-body.theme-dark .gantt-track { background:#1C2740; }
-body.theme-dark .gantt-grid-line { background:#324866; }
-
-/* 5) Kiểm tra an toàn đơn thuốc */
-
-/*
-QUAN TRỌNG:
-Rule cũ này quá rộng:
-body.theme-dark .drug-egfr-box * { color:#C6D5E8; }
-Nó làm tag/pill bị nhạt.
-Phần bên dưới sẽ override lại cho đúng.
-*/
-
-body.theme-dark .drug-egfr-lbl, body.theme-dark .drug-egfr-note, body.theme-dark .egfr-inputs { color:#C6D5E8; }
-body.theme-dark .egfr-inputs b { color:#FFFFFF; }
-body.theme-dark .drug-egfr-tag.ok { background:#DCFCE7; color:#047857 !important; }
-body.theme-dark .drug-egfr-tag.warn { background:#FEF3C7; color:#B45309 !important; }
-body.theme-dark .drug-egfr-tag.crit { background:#FEE2E2; color:#B91C1C !important; }
-body.theme-dark .mf { background:#1A2536; color:#EAF1FB; }
-body.theme-dark .mf-op { color:#AFC3DD; }
-
-/* Alert card bên trong drug safety */
-body.theme-dark .drug-section-hd { color:#EAF1FB; }
-body.theme-dark .drug-alert { background:#F8FAFC !important; border-color:#CBD5E1 !important; }
-body.theme-dark .drug-pair, body.theme-dark .drug-conseq, body.theme-dark .drug-suggest { color:#0F2740; }
-body.theme-dark .drug-suggest strong { color:#0B1F2A; }
-body.theme-dark .drug-caution { background:#FFF7D6; border-color:#FCD34D; color:#7C2D12; }
-body.theme-dark .drug-caution b { color:#B45309; }
-body.theme-dark .prio-src { background:#EAF2FF; border-color:#BFDBFE; color:#1D4ED8; }
-body.theme-dark .drug-disclaimer { color:#AFC3DD; border-top-color:#2A3A52; }
-
-/* Sửa độ tương phản phần Biện luận lâm sàng */
-body.theme-dark .reason-item { background:#1A2536 !important; border-color:#3A4D69 !important; }
-body.theme-dark .reason-item .reason-title { color:#FFFFFF !important; }
-body.theme-dark .reason-item .reason-bullets li, body.theme-dark .reason-item .reason-body { color:#DCE7F5 !important; }
-body.theme-dark .reason-item .reason-bullets, body.theme-dark .reason-item .reason-body { border-top-color:#415571 !important; }
-
-/* Tóm tắt toàn cảnh - dark mode */
-body.theme-dark .summary-phase { background:#1A2536 !important; border-color:#3A4D69 !important; }
-body.theme-dark .summary-phase .bullet-list li { color:#E2EBF7 !important; }
-body.theme-dark .summary-phase .bullet-list li::before { background:#60A5FA; }
-
-/* Tiêu đề từng giai đoạn */
-body.theme-dark .summary-phase-title { font-weight:800; }
-
-/* Giữ số thứ tự nổi rõ */
-body.theme-dark .summary-phase-num { color:#FFFFFF !important; }
-
-/* ========================= DARK MODE: ECHO CHART + PRIORITY BOARD ========================= */
-
-/* 1) Đồ thị diễn biến EF và chênh áp */
-body.theme-dark .echo-tl-wrap { background:#131D2E; border-color:#2A3A52; box-shadow:0 4px 18px rgba(0,0,0,0.22); }
-body.theme-dark .echo-tl-wrap svg { background:#101A2B; border:1px solid #263750; border-radius:12px; }
-body.theme-dark .echo-tl-legend span { color:#C7D4E6; }
-
-/* Nhãn EF đang dùng màu xanh đậm inline nên khó đọc trên nền tối */
-body.theme-dark .echo-tl-wrap svg text[fill="#1D3A6E"] { fill:#DCE8F8 !important; }
-
-/* Làm các nhãn trục xanh sáng hơn */
-body.theme-dark .echo-tl-wrap svg text[fill="#1D6FE8"] { fill:#60A5FA !important; }
-
-/* Nhãn ngày */
-body.theme-dark .echo-tl-wrap svg text[fill="#94A3B8"] { fill:#AFC1D8 !important; }
-
-/* Khung phân tích AI dưới biểu đồ */
-body.theme-dark .echo-tl-wrap .ai-insight { background:#17243A; border-color:#304765; }
-body.theme-dark .echo-tl-wrap .ai-insight-text { color:#E2EBF7; }
-
-/* 2) Phân tầng ưu tiên lâm sàng */
-body.theme-dark .prio-board { background:#2A3A52; }
-
-/* Tiêu đề Xử lý / Theo dõi / Ổn định */
-body.theme-dark .prio-col-head { background:#18243A !important; border-bottom:1px solid #30435F; }
-
-/* Phần thân mỗi cột */
-body.theme-dark .prio-col-body { background:#101A2B; }
-
-/* Card nội dung */
-body.theme-dark .prio-box { background:#18243A; border-color:#30435F; box-shadow:0 2px 8px rgba(0,0,0,0.14); }
-body.theme-dark .prio-box-name { color:#F8FAFC; }
-body.theme-dark .prio-box-reason { color:#C7D5E8; }
-body.theme-dark .prio-box-lbl { color:#EAF1FB; }
-
-/* Dòng “Không có mục nào” hiện đang quá mờ */
-body.theme-dark .prio-col-empty { color:#91A6C2; }
-
-/* Số lượng ở đầu mỗi cột */
-body.theme-dark .prio-col-n { background:#0F192A; color:#F1F5F9; border:1px solid #30435F; }
-
-/* Nút nguồn hướng dẫn */
-body.theme-dark .prio-src { background:#EAF2FF; color:#1D4ED8; border-color:#BFDBFE; }
-body.theme-dark .prio-src:hover { background:#1D6FE8; color:#FFFFFF; }
-
-/* ========================================= DARK MODE: UPLOAD + GHI ÂM + CONFIRM LOGOUT ========================================= */
-
-/* 1. Khu vực kéo thả tài liệu */
-body.theme-dark .upload-zone { background:#141D2F !important; border-color:#38506F !important; box-shadow:0 10px 36px rgba(0,0,0,0.28); }
-body.theme-dark .upload-zone:hover { background:#18243A !important; border-color:#5B95F2 !important; }
-body.theme-dark .upload-zone.drag { background:#1B2B44 !important; border-color:#60A5FA !important; box-shadow:0 0 0 5px rgba(96,165,250,0.12), 0 12px 40px rgba(0,0,0,0.30); }
-body.theme-dark .upload-icon { background:linear-gradient(135deg, rgba(96,165,250,0.18), rgba(45,212,191,0.14)); border:1px solid #304765; }
-body.theme-dark .upload-title { color:#F8FAFC !important; }
-body.theme-dark .upload-sub { color:#B8C8DC !important; }
-body.theme-dark .upload-privacy, body.theme-dark .fmt-lbl { color:#9FB3CC !important; }
-
-/* Dòng trạng thái khi đang phân tích đang dùng inline color */
-body.theme-dark .upload-zone > div > p { color:#C7D4E6 !important; }
-body.theme-dark .upload-zone > div > p:first-of-type { color:#F8FAFC !important; }
-
-/* Các nhãn PDF, DOC, XLS... */
-body.theme-dark .fmt-chip { background:#1E2B44 !important; border:1px solid #38506F; color:#DCE8F8 !important; }
-
-/* Link demo và lịch sử */
-body.theme-dark .demo-link, body.theme-dark .hist-link { color:#7FB0FF; }
-body.theme-dark .demo-link { background:rgba(91,149,242,0.10); border-color:#304765; }
-body.theme-dark .demo-link:hover, body.theme-dark .hist-link:hover { background:rgba(91,149,242,0.18); }
-
-/* 2. Khung lời dặn và ghi âm */
-body.theme-dark .rec-inline-wrap { background:#111C2E !important; border-color:#30435F !important; }
-body.theme-dark .rec-inline-h { color:#F1F5F9 !important; }
-body.theme-dark .smart-note { background:#0F192A !important; border-color:#30435F !important; }
-body.theme-dark .smart-note:focus-within { border-color:#60A5FA !important; }
-body.theme-dark .smart-note.rec { border-color:#2DD4BF !important; box-shadow:0 0 0 3px rgba(45,212,191,0.10); }
-body.theme-dark .smart-note-ta { background:#0F192A !important; color:#EAF1FB !important; }
-body.theme-dark .smart-note-ta::placeholder { color:#8398B5 !important; opacity:1; }
-body.theme-dark .smart-note-bar { background:#152136 !important; border-top-color:#30435F !important; }
-body.theme-dark .sn-mic { background:#1B2A42 !important; border-color:#3A5272 !important; color:#DCE8F8 !important; }
-body.theme-dark .sn-mic:hover { background:#203452 !important; border-color:#2DD4BF !important; color:#5EEAD4 !important; }
-body.theme-dark .sn-mic.on { background:#123630 !important; border-color:#2DD4BF !important; color:#5EEAD4 !important; }
-body.theme-dark .sn-count { color:#AFC1D8 !important; }
-
-/* Nút đính kèm bị vô hiệu hóa */
-body.theme-dark .sn-send:disabled { background:#34445D; color:#9FB1C8; opacity:1; }
-
-/* 3. Hộp xác nhận đăng xuất */
-body.theme-dark .cfm { background:#161F33 !important; border:1px solid #30435F; box-shadow:0 24px 60px rgba(0,0,0,0.48); }
-body.theme-dark .cfm-t { color:#F8FAFC !important; }
-body.theme-dark .cfm-m { color:#BFD0E5 !important; }
-
-/* Nút Hủy */
-body.theme-dark .cfm-cancel { background:#1E2B44 !important; border-color:#3A5272 !important; color:#E2EBF7 !important; }
-body.theme-dark .cfm-cancel:hover { background:#293A57 !important; border-color:#5B78A0 !important; color:#FFFFFF !important; }
-
-/* Nút Đăng xuất */
-body.theme-dark .cfm-ok.danger { background:#DC2626; color:#FFFFFF; }
-body.theme-dark .cfm-ok.danger:hover { background:#B91C1C; }
-
 /* ===== TONG QUAN NHANH (CaseOverview) ===== */
 .co-wrap{max-width:1100px;margin:0 auto 20px;background:#fff;border:1px solid var(--border);border-radius:16px;padding:16px 18px;box-shadow:var(--shadow-sm)}
 .co-head{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
@@ -7090,7 +8791,9 @@ body.theme-dark .cfm-ok.danger:hover { background:#B91C1C; }
 .co-stat-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .co-stat-val{font-size:17px;font-weight:800;color:var(--navy);line-height:1.15}
 .co-spark{display:block;width:100%;height:24px;margin:3px 0 1px}
+.co-stat-foot{display:flex;align-items:center;justify-content:space-between;gap:6px}
 .co-stat-norm{font-size:10px;color:var(--muted2)}
+.co-stat-date{font-size:10px;color:var(--muted2);white-space:nowrap}
 .co-prios{display:flex;align-items:flex-start;gap:12px;margin-top:14px;padding-top:12px;border-top:1px dashed var(--border);flex-wrap:wrap}
 .co-prios-lbl{font-size:12px;font-weight:800;color:var(--navy2);white-space:nowrap;padding-top:1px}
 .co-prio-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;flex:1;min-width:200px}
@@ -7116,6 +8819,34 @@ body.theme-dark .co-phase{background:rgba(29,111,232,0.22);color:#7FB0FF}
 .vc-delta.down{color:#0E9488}
 .vc-note{font-size:11px;color:var(--muted2);margin-top:10px;line-height:1.5}
 .vc-empty{font-size:13px;color:var(--muted);padding:8px 0}
+.btn-secondary-sm{font-size:12.5px;font-weight:600;color:#1D6FE8;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:9px;padding:8px 14px;cursor:pointer;font-family:inherit}
+.btn-secondary-sm:hover{background:#DBEAFE}
+.fb-wrap{position:relative;display:inline-flex;margin-left:6px}
+.fb-trigger-btn{width:22px;height:22px;border-radius:50%;border:none;background:transparent;color:#94A3B8;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;opacity:.6;transition:opacity .15s,background .15s}
+.fb-trigger-btn:hover{opacity:1;background:rgba(0,0,0,.05)}
+.fb-popover{position:absolute;top:calc(100% + 6px);left:0;z-index:80;width:240px;background:var(--glass);border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.18);padding:10px}
+.fb-popover-title{font-size:12px;font-weight:700;color:var(--navy);margin-bottom:6px}
+.fb-popover textarea{width:100%;border:1px solid var(--border);border-radius:8px;padding:7px 9px;font-size:12px;font-family:inherit;resize:none;background:var(--glass);color:var(--navy)}
+.fb-popover-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:7px}
+.fb-cancel{font-size:11.5px;color:var(--muted);background:transparent;border:none;cursor:pointer;padding:5px 9px}
+.fb-submit{font-size:11.5px;font-weight:700;color:#fff;background:#1D6FE8;border:none;border-radius:7px;padding:5px 11px;cursor:pointer}
+.fb-submit:disabled{opacity:.6;cursor:not-allowed}
+.meddiag-diff{display:flex;flex-direction:column;gap:12px}
+.meddiag-dx-change{background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:10px 12px;font-size:12.5px}
+.meddiag-dx-label{font-weight:700;color:#92400E;margin-bottom:5px;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em}
+.meddiag-dx-old{color:#92400E;opacity:.75;text-decoration:line-through;margin-bottom:2px}
+.meddiag-dx-new{color:#1D6FE8;font-weight:600}
+.meddiag-group-lbl{font-size:11.5px;font-weight:700;margin-bottom:6px}
+.meddiag-group-lbl.added{color:#059669}
+.meddiag-group-lbl.removed{color:#DC2626}
+.meddiag-tag{display:inline-block;font-size:12px;font-weight:600;border-radius:999px;padding:4px 12px;margin:0 6px 6px 0}
+.meddiag-tag.added{background:#ECFDF5;color:#059669;border:1px solid #A7F3D0}
+.meddiag-tag.removed{background:#FEF2F2;color:#DC2626;border:1px solid #FECACA;text-decoration:line-through}
+body.theme-dark .meddiag-dx-change{background:#2a2010;border-color:#5c4a1a}
+body.theme-dark .meddiag-dx-label,body.theme-dark .meddiag-dx-old{color:#fcd34d}
+body.theme-dark .meddiag-tag.added{background:#0F2A20;color:#34D399;border-color:#134E36}
+body.theme-dark .meddiag-tag.removed{background:#2A1414;color:#F87171;border-color:#5C2027}
+body.theme-dark .btn-secondary-sm{background:#16243A;color:#7DA6F5;border-color:#2A3A52}
 @media(max-width:560px){.vc-row{grid-template-columns:1.2fr .8fr 1.3fr .8fr;font-size:12px;padding:8px 10px}}
 body.theme-dark .vc-pick select{background:#141E2C;border-color:#2A3A52;color:#E2EBF7}
 body.theme-dark .vc-table{border-color:#2A3A52}
@@ -7156,7 +8887,27 @@ body.theme-dark .mt-chip{background:#141E2C;border-color:#2A3A52}
 body.theme-dark .mt-chip.on{background:rgba(29,111,232,0.18)}
 body.theme-dark .takeaway-txt,body.theme-dark .clin-txt,body.theme-dark .lead,body.theme-dark .desc{color:#D6E2F2}
 .sidebar-item.active svg{opacity:1}
-.sh-ov{position:fixed;inset:0;z-index:140;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
+.upd-ov{position:fixed;inset:0;z-index:215;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
+.upd-panel{background:var(--glass);border-radius:16px;width:440px;max-width:100%;box-shadow:0 24px 60px rgba(15,39,64,.3);overflow:hidden}
+.upd-head{display:flex;align-items:center;gap:9px;padding:14px 18px;border-bottom:1px solid var(--border);font-size:14.5px;font-weight:700;color:var(--navy)}
+.upd-head span{flex:1}
+.upd-body{padding:18px}
+.upd-desc{font-size:12.5px;color:var(--muted2);line-height:1.6;margin:0 0 14px}
+.upd-drop{border:2px dashed var(--border);border-radius:12px;padding:28px 16px;display:flex;flex-direction:column;align-items:center;gap:9px;cursor:pointer;font-size:13px;font-weight:600;color:var(--navy2);transition:border-color .15s,background .15s}
+.upd-drop:hover,.upd-drop.drag{border-color:#1D6FE8;background:rgba(29,111,232,.04)}
+.upd-staged{display:flex;align-items:center;gap:9px;border:1px solid var(--border);border-radius:10px;padding:10px 13px;font-size:13px;color:var(--navy2)}
+.upd-staged-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upd-staged-meta{flex-shrink:0;font-size:11px;color:#94A3B8}
+.upd-staged button{border:none;background:transparent;cursor:pointer;display:inline-flex}
+.upd-loading{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--navy2);padding:14px 0}
+.spin{width:16px;height:16px;border:2.5px solid #DCE5F2;border-top-color:#1D6FE8;border-radius:50%;display:inline-block;animation:mp-spin .7s linear infinite;flex-shrink:0}
+@keyframes mp-spin{to{transform:rotate(360deg)}}
+body.theme-dark .upd-panel{background:#161F33}
+body.theme-dark .upd-head{color:#EAF1FB;border-color:#28364E}
+body.theme-dark .upd-drop{border-color:#2F4368;color:#9FB3CC}
+body.theme-dark .upd-drop:hover{border-color:#5FA8FF;background:rgba(95,168,255,.06)}
+body.theme-dark .upd-staged{border-color:#2F4368;color:#9FB3CC}
+.sh-ov{position:fixed;inset:0;z-index:215;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
 .sh-panel{background:#fff;border-radius:16px;width:432px;max-width:100%;box-shadow:0 24px 60px rgba(15,39,64,.3);overflow:hidden}
 .sh-head{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--border);font-size:14px;font-weight:700;color:var(--navy)}
 .sh-head span{flex:1}
@@ -7188,6 +8939,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 @media(max-width:420px){
   .nav-export-txt{display:none}
   .nav-export{padding:8px 10px}
+  .nav-btn-txt{display:none}
+  .nav-hist-btn,.nav-save-btn{padding:0 9px}
 }
 @media(max-width:600px){
   .stats-row{grid-template-columns:1fr}
@@ -7196,7 +8949,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   .tls-item{flex-basis:172px}
   .dn-fab{left:14px;bottom:14px;width:46px;height:46px}
   .dn-panel{left:14px;bottom:70px}
-  .fc-panel{max-width:calc(100vw - 28px)}
   .nav-export{padding:8px 11px}
   .login-hero-title{font-size:24px}
   .ecmp-pick select{flex:1;min-width:0}
@@ -7238,22 +8990,65 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .teach-q-ic{color:#0E9488;font-weight:800;width:13px;display:inline-block;flex-shrink:0}
 .teach-q-a{font-size:12.5px;color:#475569;line-height:1.65;padding:0 14px 13px 36px}
 .teach-q-a-lbl{display:inline-block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#0E9488;background:rgba(14,148,136,.1);padding:2px 8px;border-radius:6px;margin-right:8px}
-.hist-overlay{position:fixed;inset:0;background:rgba(10,22,40,.5);backdrop-filter:blur(3px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px}
-.hist-modal{width:100%;max-width:580px;max-height:84vh;overflow:auto;background:#fff;border-radius:20px;padding:24px}
-.hist-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
-.hist-title{display:flex;align-items:center;gap:8px;font-size:18px;font-weight:800;color:#0F2740}
+.hist-title{display:flex;align-items:center;gap:8px;font-size:18px;font-weight:800;color:#0F2740;margin-bottom:16px}
 .hist-list{display:flex;flex-direction:column;gap:11px}
-.hist-item{display:flex;gap:13px;align-items:center;border:1px solid #e7eef8;border-radius:14px;padding:14px;cursor:pointer;transition:all .15s}
-.hist-item:hover{border-color:#1D6FE8;background:rgba(29,111,232,.03);transform:translateY(-1px);box-shadow:0 6px 18px rgba(29,111,232,.1)}
-.hist-item.cur{border-color:#1D6FE8;background:rgba(29,111,232,.06)}
-.hist-avatar{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#1D6FE8,#0E9488);color:#fff;font-weight:700;font-size:18px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.hist-item{display:flex;gap:14px;align-items:center;border:1px solid #e7eef8;border-radius:16px;padding:16px 18px;cursor:pointer;transition:all .18s}
+.hist-item:hover{border-color:#1D6FE8;background:rgba(29,111,232,.03);transform:translateY(-2px);box-shadow:0 10px 26px rgba(29,111,232,.13)}
+.hist-item.cur{border-color:#1D6FE8;background:rgba(29,111,232,.06);box-shadow:0 4px 14px rgba(29,111,232,.08)}
+.hist-avatar{width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#1D6FE8,#0E9488);color:#fff;font-weight:700;font-size:18px;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 3px 8px rgba(29,111,232,.25)}
 .hist-info{flex:1;min-width:0}
 .hist-name{font-size:14.5px;font-weight:700;color:#0F2740}
 .hist-meta{font-size:11.5px;font-weight:500;color:#7A96C8}
 .hist-dx{font-size:12px;color:#475569;line-height:1.5;margin:3px 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .hist-foot{display:flex;align-items:center;gap:5px;font-size:11px;color:#94a3b8}
 .hist-open{font-size:12px;font-weight:600;color:#1D6FE8;flex-shrink:0}
+.hist-actions{display:flex;gap:2px;flex-shrink:0;opacity:.45;transition:opacity .15s}
+.hist-item:hover .hist-actions,.hist-item:focus-within .hist-actions{opacity:1}
+.hist-del-btn{flex-shrink:0;width:30px;height:30px;border-radius:9px;border:1px solid transparent;background:transparent;color:#94A3B8;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+.hist-del-btn:hover{background:#FEF2F2;border-color:#FECACA;color:#DC2626}
+.hist-del-btn:disabled{cursor:not-allowed;opacity:.6}
+.hist-del-spin{width:13px;height:13px;border:2px solid #FCA5A5;border-top-color:#DC2626;border-radius:50%;animation:mp-spin .7s linear infinite}
+body.theme-dark .hist-del-btn{color:#64748B}
+body.theme-dark .hist-del-btn:hover{background:#3A1418;border-color:#5C2027;color:#F87171}
+.hist-pin-btn{flex-shrink:0;width:30px;height:30px;border-radius:9px;border:1px solid transparent;background:transparent;color:#94A3B8;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+.hist-pin-btn:hover{background:#FFFBEB;border-color:#FDE68A;color:#D97706}
+.hist-pin-btn.pinned{color:#D97706;background:#FFFBEB;border-color:#FDE68A;opacity:1}
+.hist-edit-btn{flex-shrink:0;width:30px;height:30px;border-radius:9px;border:1px solid transparent;background:transparent;color:#94A3B8;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+.hist-edit-btn:hover{background:#EFF6FF;border-color:#BFDBFE;color:#1D6FE8}
+.hist-rename-row{display:flex;align-items:center;gap:6px;margin-bottom:2px}
+.hist-rename-input{flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--navy);background:var(--glass);border:1.5px solid #1D6FE8;border-radius:8px;padding:5px 9px;outline:none}
+.hist-rename-save,.hist-rename-cancel{flex-shrink:0;width:26px;height:26px;border-radius:7px;border:none;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.hist-rename-save{background:#ECFDF5;color:#059669}
+.hist-rename-save:hover{background:#D1FAE5}
+.hist-rename-cancel{background:#FEF2F2;color:#DC2626}
+.hist-rename-cancel:hover{background:#FEE2E2}
+.hist-rename-save:disabled,.hist-rename-cancel:disabled{opacity:.6;cursor:not-allowed}
+body.theme-dark .hist-pin-btn{color:#64748B}
+body.theme-dark .hist-pin-btn:hover,body.theme-dark .hist-pin-btn.pinned{background:#2a2010;border-color:#5c4a1a;color:#fcd34d}
+body.theme-dark .hist-edit-btn{color:#64748B}
+body.theme-dark .hist-edit-btn:hover{background:#16243A;border-color:#2A3A52;color:#5FA8FF}
+body.theme-dark .hist-rename-input{background:#141E2C;color:#EAF1FB;border-color:#3B82F6}
+body.theme-dark .hist-rename-save{background:#0F2A20;color:#34D399}
+body.theme-dark .hist-rename-cancel{background:#2A1414;color:#F87171}
 .hist-section-lbl{display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#DC2626;margin:10px 2px 2px}
+.hist-loading-hint{font-size:12px;color:#94A3B8;padding:8px 4px;text-align:center}
+.hist-search{margin:8px 0 0}
+.hist-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--glass);border:1px solid var(--border);border-radius:12px;padding:9px 12px;margin:8px 0 10px}
+.hist-select-all{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:var(--navy2);cursor:pointer;white-space:nowrap}
+.hist-select-all input{width:15px;height:15px;cursor:pointer;accent-color:#1D6FE8}
+.hist-row-check{width:16px;height:16px;flex-shrink:0;cursor:pointer;accent-color:#1D6FE8}
+.hist-bulk-del-btn{display:flex;align-items:center;gap:6px;background:#FEF2F2;color:#DC2626;border:1px solid #FECACA;border-radius:9px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;transition:background .15s}
+.hist-bulk-del-btn:hover{background:#FEE2E2}
+.hist-bulk-del-btn:disabled{opacity:.6;cursor:not-allowed}
+.hist-toolbar-spacer{flex:1;min-width:8px}
+.hist-dd{border:1px solid var(--border);background:var(--glass);color:var(--navy2);border-radius:8px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;outline:none}
+.hist-empty-state{display:flex;flex-direction:column;align-items:center;gap:8px;padding:36px 12px;color:#94A3B8;font-size:12.5px;text-align:center;opacity:.85}
+body.theme-dark .hist-toolbar{background:#161F33;border-color:#2A3A52}
+body.theme-dark .hist-select-all{color:#A8BBD6}
+body.theme-dark .hist-bulk-del-btn{background:#2A1414;border-color:#5C2027;color:#F87171}
+body.theme-dark .hist-bulk-del-btn:hover{background:#3A1418}
+body.theme-dark .hist-dd{background:#161F33;border-color:#2A3A52;color:#A8BBD6}
+body.theme-dark .hist-empty-state{color:#64748B}
 .hist-item-ecg:hover{border-color:#DC2626;background:rgba(220,38,38,.03);box-shadow:0 6px 18px rgba(220,38,38,.1)}
 .hist-item-ecg-demo{border-style:dashed}
 .hist-demo-tag{display:inline-block;font-size:9.5px;font-weight:700;color:#94A3B8;background:#F1F5F9;border-radius:999px;padding:1px 7px;margin-left:6px;vertical-align:middle;text-transform:uppercase;letter-spacing:.03em}
@@ -7299,7 +9094,7 @@ body.theme-dark .hist-dx{color:#9FB3CC}
 @media(max-width:620px){.disc-grid{grid-template-columns:1fr}.ask-khoa{min-width:120px}}
 .spec-ic{width:30px;height:30px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
 .risk-dash{display:flex;flex-direction:column;gap:8px;padding:0 26px}
-.risk-row{display:flex;align-items:center;gap:10px}
+.mdt-risk-row{display:flex;align-items:center;gap:10px}
 .risk-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
 .risk-dot.green{background:#22C55E}.risk-dot.amber{background:#F59E0B}.risk-dot.red{background:#EF4444}
 .risk-ten{font-size:12.5px;color:#334155;min-width:165px;flex-shrink:0}
@@ -7375,6 +9170,7 @@ body.theme-dark .hist-dx{color:#9FB3CC}
 .pw-eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;color:#7A96C8;display:flex}
 .rec-inline-wrap{margin-top:14px;border:1px solid #dbe6f5;border-radius:14px;padding:13px 15px;background:linear-gradient(180deg,rgba(29,111,232,.045),rgba(14,148,136,.03))}
 .rec-inline-h{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;color:#0F2740;margin-bottom:10px}
+.upd-note-hint{font-size:11.5px;color:var(--muted2);line-height:1.5;margin:-6px 0 10px}
 .rec-inline{display:flex;flex-direction:column}
 .rec-inline-row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
 .rec-attach{display:inline-flex;align-items:center;gap:6px;border:none;background:#0E9488;color:#fff;font-size:12.5px;font-weight:600;padding:9px 14px;border-radius:10px;cursor:pointer}
@@ -7432,6 +9228,7 @@ body.theme-dark .hist-dx{color:#9FB3CC}
 .nav-menu button.danger{color:#DC2626}
 .nav-menu button.danger:hover{background:#fef2f2}
 .nav-menu-sec{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:#9fb2cc;padding:9px 12px 4px}
+.nav-menu-hint{font-size:11.5px;color:#94A3B8;padding:4px 12px 10px;line-height:1.5}
 .nav-menu-sec:first-child{padding-top:5px}
 .nav-menu{max-height:calc(100vh - 86px);overflow-y:auto}
 body.theme-dark .nav-menu-sec{color:#7689A8}
@@ -7523,12 +9320,57 @@ body.theme-dark ::selection{background:rgba(91,149,242,.32)}
 .mode-cd-list{min-width:236px}
 .toast-host{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:200;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
 .toast{display:inline-flex;align-items:center;gap:9px;background:#0F2740;color:#fff;font-size:13px;font-weight:500;padding:11px 16px;border-radius:12px;box-shadow:0 10px 30px rgba(15,39,64,.3);animation:toastIn .22s ease}
+.toast-action{flex-shrink:0;background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12px;font-weight:700;padding:5px 12px;border-radius:8px;cursor:pointer;margin-left:4px;white-space:nowrap;transition:background .15s}
+.toast-action:hover{background:rgba(255,255,255,.28)}
 .toast.ok{background:linear-gradient(135deg,#0E9488,#1D6FE8)}
 .toast.err{background:#B91C1C}
 @keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-.cfm-ov{position:fixed;inset:0;z-index:210;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
+.cfm-ov{position:fixed;inset:0;z-index:230;background:rgba(15,39,64,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastIn .15s ease}
 .cfm{background:#fff;border-radius:16px;max-width:380px;width:100%;padding:22px;box-shadow:0 24px 60px rgba(15,39,64,.3)}
-.cfm-t{font-size:16px;font-weight:800;color:#0F2740;margin-bottom:8px}
+.sim-modal{max-width:640px;width:92vw}
+.sim-ocr-result{background:#F8FAFC;border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.9;color:var(--navy);margin-bottom:14px}
+.sim-card-warning{display:flex;align-items:flex-start;gap:7px;background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;font-size:12px;line-height:1.6;border-radius:10px;padding:9px 12px;margin-bottom:12px}
+.sim-record-list{display:flex;flex-direction:column;gap:8px;width:100%;margin-top:6px}
+.sim-record-btn{display:flex;align-items:center;gap:9px;background:#EFF6FF;border:1px solid #BFDBFE;color:#1D6FE8;font-size:13px;font-weight:600;padding:11px 16px;border-radius:10px;cursor:pointer;text-align:left;font-family:inherit;transition:background .15s}
+.sim-record-btn:hover{background:#DBEAFE}
+/* ─── Ghi âm & Tóm tắt Hội chẩn ─── */
+.cvs-card{background:var(--glass);border:1px solid var(--border);border-radius:16px;padding:18px 20px;margin:16px 0}
+.focus-mode-bar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:170;display:flex;align-items:center;gap:10px;background:#0F2740;color:#fff;font-size:12.5px;padding:10px 16px;border-radius:999px;box-shadow:0 10px 30px rgba(15,39,64,.35);max-width:calc(100vw - 40px)}
+.focus-mode-bar span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.focus-mode-bar button{flex-shrink:0;background:#fff;color:#0F2740;border:none;border-radius:999px;padding:6px 14px;font-size:11.5px;font-weight:700;cursor:pointer}
+.cvs-head{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:800;color:var(--navy);margin-bottom:14px}
+.cvs-idle-row{display:flex;gap:10px;flex-wrap:wrap}
+.cvs-recording{display:flex;align-items:center;gap:9px;font-size:13.5px;color:#DC2626;font-weight:600}
+.cvs-rec-dot{width:9px;height:9px;border-radius:50%;background:#DC2626;animation:mp-shimmer-pulse 1s ease-in-out infinite}
+@keyframes mp-shimmer-pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.cvs-stop-btn{margin-left:auto;background:#DC2626;color:#fff;border:none;border-radius:999px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer}
+.cvs-fallback-badge{display:inline-block;background:#FFF7ED;color:#C2410C;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;padding:4px 10px;border-radius:999px;margin-bottom:10px}
+.cvs-summary-card{background:#F0FDF4;border:1px solid #BBF7D0;border-radius:12px;padding:14px 16px;font-size:13px;line-height:1.7;color:var(--navy);margin-bottom:12px}
+.cvs-summary-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;font-weight:700;color:#059669;margin-bottom:8px}
+.cvs-summary-head>span{display:flex;align-items:center;gap:6px}
+.cvs-copy-btn{background:#fff;border:1px solid #A7F3D0;color:#059669;font-size:11px;font-weight:700;padding:5px 11px;border-radius:8px;cursor:pointer}
+.cvs-summary-card ul{margin:4px 0 8px 18px;padding:0}
+.cvs-transcript-card{background:var(--page-bg,#F8FAFC);border:1px solid var(--border);border-radius:12px;padding:12px 16px;margin-bottom:12px}
+.cvs-transcript-head{font-size:11.5px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:.03em;margin-bottom:7px}
+.cvs-transcript-body{font-size:12.5px;color:var(--muted);line-height:1.7;max-height:160px;overflow-y:auto;white-space:pre-wrap}
+body.theme-dark .cvs-summary-card{background:#0F2A20;border-color:#134E36}
+body.theme-dark .cvs-transcript-card{background:#0F1A2C;border-color:#2A3A52}
+.sim-desc{font-size:13px;color:#475569;line-height:1.6;margin-bottom:14px}
+.sim-field-lbl{display:block;font-size:11.5px;font-weight:700;color:#7A96C8;text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px}
+.sim-or-divider{text-align:center;font-size:11px;font-weight:600;color:#94A3B8;margin:14px 0;position:relative}
+.sim-or-divider::before,.sim-or-divider::after{content:"";position:absolute;top:50%;width:38%;height:1px;background:var(--border)}
+.sim-or-divider::before{left:0}
+.sim-or-divider::after{right:0}
+.sim-input{width:100%;border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:10px;font-family:inherit}
+.sim-upload-btn{width:100%;display:flex;align-items:center;justify-content:center;gap:7px;border:1px dashed #BFDBFE;background:#EFF6FF;color:#1D6FE8;font-size:12.5px;font-weight:600;padding:10px;border-radius:10px;cursor:pointer;margin-bottom:6px}
+.sim-loading{display:flex;align-items:center;gap:12px;font-size:13px;color:#475569;padding:20px 4px;line-height:1.5}
+.sim-success{display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;padding:12px 4px;font-size:13.5px;color:#0F2740;line-height:1.6}
+.sim-camera-box{position:relative;width:100%;height:340px;background:#0F1A2C;border-radius:14px;display:flex;align-items:center;justify-content:center;margin:14px 0;overflow:hidden}
+.sim-camera-video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+.sim-camera-box.scanning{background:#0A2A1F}
+.sim-scan-line{position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,#22C55E,transparent);animation:sim-scan 1.4s ease-in-out infinite}
+@keyframes sim-scan{0%{top:8%}50%{top:88%}100%{top:8%}}
+.cfm-t{font-size:16px;font-weight:800;color:#0F2740;margin-bottom:8px;display:flex;align-items:center;gap:8px}
 .cfm-m{font-size:13.5px;color:#5A748F;line-height:1.6;margin-bottom:20px}
 .cfm-actions{display:flex;gap:10px;justify-content:flex-end}
 .cfm-cancel{border:1px solid #d8e2f0;background:#fff;color:#475569;font-size:13px;font-weight:600;padding:9px 16px;border-radius:10px;cursor:pointer}
@@ -7582,6 +9424,9 @@ body.theme-dark .fmt-chip-soon{color:#64748B;background:#141E2C;border-color:#2A
 
 /* ── EcgPage: quét điện tâm đồ - TRANG RIÊNG HOÀN TOÀN ───────────────────── */
 .ecg-page{min-height:100vh;background:var(--page-bg)}
+.hist-page{min-height:100vh;background:var(--page-bg)}
+.hist-page-body{display:flex;justify-content:center;padding:28px 20px 60px}
+.hist-page-inner{width:100%;max-width:640px}
 .ecg-back{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:9px;border:1px solid var(--border);background:var(--glass);color:#1D6FE8;cursor:pointer;flex-shrink:0}
 .ecg-back:hover{background:#EFF6FF}
 .ecg-page-title{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;color:var(--navy)}
@@ -7599,28 +9444,60 @@ body.theme-dark .fmt-chip-soon{color:#64748B;background:#141E2C;border-color:#2A
 .ecg-top-row{display:grid;grid-template-columns:1fr 1fr;gap:20px}
 @media(max-width:700px){.ecg-workspace{grid-template-columns:1fr}.ecg-top-row{grid-template-columns:1fr}}
 .ecg-col-label{font-size:12px;font-weight:700;color:#5A748F;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
-.ecg-img{width:100%;border-radius:12px;border:1px solid var(--border);max-height:260px;object-fit:contain;background:#fff}
+.ecg-media-frame{border:1px solid var(--border);border-radius:12px;padding:10px;display:flex;align-items:center;justify-content:center;height:240px;overflow:hidden}
+.ecg-media-frame-original{background:#fff}
+.ecg-img{width:100%;height:100%;object-fit:contain}
+/* Nền lưới giấy điện tim thật: ô nhỏ 1mm (viền hồng nhạt) lồng trong ô lớn
+   5mm (viền hồng đậm hơn) trên nền hồng kem cực nhẹ — đúng quy ước giấy ECG
+   thật (25mm/s, 1 ô nhỏ = 0,04s). Vẽ bằng 4 lớp linear-gradient chồng nhau,
+   không cần ảnh nền, nhẹ và sắc nét ở mọi độ phân giải màn hình. */
+.ecg-media-frame-signal{
+  background-color:#FFF9F7;
+  background-image:
+    linear-gradient(to right, rgba(220,38,38,.14) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(220,38,38,.14) 1px, transparent 1px),
+    linear-gradient(to right, rgba(220,38,38,.4) 1.5px, transparent 1.5px),
+    linear-gradient(to bottom, rgba(220,38,38,.4) 1.5px, transparent 1.5px);
+  background-size: 8px 8px, 8px 8px, 40px 40px, 40px 40px;
+}
+.ecg-signal-svg{width:100%;height:100%;display:block}
+@media(max-width:480px){.ecg-media-frame{height:190px}}
+.ecg-lead-picker{margin-top:12px;padding:12px 14px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:12px}
+.ecg-lead-picker label{display:block;font-size:12.5px;font-weight:700;color:#92400E;margin-bottom:6px}
+.ecg-lead-picker select{width:100%;border:1px solid #FDE68A;background:#fff;border-radius:8px;padding:7px 10px;font-size:12.5px;color:var(--navy);font-family:inherit}
+.ecg-lead-hint{display:flex;gap:6px;align-items:flex-start;font-size:11px;color:#92400E;opacity:.85;margin-top:8px;line-height:1.5}
+body.theme-dark .ecg-lead-picker{background:#2a2010;border-color:#5c4a1a}
+body.theme-dark .ecg-lead-picker label,body.theme-dark .ecg-lead-hint{color:#fcd34d}
+body.theme-dark .ecg-lead-picker select{background:#1A2536;border-color:#5c4a1a;color:#EAF1FB}
 .ecg-actions{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap}
 .ecg-loading{font-size:13px;color:#5A748F;padding:20px 0;text-align:center}
-.ecg-signal-svg{width:100%;height:140px;background:#fff;border:1px solid var(--border);border-radius:10px}
 .ecg-hr-row{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
 .ecg-hr-box{flex:1;min-width:140px;background:#F8FAFC;border:1px solid var(--border);border-radius:12px;padding:11px 14px}
 .ecg-hr-lbl{font-size:11px;color:#7689A8;font-weight:600;margin-bottom:4px}
 .ecg-hr-val{font-size:20px;font-weight:700;color:#0F2740}
-.ecg-reading-form{background:#F8FAFC;border:1px solid var(--border);border-radius:16px;padding:16px 18px}
-.ecg-form-title{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--navy);margin-bottom:13px}
-.ecg-form-row{display:flex;gap:12px;padding:11px 0;border-top:1px solid var(--border)}
-.ecg-form-row:first-of-type{border-top:none}
-.ecg-form-row-hd{flex:0 0 168px;display:flex;align-items:flex-start;gap:9px}
-.ecg-form-row-icon{flex-shrink:0;width:22px;height:22px;border-radius:50%;background:#1D6FE8;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
-.ecg-form-row-label{font-size:13px;font-weight:700;color:var(--navy);line-height:1.4}
-.ecg-form-chip{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;background:#F1F5F9;color:#64748B;border:1px solid #E2E8F0;white-space:nowrap;margin-top:2px}
-.ecg-form-row-body{flex:1;min-width:0;font-size:13px;color:var(--navy2);line-height:1.55}
-.ecg-form-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
-.ecg-form-empty{color:var(--muted);font-style:italic}
-.ecg-form-source{font-size:11.5px;color:var(--muted);margin-top:3px}
-.ecg-form-tag{display:inline-block;font-size:11px;font-weight:600;color:#1D6FE8;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:999px;padding:2px 10px;margin-top:6px}
-@media(max-width:760px){.ecg-form-row{flex-direction:column;gap:5px}.ecg-form-row-hd{flex:none}}
+.ecg-reading-form{background:#F8FAFC;border:1px solid var(--border);border-radius:16px;padding:18px 20px}
+.ecg-form-title{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--navy);margin-bottom:6px}
+.ecg-form-row{display:grid;grid-template-columns:26% 1fr;gap:20px;padding:18px 0;border-bottom:1px solid rgba(148,163,184,.22)}
+.ecg-form-row:last-of-type{border-bottom:none;padding-bottom:4px}
+.ecg-form-row-hd{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.ecg-form-row-top{display:flex;align-items:center;gap:8px}
+.ecg-form-row-icon{flex-shrink:0;width:20px;height:20px;border-radius:50%;background:#1D6FE8;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.ecg-form-row-label{font-size:12.5px;font-weight:700;color:var(--navy);line-height:1.35}
+.ecg-tag{display:inline-block;font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:6px;background:#EFF6FF;color:#1D4ED8;border:1px solid #DBEAFE;white-space:normal;line-height:1.35}
+.ecg-form-row-body{display:flex;flex-direction:column;gap:7px;min-width:0;font-size:13px;color:var(--navy2);line-height:1.6}
+.ecg-form-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.ecg-form-empty{color:#6b7280;font-style:italic}
+.ecg-form-source{font-size:11.5px;color:#6b7280;font-style:italic}
+.ecg-form-ref{color:#B91C1C;font-weight:600;font-size:12.5px}
+.ecg-note-box{font-size:12px;line-height:1.7;color:#1D4ED8;background:#EFF6FF;border:1px solid #DBEAFE;border-radius:10px;padding:10px 12px;white-space:pre-line}
+.ecg-conf-badge{align-self:flex-end;display:inline-flex;align-items:center;gap:3px;font-size:.75rem;font-weight:600;padding:2px 9px;border-radius:999px;border:1px solid;background:transparent;opacity:.9}
+.ecg-conf-source{font-weight:400;opacity:.8}
+.ecg-redflag-banner{display:flex;gap:10px;align-items:flex-start;background:#FEF2F2;border:1px solid #FECACA;border-radius:12px;padding:12px 14px;margin-bottom:16px}
+.ecg-redflag-title{font-size:12.5px;font-weight:800;color:#B91C1C;margin-bottom:4px}
+.ecg-redflag-list{margin:0;padding-left:16px;font-size:12.5px;color:#991B1B;display:flex;flex-direction:column;gap:2px}
+.ecg-redflag-override{margin-top:8px;font-size:12.5px;font-weight:600;color:#7F1D1D;background:#FEE2E2;border-radius:8px;padding:8px 10px}
+.ecg-permanent-disclaimer{display:flex;gap:6px;align-items:flex-start;font-size:11px;color:#6b7280;font-style:italic;margin-top:2px}
+@media(max-width:480px){.ecg-form-row{grid-template-columns:1fr;gap:8px}}
 body.theme-dark .ecg-page{background:var(--page-bg)}
 body.theme-dark .ecg-back{background:#161F33;border-color:#2A3A52;color:#5FA8FF}
 body.theme-dark .ecg-back:hover{background:#1C2940}
@@ -7632,47 +9509,303 @@ body.theme-dark .ecg-demo-lbl{color:#7689A8}
 body.theme-dark .ecg-demo-btn{background:#16243A;border-color:#2A3A52;color:#5FA8FF}
 body.theme-dark .ecg-demo-btn:hover{background:#1C2E48}
 body.theme-dark .ecg-col-label{color:#7689A8}
-body.theme-dark .ecg-img{background:#1A2536;border-color:#2A3A52}
-body.theme-dark .ecg-signal-svg{background:#1A2536;border-color:#2A3A52}
+body.theme-dark .ecg-media-frame{border-color:#2A3A52}
+body.theme-dark .ecg-media-frame-original{background:#1A2536}
+/* Khung tín hiệu CỐ Ý giữ nguyên nền giấy sáng kể cả ở dark mode — mô phỏng
+   đúng giấy in ECG thật, không đảo màu theo giao diện. */
 body.theme-dark .ecg-hr-box{background:#141E2C;border-color:#2A3A52}
 body.theme-dark .ecg-hr-lbl{color:#7689A8}
 body.theme-dark .ecg-hr-val{color:#EAF1FB}
 body.theme-dark .ecg-reading-form{background:#0F1A2C;border-color:#2A3A52}
 body.theme-dark .ecg-form-title{color:#EAF1FB}
-body.theme-dark .ecg-form-row{border-top-color:#2A3A52}
+body.theme-dark .ecg-form-row{border-bottom-color:rgba(148,163,184,.18)}
 body.theme-dark .ecg-form-row-label{color:#EAF1FB}
-body.theme-dark .ecg-form-chip{background:#1A2536;color:#9FB3CC;border-color:#2A3A52}
-body.theme-dark .ecg-form-tag{background:#16243A;color:#5FA8FF;border-color:#2A3A52}
-/* Supabase Auth + lịch sử */
-.auth-loading{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#F3F6FA;color:#52708F;font-size:14px}
-.hist-search-wrap{display:flex;gap:9px;padding:12px 16px;border-bottom:1px solid #E3E9F1;background:#FAFBFD}
-.hist-search{flex:1;min-width:0;border:1px solid #D8E2F0;border-radius:10px;padding:9px 12px;font:inherit;font-size:12.5px;outline:none}
-.hist-search:focus{border-color:#1D6FE8;box-shadow:0 0 0 3px rgba(29,111,232,.1)}
-.hist-refresh{border:1px solid #BFD3EE;background:#EFF6FF;color:#1D6FE8;border-radius:10px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer}
-.hist-refresh:disabled{opacity:.55;cursor:not-allowed}
-.hist-state{display:flex;align-items:center;justify-content:center;gap:10px;padding:24px 16px;color:#7186A2;font-size:12.5px;text-align:center}
-.hist-state-error{color:#B91C1C;background:#FEF2F2;margin:8px 14px;border-radius:10px}
-.loading-spin.small{width:18px;height:18px;border-width:2px}
-.hist-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
-.hist-delete{width:25px;height:25px;border-radius:8px;border:1px solid #FECACA;background:#FEF2F2;color:#B91C1C;font-size:18px;line-height:20px;cursor:pointer}
-.hist-delete:hover{background:#FEE2E2}
-body.theme-dark .auth-loading{background:#0C1420;color:#9FB3CC}
-body.theme-dark .hist-search-wrap{background:#111B29;border-color:#26364E}
-body.theme-dark .hist-search{background:#141E2C;border-color:#2F4368;color:#EAF1FB}
-body.theme-dark .hist-refresh{background:#16243A;border-color:#2A3A52;color:#7FB0FF}
-body.theme-dark .hist-state-error{background:#2A1518;color:#FCA5A5}
+body.theme-dark .ecg-tag{background:#16243A;color:#7DA6F5;border-color:#2A3A52}
+body.theme-dark .ecg-note-box{background:#16243A;color:#7DA6F5;border-color:#2A3A52}
+body.theme-dark .ecg-redflag-banner{background:#2a1414;border-color:#5c2a2a}
+body.theme-dark .ecg-redflag-list{color:#fca5a5}
+body.theme-dark .ecg-redflag-override{background:#3a1a1a;color:#fca5a5}
 
+
+.faq-widget-root{position:fixed;right:20px;bottom:20px;z-index:180;display:flex;flex-direction:column;align-items:flex-end;gap:12px}
+.faq-fab{position:relative;display:flex;align-items:center;gap:8px;background:#1D6FE8;color:#fff;border:none;border-radius:999px;padding:12px 16px;box-shadow:0 8px 24px rgba(29,111,232,.35);cursor:pointer;font-size:13px;font-weight:700;transition:transform .15s,box-shadow .15s}
+.faq-fab:hover{transform:translateY(-2px);box-shadow:0 10px 28px rgba(29,111,232,.45)}
+.faq-fab-lbl{white-space:nowrap}
+.tts-speaker-btn{flex-shrink:0;width:22px;height:22px;border-radius:50%;border:none;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:.55;transition:opacity .15s,background .15s}
+.tts-speaker-btn:hover{opacity:1;background:rgba(0,0,0,.05)}
+.tts-speaker-btn:disabled{opacity:.3;cursor:not-allowed}
+/* Nút nổi MedAmi — hình tròn cố định, KHÔNG còn giãn theo chữ (đã bỏ nhãn
+   text "MedAmi", chỉ còn logo tròn gradient của chính component MedAmiAvatar
+   đã dùng ở nơi khác trong app, nhất quán 1 hình ảnh thương hiệu duy nhất). */
+.faq-fab-round{width:56px;height:56px;padding:0;border-radius:50%;justify-content:center;background:linear-gradient(135deg,#1D6FE8,#0EA5E9)}
+.faq-fab-avatar{display:flex;align-items:center;justify-content:center;width:100%;height:100%;border-radius:50%;overflow:hidden}
+/* ─── Khung widget tổng thể ─── */
+@keyframes cw-panel-in{from{opacity:0;transform:scale(.96) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}
+@keyframes cw-panel-out{from{opacity:1;transform:scale(1) translateY(0)}to{opacity:0;transform:scale(.96) translateY(10px)}}
+.cw-panel{position:relative;max-width:calc(100vw - 40px);max-height:calc(100vh - 120px);background:var(--glass);border:1px solid var(--border);border-radius:16px;box-shadow:0 10px 25px rgba(0,0,0,.1);display:flex;flex-direction:column;overflow:hidden;transform-origin:bottom right;animation:cw-panel-in .18s ease-out}
+.cw-resize-handle{position:absolute;top:0;left:0;width:18px;height:18px;cursor:nwse-resize;z-index:10;touch-action:none}
+.cw-resize-handle::before{content:"";position:absolute;top:5px;left:5px;width:8px;height:8px;border-top:2px solid rgba(148,163,184,.6);border-left:2px solid rgba(148,163,184,.6);border-radius:3px 0 0 0}
+.cw-resize-handle:hover::before{border-color:#1D6FE8}
+.cw-panel.closing{animation:cw-panel-out .16s ease-in forwards}
+/* ─── Header: nền nhạt sạch sẽ, avatar nhỏ cố định, tabs kiểu segmented
+   control căn giữa, nút đóng ghim absolute góc phải — KHÔNG còn ảnh nền
+   khổng lồ như bug cũ (gốc rễ: MedAmiAvatar không tự set kích thước, xem
+   fix trong component). ─── */
+.cw-header{position:relative;display:flex;align-items:center;gap:8px;padding:10px 34px 10px 12px;background:#F5F9FF;border-bottom:1px solid var(--border)}
+.cw-brand-avatar{flex-shrink:0;width:26px;height:26px;border-radius:8px;overflow:hidden;background:linear-gradient(135deg,#1D6FE8,#0EA5E9)}
+.cw-tabs{flex:1;min-width:0;display:flex;background:#E7EEF9;border-radius:999px;padding:3px;gap:2px}
+.cw-tab{flex:1;min-width:0;border:none;background:transparent;border-radius:999px;padding:6px 8px;font-size:11px;font-weight:700;color:#8CA0C2;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background .15s,color .15s}
+.cw-tab.active{background:#fff;color:#1D6FE8;box-shadow:0 1px 4px rgba(29,111,232,.18)}
+.cw-tab:disabled{opacity:.5;cursor:not-allowed}
+.cw-header-actions{position:absolute;top:9px;right:9px;display:flex;gap:5px}
+.cw-close{flex-shrink:0;width:22px;height:22px;border-radius:50%;border:none;background:rgba(100,116,139,.1);color:#64748B;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s}
+.cw-expand{flex-shrink:0;width:22px;height:22px;border-radius:50%;border:none;background:rgba(100,116,139,.1);color:#64748B;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s}
+.cw-expand:hover{background:rgba(29,111,232,.15);color:#1D6FE8}
+.cw-close:hover{background:rgba(100,116,139,.2)}
+/* ─── Sub-header "Đang hỏi về..." ─── */
+.cw-subhead{padding:6px 14px;font-size:.8rem;color:#6b7280;background:var(--glass);border-bottom:1px solid var(--border)}
+.cw-subhead b{color:var(--navy);font-weight:700}
+/* ─── Khu vực tin nhắn ─── */
+.cw-body{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;background:var(--page-bg,#F8FAFC)}
+.cw-msg{display:flex;flex-direction:column;align-items:flex-start;max-width:85%;padding:8px 10px 6px;border-radius:12px;font-size:12.5px;line-height:1.5}
+.cw-msg.bot{align-self:flex-start;background:var(--glass);border:1px solid var(--border);color:var(--navy)}
+.cw-msg.user{align-self:flex-end;background:#1D6FE8;color:#fff}
+.cw-msg-text{white-space:pre-wrap}
+.cw-msg .icon-tip{align-self:flex-end;margin-top:2px}
+.faq-typing .cw-msg-text{opacity:.65;font-style:italic}
+/* ─── Thanh input: đính kèm / text / mic / gửi thẳng hàng ─── */
+.cw-input-row{display:flex;align-items:center;gap:6px;padding:10px;border-top:1px solid var(--border);background:var(--glass)}
+.cw-input-row input{flex:1;min-width:0;border:1px solid #E5E7EB;border-radius:999px;padding:8px 14px;font-size:12.5px;background:var(--glass);color:var(--navy);outline:none}
+.cw-input-row input:focus{border-color:#1D6FE8}
+.cw-icon-btn,.cw-send-btn{flex-shrink:0;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;border:none}
+.cw-icon-btn{background:transparent;color:#8CA0C2;border:1px solid var(--border)}
+.cw-icon-btn:hover{background:#EFF6FF;color:#1D6FE8}
+.cw-send-btn{background:#1D6FE8;color:#fff}
+.cw-send-btn:disabled{opacity:.5;cursor:not-allowed}
+.cw-input-row .chat-mic-btn{flex-shrink:0}
+@media(max-width:480px){.faq-fab-lbl{display:none}.faq-fab{padding:14px;border-radius:50%}.cw-panel{width:calc(100vw - 32px)}}
+body.theme-dark .cw-header{background:#12203A}
+body.theme-dark .cw-tabs{background:#0B1526}
+body.theme-dark .cw-tab.active{background:#1C2E4A;color:#7DB4FF}
+body.theme-dark .cw-close{background:rgba(148,163,184,.12);color:#A8BBD6}
+body.theme-dark .cw-body{background:#0F1A2C}
+body.theme-dark .cw-input-row input{border-color:#2A3A52}
 `
 
 // ─── Toast + Confirm + Copy (UX dùng chung) ──────────────────────────────────
-function mpToast(msg, kind="ok"){ if(typeof window!=="undefined") window.dispatchEvent(new CustomEvent("mp-toast",{ detail:{ msg, kind } })) }
+// ─── FAQ Widget (VNPT Smartbot) — ĐỘC LẬP với MedAmi lâm sàng ─────────────
+// Bong bóng chat nổi góc dưới phải, hỏi đáp chung về sản phẩm (KHÔNG phải
+// dữ liệu bệnh nhân — xem quyết định kiến trúc: Smartbot không phù hợp làm
+// lõi suy luận lâm sàng động, chỉ dùng cho FAQ).
+// ─── Widget chat hợp nhất — MedAmi lâm sàng + Hỗ trợ hệ thống (Phần 1) ─────
+// Thay thế 2 widget riêng biệt trước đây (FloatingChat + FloatingFaqWidget)
+// vốn cùng nằm góc dưới phải, gây chồng lấn/phân mảnh khi có hồ sơ mở. Giờ
+// CHỈ 1 widget, luôn mount ở App() gốc — chuyển chế độ bằng tab trong header
+// panel thay vì 2 nút nổi riêng.
+function UnifiedChatWidget({ report, hoSoText, clinicalMessages, setClinicalMessages }) {
+  const [open, setOpen] = useState(false)
+  // Đồng bộ với trang Chat lớn — bất kỳ lúc nào tab đó được mở (kể cả
+  // không qua nút mở rộng của chính widget này), tự đóng ngay, không cần
+  // animation (đóng "câm lặng" phía sau, người dùng đang nhìn màn hình
+  // khác).
+  useEffect(() => {
+    const h = () => setOpen(false)
+    window.addEventListener("mp-close-chat-widget", h)
+    return () => window.removeEventListener("mp-close-chat-widget", h)
+  }, [])
+  // "closing" giữ panel còn mount thêm 160ms để animation thu nhỏ kịp chạy
+  // hết trước khi thật sự gỡ khỏi DOM — không có bước này thì {open && ...}
+  // gỡ panel NGAY LẬP TỨC, animation đóng sẽ không kịp thấy.
+  const [closing, setClosing] = useState(false)
+  // Đếm ĐÚNG số tin nhắn CHƯA đọc — trước đây đếm toàn bộ tin nhắn assistant
+  // từ trước tới giờ, khiến badge hiện lại số cũ dù bác sĩ đã đọc hết và
+  // đóng panel. seenCount lưu độ dài hội thoại tại lần mở panel gần nhất.
+  const [seenCount, setSeenCount] = useState(0)
+  // Kéo dãn panel — neo tại góc dưới-phải (transform-origin đã đặt sẵn), nên
+  // tay cầm kéo dãn nằm ở góc TRÊN-TRÁI: kéo lên/sang trái = tăng kích
+  // thước, giữ nguyên góc dưới-phải cố định (đúng cảm giác "mở rộng" tự
+  // nhiên, không làm panel nhảy vị trí).
+  const [panelSize, setPanelSize] = useState({ w: 340, h: 480 })
+  const resizeStart = useRef(null)
+  const startResize = (e) => {
+    e.preventDefault()
+    resizeStart.current = { x: e.clientX, y: e.clientY, w: panelSize.w, h: panelSize.h }
+    const onMove = (ev) => {
+      if (!resizeStart.current) return
+      const dx = resizeStart.current.x - ev.clientX
+      const dy = resizeStart.current.y - ev.clientY
+      setPanelSize({
+        w: Math.min(720, Math.max(300, resizeStart.current.w + dx)),
+        h: Math.min(Math.round(window.innerHeight * 0.85), Math.max(360, resizeStart.current.h + dy)),
+      })
+    }
+    const onUp = () => {
+      resizeStart.current = null
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
+    }
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
+  }
+  useEffect(() => { if (open) setSeenCount(clinicalMessages.length) }, [open])
+  const closePanel = () => {
+    setClosing(true)
+    setTimeout(() => { setOpen(false); setClosing(false) }, 160)
+  }
+  const [activeMode, setActiveMode] = useState(report ? "clinical" : "faq")
+  const [faqMsgs, setFaqMsgs] = useState([
+    { role: "bot", text: "Xin chào! Tôi có thể giúp gì cho bạn về cách dùng MedParcours?" }
+  ])
+  const [input, setInput] = useState("")
+  const [loading, setLoading] = useState(false)
+  const senderId = useRef("user_" + Math.random().toString(36).slice(2, 10))
+  const listRef = useRef(null)
+  const fileInputRef = useRef(null)
+
+  // Nếu hồ sơ vừa đóng (report -> null) trong khi đang ở chế độ lâm sàng,
+  // tự chuyển về FAQ — không để bác sĩ đứng trước tab lâm sàng vô nghĩa.
+  useEffect(() => { if (!report && activeMode === "clinical") setActiveMode("faq") }, [report])
+
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
+  }, [faqMsgs, clinicalMessages, open, activeMode])
+
+  const isClinical = activeMode === "clinical"
+  const msgs = isClinical ? clinicalMessages : faqMsgs
+  const unread = !open && isClinical ? 0 : 0 // giữ đơn giản, không đếm badge riêng theo mode nữa
+
+  const chatPkey = report?.thong_tin_benh_nhan?.so_benh_an
+  const sendClinical = async (text) => {
+    const q = text || input.trim(); if (!q || loading) return
+    setInput(""); setClinicalMessages(prev => [...prev, { role:"user", content:q }]); setLoading(true)
+    if (chatPkey && chatPkey !== "x") mpApi.saveChatMessage(chatPkey, "user", q).catch(()=>{})
+    try {
+      const res = await callApi("/chat", { method:"POST", headers:{ "Content-Type":"application/json" },
+        body:JSON.stringify({ question:q, assistant_type:"clinical", ho_so_text:hoSoText||JSON.stringify(report), chat_history:clinicalMessages.slice(-6), mode:"clinical" }) })
+      const data = await res.json()
+      if (!res.ok || !data || !data.answer) throw new Error(data?.detail || "no answer")
+      setClinicalMessages(prev => [...prev, { role:"assistant", content:data.answer }])
+      if (chatPkey && chatPkey !== "x") mpApi.saveChatMessage(chatPkey, "assistant", data.answer).catch(()=>{})
+    } catch {
+      const key = Object.keys(DEMO_CHAT).find(k => q.toLowerCase().includes(k))
+      const ans = key ? DEMO_CHAT[key] : "Không tìm thấy thông tin cụ thể trong hồ sơ. Bác sĩ có thể hỏi về: biến chứng sau mổ, thuốc chống đông, kết quả siêu âm, hoặc diễn biến CRP."
+      setClinicalMessages(prev => [...prev, { role:"assistant", content:ans }])
+    }
+    setLoading(false)
+  }
+
+  const sendFaq = async (text) => {
+    const q = text || input.trim(); if (!q || loading) return
+    setInput(""); setFaqMsgs(m => [...m, { role: "user", text: q }]); setLoading(true)
+    try {
+      const res = await mpApi.askFaqBot(q, senderId.current)
+      setFaqMsgs(m => [...m, { role: "bot", text: res.text }])
+    } catch {
+      setFaqMsgs(m => [...m, { role: "bot", text: "Trợ lý hệ thống đang bảo trì cục bộ. Bạn có thể thử lại sau ít phút." }])
+    }
+    setLoading(false)
+  }
+
+  const send = (text) => isClinical ? sendClinical(text) : sendFaq(text)
+
+  const onAttachClick = () => {
+    mpToast("Đính kèm tài liệu mới trong khung chat đang phát triển — dùng nút \"Cập nhật / Lưu\" ở đầu trang báo cáo để tải hồ sơ tái khám mới ngay bây giờ.")
+  }
+
+  const unreadCount = !open ? clinicalMessages.slice(seenCount).filter(m => m.role === "assistant").length : 0
+
+  return (
+    <div className="faq-widget-root">
+      {(open || closing) && (
+        <div className={`cw-panel${closing ? " closing" : ""}`} style={{ width: panelSize.w, height: panelSize.h }}>
+          <div className="cw-resize-handle" onMouseDown={startResize} title="Kéo để thay đổi kích thước"/>
+          <div className="cw-header">
+            <div className="cw-brand-avatar"><MedAmiAvatar robotSize={11}/></div>
+            <div className="cw-tabs">
+              <button className={`cw-tab${isClinical ? " active" : ""}`} disabled={!report}
+                title={report ? "Hỏi về bệnh nhân đang mở" : "Mở 1 hồ sơ bệnh án trước để dùng chế độ này"}
+                onClick={()=>report && setActiveMode("clinical")}>
+                Bác sĩ (Lâm sàng)
+              </button>
+              <button className={`cw-tab${!isClinical ? " active" : ""}`} onClick={()=>setActiveMode("faq")}>
+                Hỗ trợ hệ thống
+              </button>
+            </div>
+            <div className="cw-header-actions">
+              {isClinical && report && (
+                <IconTip text="Mở rộng thành trang Chatbot toàn màn hình" position="top">
+                  <button className="cw-expand" onClick={()=>{mpOpenChatTab();closePanel()}} aria-label="Mở rộng toàn trang">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+                  </button>
+                </IconTip>
+              )}
+              <button className="cw-close" onClick={closePanel} aria-label="Đóng"><Icon.Close d={13}/></button>
+            </div>
+          </div>
+          {isClinical && report && (
+            <div className="cw-subhead">Đang hỏi về: <b>{report.thong_tin_benh_nhan?.ho_ten}</b></div>
+          )}
+          <div className="cw-body" ref={listRef}>
+            {isClinical ? (
+              <>
+                {msgs.length === 0 && <div className="cw-msg bot"><div className="cw-msg-text">Hỏi tôi về diễn biến, thuốc, xét nghiệm của bệnh nhân đang mở.</div></div>}
+                {msgs.map((m,i)=>(
+                  <div key={i} className={`cw-msg ${m.role==="user"?"user":"bot"}`}>
+                    <div className="cw-msg-text">{renderMd(m.content)}</div>
+                    {m.role==="assistant" && <SpeakerButton text={m.content} color="#94A3B8"/>}
+                  </div>
+                ))}
+              </>
+            ) : (
+              msgs.map((m, i) => (
+                <div key={i} className={`cw-msg ${m.role==="user"?"user":"bot"}`}>
+                  <div className="cw-msg-text">{m.text}</div>
+                  {m.role==="bot" && <SpeakerButton text={m.text} color="#94A3B8"/>}
+                </div>
+              ))
+            )}
+            {loading && <div className="cw-msg bot faq-typing"><div className="cw-msg-text">Đang trả lời...</div></div>}
+          </div>
+          {isClinical && report && (
+            <div className="fc-sug">
+              {chatSuggestions("clinical").slice(0,3).map(s=>(
+                <button key={s} onClick={()=>send(s)} disabled={loading}>{s}</button>
+              ))}
+            </div>
+          )}
+          <div className="cw-input-row">
+            <IconTip text="Đính kèm tài liệu tái khám mới" position="top">
+              <button type="button" className="cw-icon-btn" onClick={onAttachClick} aria-label="Đính kèm tài liệu">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              </button>
+            </IconTip>
+            <input
+              value={input}
+              placeholder={isClinical ? "Hỏi nhanh về bệnh nhân..." : "Hỏi về cách dùng MedParcours..."}
+              onChange={e=>setInput(e.target.value)}
+              onKeyDown={e=>{ if (e.key === "Enter") send() }}
+              disabled={loading}
+            />
+            <ChatMicButton getCurrentInput={()=>input} onTextChange={setInput}/>
+            <button className="cw-send-btn" onClick={()=>send()} disabled={loading || !input.trim()} aria-label="Gửi"><Icon.Send d={14}/></button>
+          </div>
+        </div>
+      )}
+      <button className="faq-fab faq-fab-round" onClick={()=>open ? closePanel() : setOpen(true)} title="MedAmi — trợ lý lâm sàng & hỗ trợ hệ thống">
+        {open ? <Icon.Close d={20} color="#fff"/> : <span className="faq-fab-avatar"><MedAmiAvatar robotSize={18}/></span>}
+        {unreadCount > 0 && <span className="fab-badge">{unreadCount}</span>}
+      </button>
+    </div>
+  )
+}
+function mpToast(msg, kind="ok", opts={}){ if(typeof window!=="undefined") window.dispatchEvent(new CustomEvent("mp-toast",{ detail:{ msg, kind, ...opts } })) }
 function ToastHost(){
   const [items, setItems] = useState([])
   useEffect(() => {
     const h = (e) => {
       const id = Date.now() + Math.random()
       setItems(x => [...x, { id, ...e.detail }])
-      setTimeout(() => setItems(x => x.filter(i => i.id !== id)), 2600)
+      setTimeout(() => setItems(x => x.filter(i => i.id !== id)), e.detail.duration || 2600)
     }
     window.addEventListener("mp-toast", h)
     return () => window.removeEventListener("mp-toast", h)
@@ -7683,6 +9816,11 @@ function ToastHost(){
         <div key={i.id} className={`toast ${i.kind}`}>
           {i.kind==="err" ? <Icon.Alert d={15} color="#fff"/> : <Icon.ShieldCheck d={15} color="#fff"/>}
           {i.msg}
+          {i.actionLabel && (
+            <button className="toast-action" onClick={()=>{ i.onAction?.(); setItems(x => x.filter(x2 => x2.id !== i.id)) }}>
+              {i.actionLabel}
+            </button>
+          )}
         </div>
       ))}
     </div>
@@ -7814,14 +9952,18 @@ export default function App() {
   const [lastFile, setLastFile] = useState(null)
   const [uploadError, setUploadError] = useState(null)
   const [chatMessages, setChatMessages] = useState([])
-  const [showHistory, setShowHistory] = useState(false)
   const [ecgInitial, setEcgInitial] = useState(null)
   const [currentId, setCurrentId] = useState(null)
   const registrationInProgress = useRef(false)
 
   const resetWorkspace = useCallback(() => {
-    setState("upload"); setReport(null); setHoSoText(""); setAnalysis(null)
-    setChatMessages([]); setCurrentId(null); setShowHistory(false); setUploadError(null)
+    setState("upload")
+    setReport(null)
+    setHoSoText("")
+    setAnalysis(null)
+    setChatMessages([])
+    setCurrentId(null)
+    setUploadError(null)
   }, [])
 
   const login = async (email, password) => {
@@ -7854,12 +9996,8 @@ export default function App() {
         throw new Error(msg || "Supabase không tạo được tài khoản.")
       }
       if(!data?.user) throw new Error("Supabase không trả về tài khoản vừa tạo.")
-
-      // Nếu project tắt Confirm email, signUp tạo session ngay. Đăng xuất ngay để
-      // giữ đúng flow: tạo tài khoản xong, người dùng tự bấm đăng nhập lại.
       if(data.session) await supabase.auth.signOut()
       setSession(null)
-
       return {
         message: data.session
           ? "Tạo tài khoản thành công. Hãy đăng nhập bằng email và mật khẩu vừa đăng ký."
@@ -7877,21 +10015,26 @@ export default function App() {
   useEffect(() => {
     if(!supabase){ setAuthReady(true); return }
     let alive = true
-    supabase.auth.getSession().then(({data}) => { if(alive){ setSession(data?.session || null); setAuthReady(true) } }).catch(() => { if(alive) setAuthReady(true) })
+    supabase.auth.getSession()
+      .then(({data}) => { if(alive){ setSession(data?.session || null); setAuthReady(true) } })
+      .catch(() => { if(alive) setAuthReady(true) })
     const { data: subscription } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if(!alive) return
-      // signUp có thể phát SIGNED_IN nếu Confirm email đang tắt. Trong lúc đăng ký,
-      // không đưa người dùng thẳng vào app; chờ SIGNED_OUT rồi quay lại màn đăng nhập.
       if(registrationInProgress.current){
         if(event === "SIGNED_OUT") setSession(null)
         setAuthReady(true)
         return
       }
-      setSession(nextSession); setAuthReady(true)
+      setSession(nextSession)
+      setAuthReady(true)
     })
     const expired = () => { setSession(null); resetWorkspace() }
     window.addEventListener("mp-auth-expired", expired)
-    return () => { alive=false; subscription?.subscription?.unsubscribe(); window.removeEventListener("mp-auth-expired", expired) }
+    return () => {
+      alive = false
+      subscription?.subscription?.unsubscribe()
+      window.removeEventListener("mp-auth-expired", expired)
+    }
   }, [resetWorkspace])
 
   useEffect(() => {
@@ -7914,6 +10057,19 @@ export default function App() {
   const initChat = useCallback((rpt) => {
     setChatMessages([{role:"assistant", content: modeGreeting("clinical", rpt.thong_tin_benh_nhan && rpt.thong_tin_benh_nhan.ho_ten)}])
   }, [])
+  // CCCD lookup mock (mount sâu trong ReportPage) cần điều hướng App() mở
+  // 1 trong 2 hồ sơ demo "tìm thấy liên thông" — dùng custom event, đúng
+  // pattern đã có (mp-open-chat-tab/mp-close-chat-widget). event.detail.id
+  // chọn đúng hồ sơ ("BN-A" hoặc "BN-B"), mặc định "BN-A" nếu không truyền.
+  useEffect(() => {
+    const h = (e) => {
+      const rec = e.detail?.id === "BN-B" ? PATIENT_B : MOCK_REPORT
+      setReport(rec); setHoSoText(JSON.stringify(rec)); setAnalysis(null)
+      initChat(rec); setCurrentId(e.detail?.id === "BN-B" ? "BN-B" : "BN-A"); setState("report")
+    }
+    window.addEventListener("mp-load-demo-patient", h)
+    return () => window.removeEventListener("mp-load-demo-patient", h)
+  }, [initChat])
 
   const handleUpload = async (file) => {
     // Không có file: dùng hồ sơ mẫu (nút "Xem demo")
@@ -7939,9 +10095,7 @@ export default function App() {
       setReport(data.report)
       setHoSoText(data.ho_so_text || JSON.stringify(data.report))
       setAnalysis(data.analysis || null)
-      setCurrentId(data.phan_tich_id || null)
       initChat(data.report)
-      if(data.history_error) mpToast(`Phân tích xong nhưng chưa lưu lịch sử: ${data.history_error}`, "err")
       setLoading(false); setState("report"); return true
     }
 
@@ -7998,15 +10152,61 @@ export default function App() {
 
   const loadRecord = (rec) => {
     setReport(rec.data); setHoSoText(JSON.stringify(rec.data)); setAnalysis(null)
-    initChat(rec.data); setCurrentId(rec.id); setShowHistory(false); setUploadError(null); setState("report")
+    initChat(rec.data); setCurrentId(rec.id); setUploadError(null); setState("report")
+  }
+  // Mở hồ sơ THẬT đã lưu (Turso) — khác loadRecord (demo cố định): dùng đúng
+  // analysis backend đã tính sẵn (GET /patient/{id} trả cả report+analysis),
+  // không để null, vì có sẵn dữ liệu thật tốt hơn cách demo cũ.
+  // "Xem gần đây" ở trang tải hồ sơ — mở lại nhanh vài bệnh nhân vừa xem,
+  // không cần vào Lịch sử bệnh án. Lưu localStorage, tối đa 4 mục gần nhất.
+  const [recentPatients, setRecentPatients] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("mp_recent_patients") || "[]") } catch { return [] }
+  })
+  const trackRecentPatient = (soBenhAn, hoTen) => {
+    setRecentPatients(prev => {
+      const next = [{ so_benh_an: soBenhAn, ho_ten: hoTen, ts: Date.now() },
+        ...prev.filter(x => x.so_benh_an !== soBenhAn)].slice(0, 4)
+      try { localStorage.setItem("mp_recent_patients", JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
+  const loadDbPatient = async (soBenhAn) => {
+    setLoading(true); setLoadingMsg("Đang tải hồ sơ đã lưu...")
+    try {
+      const data = await mpApi.getPatient(soBenhAn)
+      setReport(data.report); setHoSoText(JSON.stringify(data.report)); setAnalysis(data.analysis)
+      initChat(data.report); setCurrentId("db-" + soBenhAn); setUploadError(null); setState("report")
+      trackRecentPatient(soBenhAn, data.report?.thong_tin_benh_nhan?.ho_ten || soBenhAn)
+      // Khôi phục lại đúng hội thoại MedAmi đã lưu trước đó (nếu có) — thay
+      // cho lời chào mặc định của initChat(). Lỗi tải lịch sử chat KHÔNG
+      // được chặn việc mở hồ sơ — chỉ giữ nguyên lời chào mặc định.
+      try {
+        const chatRes = await mpApi.getChatHistory(soBenhAn)
+        if (chatRes.messages && chatRes.messages.length > 0) {
+          setChatMessages(chatRes.messages.map(m => ({ role: m.role, content: m.content })))
+        }
+      } catch {}
+    } catch (err) {
+      mpToast(err.message || "Không mở được hồ sơ đã lưu", "err")
+    } finally {
+      setLoading(false); setLoadingMsg("")
+    }
   }
 
   const loadStoredRecord = async (rec) => {
-    const res = await callApi(`/phan-tich/${rec.id}`)
-    const data = await res.json()
-    if(!res.ok || !data?.report) throw new Error(data?.detail || "Không mở được bản phân tích")
-    setReport(data.report); setHoSoText(JSON.stringify(data.report)); setAnalysis(data.analysis || null)
-    initChat(data.report); setCurrentId(rec.id); setShowHistory(false); setUploadError(null); setState("report")
+    setLoading(true); setLoadingMsg("Đang mở bản phân tích Supabase...")
+    try {
+      const res = await callApi(`/phan-tich/${rec.id}`)
+      const data = await res.json()
+      if(!res.ok || !data?.report) throw new Error(data?.detail || "Không mở được bản phân tích Supabase")
+      setReport(data.report); setHoSoText(JSON.stringify(data.report)); setAnalysis(data.analysis || null)
+      initChat(data.report); setCurrentId(rec.id); setUploadError(null); setState("report")
+    } catch(e) {
+      mpToast(e?.message || "Không mở được bản phân tích Supabase", "err")
+      throw e
+    } finally {
+      setLoading(false); setLoadingMsg("")
+    }
   }
 
   if (!authReady) {
@@ -8022,20 +10222,31 @@ export default function App() {
       <style>{CSS}</style>
       <style>{EXTRA_CSS}</style>
       <ErrorBoundary>
-        {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)} onRetry={()=>lastFile && handleUpload(lastFile)} onOpenHistory={()=>setShowHistory(true)} onOpenEcg={()=>setState("ecg")} onLogout={logout}/>}
+        {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)} onRetry={()=>lastFile && handleUpload(lastFile)} onOpenHistory={()=>setState("history")} onOpenEcg={()=>setState("ecg")} onLogout={logout} recentPatients={recentPatients} onOpenRecent={loadDbPatient}/>}
         {state === "report" && report && (
           <ReportPage report={report} hoSoText={hoSoText} analysis={analysis}
-            onReset={resetWorkspace}
+            onReset={()=>{setState("upload");setReport(null);setAnalysis(null);setChatMessages([]);setCurrentId(null)}}
+            onReportUpdated={(newReport, newAnalysis)=>{setReport(newReport);setAnalysis(newAnalysis)}}
             chatMessages={chatMessages} setChatMessages={setChatMessages}
-            onOpenHistory={()=>setShowHistory(true)} onLogout={logout}/>
+            onOpenHistory={()=>setState("history")} onLogout={logout}/>
         )}
         {state === "ecg" && (
           <EcgPage onBack={()=>{setState("upload");setEcgInitial(null)}} initialResult={ecgInitial} onLogout={logout}/>
         )}
-        {showHistory && <HistoryPanel onClose={()=>setShowHistory(false)} onOpen={loadRecord} onOpenRemote={loadStoredRecord} onOpenEcgEntry={(entry)=>{setEcgInitial(entry);setShowHistory(false);setState("ecg")}} currentId={currentId}/>}
+        {state === "history" && (
+          <HistoryPanel
+            onBack={()=>setState(report ? "report" : "upload")}
+            onOpen={loadRecord}
+            onOpenDbPatient={loadDbPatient}
+            onOpenRemote={loadStoredRecord}
+            onOpenEcgEntry={(entry)=>{setEcgInitial(entry);setState("ecg")}}
+            currentId={currentId}
+          />
+        )}
         <ToastHost/>
         <ConfirmHost/>
         <ShortcutHelp/>
+        <UnifiedChatWidget report={report} hoSoText={hoSoText} clinicalMessages={chatMessages} setClinicalMessages={setChatMessages}/>
       </ErrorBoundary>
     </>
   )
