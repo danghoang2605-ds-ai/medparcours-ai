@@ -1,4 +1,3 @@
-# Backend MedParcours AI — FastAPI + rule engine + ECG/document extraction
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,11 +11,7 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy các file backend chính
-COPY main.py clinical_rules.py ecg_engine.py document_extract.py ./
-
-# Copy package CDE
-COPY cde ./cde
+COPY . .
 
 EXPOSE 8000
 
