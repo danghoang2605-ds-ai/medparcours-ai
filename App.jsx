@@ -7,6 +7,7 @@ import { callApi } from "./api"
 //   https://<tên-tài-khoản-HF>-mediflow-ai.hf.space   (chữ thường, dùng dấu gạch ngang)
 // Có thể ghi đè bằng window.MEDIFLOW_API_URL trong index.html mà không cần sửa file này.
 const API_URL = (typeof window !== "undefined" && window.MEDIFLOW_API_URL) || "https://danghoang2605-mediflow-ai.hf.space"
+const DEFAULT_BENH_VIEN_ID = "fd070774-17e3-4d74-8f28-f09258b24209"
 
 // ─── Lớp gọi Backend (Hugging Face Spaces) ───────────────────────────────────
 // analyzeText/analyze: phân tích hồ sơ. mdt/teaching: lấy biên bản hội chẩn và
@@ -3690,16 +3691,30 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
       .catch(err => {
         if (cancelled) return
         if (err.status === 404) setSavedStatus("chua_luu")
-        else setSavedStatus("loi_ket_noi") // Turso chưa cấu hình / lỗi mạng — KHÔNG chặn xem báo cáo
+        else {
+          // Turso có thể chưa sẵn sàng, nhưng backend đã có Supabase fallback khi bấm Lưu.
+          // Không khóa nút lưu bằng trạng thái "Lỗi kết nối" nữa.
+          setSavedStatus("chua_luu")
+          setSavedMeta({ storage_warning: err.message || "Turso chưa sẵn sàng" })
+        }
       })
     return () => { cancelled = true }
   }, [pkey])
   const handleSavePatient = async () => {
     try {
-      await mpApi.savePatient(report)
+      const saved = await mpApi.savePatient(report)
       setSavedStatus("da_luu")
-      setSavedMeta({ so_lan_cap_nhat: 1, cap_nhat_luc: new Date().toISOString() })
-      mpToast("Đã lưu hồ sơ — có thể cập nhật thêm tài liệu cho lần khám sau")
+      setSavedMeta({
+        so_lan_cap_nhat: saved?.so_lan_cap_nhat || 1,
+        cap_nhat_luc: saved?.cap_nhat_luc || new Date().toISOString(),
+        storage: saved?.storage || "turso",
+        phan_tich_id: saved?.phan_tich_id,
+      })
+      if (saved?.storage === "supabase_fallback") {
+        mpToast("Turso chưa sẵn sàng nên đã lưu tạm vào Supabase history")
+      } else {
+        mpToast("Đã lưu hồ sơ vào Turso — có thể cập nhật thêm tài liệu cho lần khám sau")
+      }
     } catch (err) {
       mpToast(err.message || "Không lưu được hồ sơ — kiểm tra kết nối", "err")
     }
@@ -3844,9 +3859,9 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
                   </button>
                 )}
                 {savedStatus === "loi_ket_noi" && (
-                  <button className="nav-save-btn err" disabled title="Chưa kết nối được hệ thống lưu trữ lâu dài — chỉ xem được báo cáo lần này, không lưu lại được." aria-label="Lỗi kết nối lưu trữ">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><line x1="4" y1="4" x2="20" y2="20"/></svg>
-                    <span className="nav-btn-txt">Lỗi kết nối</span>
+                  <button className="nav-save-btn primary" onClick={handleSavePatient} title="Turso có thể chưa sẵn sàng; hệ thống sẽ thử lưu Turso trước, rồi fallback Supabase nếu cần." aria-label="Lưu hồ sơ dự phòng">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    <span className="nav-btn-txt">Lưu dự phòng</span>
                   </button>
                 )}
                 {savedStatus === null && (
@@ -7108,6 +7123,7 @@ function LoginPage({ onLogin, onRegister }){
   const SAMPLE_PASSWORD = "un1svengers"
   const [email, setEmail] = useState(SAMPLE_EMAIL)
   const [password, setPassword] = useState(SAMPLE_PASSWORD)
+  const [benhVienId, setBenhVienId] = useState(DEFAULT_BENH_VIEN_ID)
   const [confirmPassword, setConfirmPassword] = useState("")
   const [showPw, setShowPw] = useState(false)
   const [err, setErr] = useState("")
@@ -7124,7 +7140,9 @@ function LoginPage({ onLogin, onRegister }){
     setErr(""); setNotice("")
 
     if(screen === "register"){
+      const cleanBenhVienId = benhVienId.trim()
       if(!fullName.trim()){ setErr("Vui lòng nhập họ và tên bác sĩ."); return }
+      if(!cleanBenhVienId){ setErr("Vui lòng nhập benh_vien_id để gắn tài khoản với bệnh viện."); return }
       if(!email.trim() || !password){ setErr("Vui lòng nhập email và mật khẩu."); return }
       if(password.length < 8){ setErr("Mật khẩu cần có ít nhất 8 ký tự."); return }
       if(password !== confirmPassword){ setErr("Mật khẩu xác nhận chưa khớp."); return }
@@ -7133,6 +7151,7 @@ function LoginPage({ onLogin, onRegister }){
         const result = await onRegister({
           fullName: fullName.trim(),
           department: department.trim(),
+          benhVienId: cleanBenhVienId,
           email: email.trim(),
           password,
         })
@@ -7194,6 +7213,10 @@ function LoginPage({ onLogin, onRegister }){
                   <label>Khoa / đơn vị <span className="field-optional">(không bắt buộc)</span></label>
                   <input value={department} onChange={e=>setDepartment(e.target.value)} placeholder="Khoa Tim mạch" autoComplete="organization-title"/>
                 </div>
+                <div className="login-field">
+                  <label>benh_vien_id <span className="field-optional">(đã điền sẵn)</span></label>
+                  <input value={benhVienId} onChange={e=>setBenhVienId(e.target.value)} placeholder={DEFAULT_BENH_VIEN_ID} autoComplete="off"/>
+                </div>
               </>}
 
               <div className="login-field">
@@ -7232,7 +7255,7 @@ function LoginPage({ onLogin, onRegister }){
               <div className="login-hint">
                 <div className="login-hint-row"><span>Tài khoản mẫu</span><b>bacsi@medparcours.com</b></div>
                 <div className="login-hint-row"><span>Mật khẩu mẫu</span><b>un1svengers</b></div>
-                <div className="login-hint-row"><span>Xác thực</span><b>Supabase Auth</b></div>
+                <div className="login-hint-row"><span>benh_vien_id mẫu</span><b>fd070774-17e3-4d74-8f28-f09258b24209</b></div>
               </div>
             </div>
           </div>
@@ -9702,8 +9725,10 @@ export default function App() {
     setSession(data.session)
   }
 
-  const register = async ({ fullName, department, email, password }) => {
+  const register = async ({ fullName, department, benhVienId, email, password }) => {
     if(!supabaseConfigured || !supabase) throw new Error("Chưa cấu hình Supabase ở frontend.")
+    const cleanBenhVienId = String(benhVienId || DEFAULT_BENH_VIEN_ID).trim()
+    if(!cleanBenhVienId) throw new Error("Thiếu benh_vien_id nên chưa thể tạo tài khoản bác sĩ.")
     registrationInProgress.current = true
     try {
       const { data, error } = await supabase.auth.signUp({
@@ -9713,6 +9738,7 @@ export default function App() {
           data: {
             ho_ten: fullName,
             khoa: department || null,
+            benh_vien_id: cleanBenhVienId,
           },
         },
       })

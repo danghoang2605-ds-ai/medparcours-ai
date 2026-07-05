@@ -42,18 +42,22 @@ from db import (
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Khởi tạo bảng database lúc app start — KHÔNG làm sập app nếu lỗi
-    (vd chưa cấu hình TURSO_DATABASE_URL/TURSO_AUTH_TOKEN, hoặc Turso tạm
-    thời không phản hồi). Các endpoint cũ (/analyze, /chat...) không phụ
-    thuộc database, phải tiếp tục hoạt động bình thường dù phần lưu trữ
-    lâu dài tạm thời không khả dụng — đúng nguyên tắc không gây gián đoạn
-    sản phẩm đang chạy ổn khi thêm tính năng mới."""
+    """Khởi động app an toàn.
+
+    Turso/libSQL vẫn là kho lưu hồ sơ bệnh án chính qua database.py. Nếu Turso
+    chưa sẵn sàng (thiếu libsql_client, thiếu TURSO_DATABASE_URL/TURSO_AUTH_TOKEN,
+    hoặc lỗi mạng), app KHÔNG sập: các endpoint /patient sẽ tự thử fallback sang
+    Supabase history để bác sĩ vẫn lưu/mở được bản phân tích thay vì hiện lỗi
+    kết nối chung chung ở giao diện.
+    """
     try:
         database.init_db()
+        print("[INFO] Turso/libSQL storage đã sẵn sàng.")
     except Exception as e:
-        print(f"[CẢNH BÁO] Không khởi tạo được database lưu trữ lâu dài: {e}. "
-              f"Tính năng 'Lưu hồ sơ' / 'Cập nhật hồ sơ' sẽ báo lỗi rõ ràng khi "
-              f"được gọi, nhưng các tính năng phân tích hồ sơ khác vẫn hoạt động bình thường.")
+        print(f"[CẢNH BÁO] Turso/libSQL chưa sẵn sàng: {e}. "
+              f"Backend sẽ dùng Supabase fallback cho lưu/mở hồ sơ nếu có phiên đăng nhập. "
+              f"Muốn dùng Turso thật trong Docker: thêm libsql-client vào requirements và đặt "
+              f"TURSO_DATABASE_URL/TURSO_AUTH_TOKEN.")
     yield
 
 
@@ -1012,6 +1016,173 @@ async def _persist_analysis_response(response: JSONResponse, user: dict) -> JSON
     return JSONResponse(payload, status_code=response.status_code)
 
 
+# ─── PATIENT STORAGE: TURSO PRIMARY + SUPABASE FALLBACK ─────────────────────
+def _patient_storage_detail(exc: Exception) -> str:
+    """Thông báo lỗi lưu trữ dễ hiểu cho cả log và frontend."""
+    raw = str(exc) or type(exc).__name__
+    low = raw.lower()
+    if "libsql" in low or "libsql_client" in low:
+        return "Turso chưa chạy vì thiếu thư viện libsql-client trong Docker image. Thêm libsql-client vào requirements rồi build lại."
+    if "turso_database_url" in low or "turso_auth_token" in low:
+        return "Turso chưa cấu hình đủ TURSO_DATABASE_URL/TURSO_AUTH_TOKEN."
+    return raw
+
+
+def _report_so_benh_an(report: dict) -> str:
+    try:
+        info = report.get("thong_tin_benh_nhan") or {}
+        return str(info.get("so_benh_an") or report.get("so_benh_an") or "").strip()
+    except Exception:
+        return ""
+
+
+def _report_patient_name(report: dict) -> str:
+    try:
+        info = report.get("thong_tin_benh_nhan") or {}
+        return str(info.get("ho_ten") or report.get("ho_ten") or "").strip()
+    except Exception:
+        return ""
+
+
+def _detail_report(detail) -> dict | None:
+    if not isinstance(detail, dict):
+        return None
+    for key in ("report", "report_json"):
+        val = detail.get(key)
+        if isinstance(val, dict):
+            return val
+    data = detail.get("data")
+    if isinstance(data, dict):
+        for key in ("report", "report_json"):
+            val = data.get(key)
+            if isinstance(val, dict):
+                return val
+    return None
+
+
+def _row_guess_so_benh_an(row: dict) -> str:
+    if not isinstance(row, dict):
+        return ""
+    for key in ("so_benh_an", "ma_benh_an", "patient_id", "patient_code", "soBenhAn"):
+        val = row.get(key)
+        if val:
+            return str(val).strip()
+    report = _detail_report(row)
+    return _report_so_benh_an(report) if report else ""
+
+
+async def _supabase_save_patient_report(report: dict, user: dict, analysis: dict | None = None) -> dict:
+    """Lưu bản report vào Supabase history như fallback khi Turso lỗi."""
+    if analysis is None:
+        try:
+            analysis = evaluate_v2(report)
+        except Exception:
+            analysis = None
+    analysis_id = await asyncio.to_thread(
+        save_analysis_result,
+        token=user["token"],
+        doctor_id=user["id"],
+        report=report,
+        analysis=analysis,
+    )
+    return {
+        "success": True,
+        "storage": "supabase_fallback",
+        "phan_tich_id": analysis_id,
+        "so_benh_an": _report_so_benh_an(report),
+        "so_lan_cap_nhat": 1,
+        "cap_nhat_luc": None,
+        "message": "Turso chưa sẵn sàng nên đã lưu tạm vào Supabase history của tài khoản hiện tại.",
+    }
+
+
+async def _supabase_find_patient_by_so_benh_an(so_benh_an: str, user: dict, limit: int = 200) -> dict | None:
+    """Tìm một bản phân tích đã lưu trong Supabase history theo số bệnh án."""
+    rows = await asyncio.to_thread(list_history, user["token"], user["id"], limit)
+    if not isinstance(rows, list):
+        return None
+
+    # Pass 1: nếu row summary đã có sẵn mã bệnh án thì ưu tiên mở đúng row đó.
+    candidates = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        guessed = _row_guess_so_benh_an(row)
+        if guessed and guessed == so_benh_an:
+            candidates.append(row)
+    # Pass 2: nếu summary không có mã bệnh án, kiểm tra từng detail gần nhất.
+    if not candidates:
+        candidates = rows[:min(len(rows), limit)]
+
+    for row in candidates:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        try:
+            detail = await asyncio.to_thread(get_analysis_detail, user["token"], user["id"], row["id"])
+        except Exception:
+            continue
+        report = _detail_report(detail)
+        if report and _report_so_benh_an(report) == so_benh_an:
+            analysis = detail.get("analysis") if isinstance(detail, dict) else None
+            if analysis is None:
+                try:
+                    analysis = evaluate_v2(report)
+                except Exception:
+                    analysis = None
+            return {
+                "success": True,
+                "storage": "supabase_fallback",
+                "phan_tich_id": row["id"],
+                "report": report,
+                "analysis": analysis,
+                "so_lan_cap_nhat": 1,
+                "tao_luc": row.get("created_at") or row.get("tao_luc"),
+                "cap_nhat_luc": row.get("updated_at") or row.get("created_at") or row.get("cap_nhat_luc"),
+            }
+    return None
+
+
+async def _supabase_list_patients(user: dict, limit: int = 50) -> list[dict]:
+    """Đổi Supabase history thành danh sách giống database.list_patients()."""
+    rows = await asyncio.to_thread(list_history, user["token"], user["id"], min(max(limit, 1), 200))
+    if not isinstance(rows, list):
+        return []
+    out = []
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        report = _detail_report(row)
+        # Nhiều schema chỉ trả summary, không trả report. Khi thiếu mã bệnh án thì mở detail.
+        if report is None or not _report_so_benh_an(report):
+            rid = row.get("id")
+            if rid:
+                try:
+                    detail = await asyncio.to_thread(get_analysis_detail, user["token"], user["id"], rid)
+                    report = _detail_report(detail)
+                except Exception:
+                    report = None
+        so = _report_so_benh_an(report) if report else _row_guess_so_benh_an(row)
+        if not so or so in seen:
+            continue
+        seen.add(so)
+        name = _report_patient_name(report) if report else ""
+        out.append({
+            "so_benh_an": so,
+            "ho_ten": name or row.get("ho_ten") or row.get("patient_name") or so,
+            "ho_ten_goc": name or row.get("ho_ten") or row.get("patient_name") or so,
+            "so_lan_cap_nhat": 1,
+            "tao_luc": row.get("created_at") or row.get("tao_luc"),
+            "cap_nhat_luc": row.get("updated_at") or row.get("created_at") or row.get("cap_nhat_luc"),
+            "nhom_benh": row.get("nhom_benh") or "Supabase fallback",
+            "storage": "supabase_fallback",
+            "phan_tich_id": row.get("id"),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 @app.get("/me")
 async def current_doctor(user: dict = Depends(get_current_user)):
     """Thông tin tối thiểu của tài khoản đang đăng nhập."""
@@ -1171,36 +1342,69 @@ class SavePatientRequest(BaseModel):
 
 
 @app.post("/patient/save")
-async def save_patient(req: SavePatientRequest):
-    """Lưu hồ sơ MỚI lần đầu cho 1 bệnh nhân (theo số bệnh án trong report).
-    Nếu số bệnh án đã có hồ sơ lưu trữ -> báo lỗi rõ, không ghi đè ngầm
-    (tránh mất dữ liệu cũ do nhầm lẫn 'mới' với 'cập nhật')."""
+async def save_patient(req: SavePatientRequest, user: dict = Depends(get_current_user)):
+    """Lưu hồ sơ bệnh án.
+
+    Ưu tiên Turso/libSQL qua database.py. Nếu Turso chưa sẵn sàng, tự lưu vào
+    Supabase history để frontend không còn bị kẹt ở trạng thái "Lỗi kết nối".
+    """
     try:
         result = database.save_new_patient(req.report)
+        if not result.get("success"):
+            raise HTTPException(status_code=409, detail=result.get("message", result.get("error", "Lỗi không xác định")))
+        result["storage"] = "turso"
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=503,
-                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
-    if not result.get("success"):
-        raise HTTPException(status_code=409, detail=result.get("message", result.get("error", "Lỗi không xác định")))
-    return result
+        detail = _patient_storage_detail(e)
+        print(f"[Turso /patient/save lỗi — chuyển Supabase fallback] {type(e).__name__}: {detail}")
+        try:
+            fallback = await _supabase_save_patient_report(req.report, user)
+            fallback["turso_error"] = detail
+            return fallback
+        except Exception as se:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Không lưu được hồ sơ. Turso lỗi: {detail}. Supabase fallback cũng lỗi: {se}",
+            )
 
 
 @app.get("/patient/{so_benh_an}")
-async def get_patient(so_benh_an: str):
-    """Lấy hồ sơ đã lưu theo số bệnh án — kèm TÍNH LẠI analysis qua rule
-    engine hiện tại (KHÔNG lưu analysis cũ trong database — xem lý do đầy đủ
-    trong database.py: analysis luôn tính lại được từ report, tự động hưởng
-    lợi nếu sau này rule engine được mở rộng)."""
+async def get_patient(so_benh_an: str, user: dict = Depends(get_current_user)):
+    """Lấy hồ sơ đã lưu theo số bệnh án.
+
+    Turso là nguồn chính. Nếu Turso chưa sẵn sàng, tìm trong Supabase history
+    theo số bệnh án và trả 404 mềm nếu không có, không trả 503 gây "Lỗi kết nối".
+    """
     try:
         data = database.get_patient(so_benh_an)
     except Exception as e:
-        raise HTTPException(status_code=503,
-                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
-    if data is None:
+        detail = _patient_storage_detail(e)
+        print(f"[Turso /patient/{so_benh_an} lỗi — thử Supabase fallback] {type(e).__name__}: {detail}")
+        try:
+            found = await _supabase_find_patient_by_so_benh_an(so_benh_an, user)
+            if found:
+                found["turso_error"] = detail
+                return found
+        except Exception as se:
+            print(f"[Supabase fallback /patient/{so_benh_an} cũng lỗi] {type(se).__name__}: {se}")
         raise HTTPException(status_code=404, detail=f"Chưa có hồ sơ lưu trữ cho số bệnh án {so_benh_an}.")
+
+    if data is None:
+        # Không có trong Turso thì vẫn thử Supabase, vì /analyze tự lưu history.
+        try:
+            found = await _supabase_find_patient_by_so_benh_an(so_benh_an, user)
+            if found:
+                return found
+        except Exception:
+            pass
+        raise HTTPException(status_code=404, detail=f"Chưa có hồ sơ lưu trữ cho số bệnh án {so_benh_an}.")
+
     analysis = evaluate_v2(data["report"])
     return {
         "success": True,
+        "storage": "turso",
         "report": data["report"],
         "analysis": analysis,
         "so_lan_cap_nhat": data["so_lan_cap_nhat"],
@@ -1314,23 +1518,57 @@ async def get_chat_history_endpoint(so_benh_an: str, limit: int = 100):
 
 
 @app.get("/patient")
-async def list_patients_endpoint(limit: int = 50):
-    """Danh sách hồ sơ đã lưu. Nếu database lưu trữ lâu dài chưa sẵn sàng,
-    trả danh sách rỗng để không chặn luồng phân tích/demo."""
+async def list_patients_endpoint(limit: int = 50, user: dict = Depends(get_current_user)):
+    """Danh sách hồ sơ đã lưu.
+
+    Ưu tiên Turso. Nếu Turso lỗi, đổi Supabase history thành danh sách bệnh án
+    để trang Lịch sử vẫn mở được hồ sơ thay vì báo lỗi kết nối.
+    """
     try:
         return {
             "success": True,
             "patients": database.list_patients(limit=limit),
             "storage_available": True,
+            "storage": "turso",
         }
     except Exception as e:
-        print(f"[DB /patient lỗi - demo fallback] {type(e).__name__}: {e}")
-        return {
-            "success": True,
-            "patients": [],
-            "storage_available": False,
-            "storage_error": str(e),
-        }
+        detail = _patient_storage_detail(e)
+        print(f"[Turso /patient lỗi — chuyển Supabase fallback] {type(e).__name__}: {detail}")
+        try:
+            patients = await _supabase_list_patients(user, limit=limit)
+            return {
+                "success": True,
+                "patients": patients,
+                "storage_available": False,
+                "storage": "supabase_fallback",
+                "storage_error": detail,
+            }
+        except Exception as se:
+            print(f"[Supabase fallback /patient cũng lỗi] {type(se).__name__}: {se}")
+            return {
+                "success": True,
+                "patients": [],
+                "storage_available": False,
+                "storage": "none",
+                "storage_error": f"Turso lỗi: {detail}. Supabase fallback lỗi: {se}",
+            }
+
+
+@app.get("/patient/storage-status")
+async def patient_storage_status(user: dict = Depends(get_current_user)):
+    """Kiểm tra nhanh trạng thái Turso và Supabase fallback cho frontend/debug."""
+    turso = {"available": False, "error": None}
+    try:
+        database.list_patients(limit=1)
+        turso["available"] = True
+    except Exception as e:
+        turso["error"] = _patient_storage_detail(e)
+    return {
+        "success": True,
+        "primary": "turso" if turso["available"] else "supabase_fallback",
+        "turso": turso,
+        "supabase_fallback": {"available": bool(user.get("token")), "user_id": user.get("id")},
+    }
 
 
 class UpdatePatientRequest(BaseModel):
@@ -1341,7 +1579,7 @@ class UpdatePatientRequest(BaseModel):
 
 
 @app.post("/patient/update")
-async def update_patient(req: UpdatePatientRequest):
+async def update_patient(req: UpdatePatientRequest, user: dict = Depends(get_current_user)):
     """
     Tính năng "cập nhật hồ sơ theo thời gian thực": bác sĩ tải thêm 1 tài
     liệu mới cho bệnh nhân ĐÃ CÓ hồ sơ lưu trữ (theo so_benh_an). Tài liệu
@@ -1361,8 +1599,9 @@ async def update_patient(req: UpdatePatientRequest):
     try:
         existing = database.get_patient(req.so_benh_an)
     except Exception as e:
-        raise HTTPException(status_code=503,
-                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+        detail = _patient_storage_detail(e)
+        print(f"[Turso /patient/update get lỗi — thử Supabase fallback] {type(e).__name__}: {detail}")
+        existing = await _supabase_find_patient_by_so_benh_an(req.so_benh_an, user)
     if existing is None:
         raise HTTPException(status_code=404,
                              detail=f"Chưa có hồ sơ lưu trữ cho số bệnh án {req.so_benh_an}. "
@@ -1391,8 +1630,11 @@ async def update_patient(req: UpdatePatientRequest):
     try:
         result = database.update_patient_with_new_document(req.so_benh_an, report_moi, req.nguon_tai_lieu)
     except Exception as e:
-        raise HTTPException(status_code=503,
-                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+        detail = _patient_storage_detail(e)
+        print(f"[Turso /patient/update lỗi — lưu tài liệu mới vào Supabase fallback] {type(e).__name__}: {detail}")
+        fallback = await _supabase_save_patient_report(report_moi, user)
+        fallback.update({"report": report_moi, "analysis": evaluate_v2(report_moi), "turso_error": detail})
+        return fallback
     if not result.get("success"):
         raise HTTPException(status_code=409, detail=result.get("message", "Lỗi không xác định"))
 
@@ -1445,6 +1687,7 @@ async def update_patient_file(
     so_benh_an: str = Form(...),
     nguon_tai_lieu: str = Form(""),
     file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
 ):
     """
     Bản mở rộng của /patient/update: nhận trực tiếp FILE (multipart) thay vì
@@ -1459,8 +1702,9 @@ async def update_patient_file(
     try:
         existing = database.get_patient(so_benh_an)
     except Exception as e:
-        raise HTTPException(status_code=503,
-                             detail=f"Không kết nối được tới hệ thống lưu trữ lâu dài: {e}")
+        detail = _patient_storage_detail(e)
+        print(f"[Turso /patient/update_file get lỗi — thử Supabase fallback] {type(e).__name__}: {detail}")
+        existing = await _supabase_find_patient_by_so_benh_an(so_benh_an, user)
     if existing is None:
         raise HTTPException(status_code=404,
                              detail=f"Chưa có hồ sơ lưu trữ cho số bệnh án {so_benh_an}. "
@@ -1479,7 +1723,17 @@ async def update_patient_file(
         }, status_code=200)
 
     nguon = nguon_tai_lieu or file.filename or ""
-    return _merge_and_reevaluate(so_benh_an, report_moi, nguon)
+    try:
+        return _merge_and_reevaluate(so_benh_an, report_moi, nguon)
+    except HTTPException as e:
+        if e.status_code != 503:
+            raise
+        detail = str(e.detail)
+        print(f"[Turso /patient/update_file merge lỗi — lưu tài liệu mới vào Supabase fallback] {detail}")
+        analysis = evaluate_v2(report_moi)
+        fallback = await _supabase_save_patient_report(report_moi, user, analysis=analysis)
+        fallback.update({"report": report_moi, "analysis": analysis, "turso_error": detail})
+        return fallback
 
 
 class ChatRequest(BaseModel):
