@@ -34,7 +34,13 @@ async function mpFetchJSON(path, body, ms=45000, method="POST"){
   } finally { clearTimeout(timer) }
 }
 const mpApi = {
-  analyzeText: (ho_so_text, pages=0) => mpFetchJSON("/analyze_text", { ho_so_text, pages }),
+  // Timeout dài (300s = 5 phút): đủ chỗ cho SmartReader OCR polling tối đa
+  // 240s (đã tăng từ 60s để quét bệnh án thật nhiều trang đáng tin cậy
+  // hơn) + thời gian upload file + gọi Claude trích xuất sau đó. Trước
+  // đây dùng mặc định 45s của mpFetchJSON — NGẮN HƠN NHIỀU so với thời
+  // gian backend cần, khiến trình duyệt tự hủy request trước khi backend
+  // kịp xử lý xong, vô hiệu hóa nỗ lực tăng timeout ở backend.
+  analyzeText: (ho_so_text, pages=0) => mpFetchJSON("/analyze_text", { ho_so_text, pages }, 300000),
   analyzeFile: async (file) => {
     const fd = new FormData(); fd.append("file", file)
     const res = await fetch(`${API_URL}/analyze`, { method:"POST", body: fd })
@@ -112,7 +118,7 @@ const mpApi = {
     fd.append("nguon_tai_lieu", nguonTaiLieu || file.name || "")
     fd.append("file", file)
     const ctrl = new AbortController()
-    const timer = setTimeout(()=>ctrl.abort(), 90000)
+    const timer = setTimeout(()=>ctrl.abort(), 300000)  // 300s: file đính kèm có thể là ảnh/PDF scan, cùng đi qua SmartReader OCR như luồng phân tích chính
     try {
       const res = await fetch(`${API_URL}/patient/update_file`, { method:"POST", body: fd, signal: ctrl.signal })
       if (!res.ok) {
@@ -3155,19 +3161,55 @@ const NAV_GROUPS = [
 ]
 const SECTIONS = NAV_GROUPS.flatMap(g => g.items)
 function SidebarMinimap({ activeId, onNavigate }) {
+  // Sidebar cố định bị ẩn hoàn toàn dưới 860px (xem CSS .sidebar{display:none})
+  // — trước đây KHÔNG CÓ gì thay thế trên điện thoại, bác sĩ phải cuộn tay
+  // qua toàn bộ trang dài để tìm đúng mục. Thêm nút nổi + bottom-sheet CHỈ
+  // hiện trên mobile (CSS .mobile-nav-fab ẩn mặc định, chỉ hiện dưới
+  // 860px), dùng LẠI đúng NAV_GROUPS + onNavigate — không tạo logic mới.
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const activeLabel = NAV_GROUPS.flatMap(g => g.items).find(s => s.id === activeId)?.label
   return (
-    <nav className="sidebar">
-      {NAV_GROUPS.map(g => (
-        <div key={g.group} className="sidebar-group">
-          <div className="sidebar-label">{g.group}</div>
-          {g.items.map(s=>(
-            <button key={s.id} className={`sidebar-item${activeId===s.id?" active":""}`} onClick={()=>onNavigate(s.id)}>
-              <span style={{color:"currentColor",display:"flex",flexShrink:0}}>{s.icon}</span>{s.label}
-            </button>
-          ))}
+    <>
+      <nav className="sidebar">
+        {NAV_GROUPS.map(g => (
+          <div key={g.group} className="sidebar-group">
+            <div className="sidebar-label">{g.group}</div>
+            {g.items.map(s=>(
+              <button key={s.id} className={`sidebar-item${activeId===s.id?" active":""}`} onClick={()=>onNavigate(s.id)}>
+                <span style={{color:"currentColor",display:"flex",flexShrink:0}}>{s.icon}</span>{s.label}
+              </button>
+            ))}
+          </div>
+        ))}
+      </nav>
+      <button className="mobile-nav-fab" onClick={()=>setSheetOpen(true)} aria-label="Mở mục lục">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="14" y2="18"/></svg>
+        <span className="mobile-nav-fab-txt">{activeLabel || "Mục lục"}</span>
+      </button>
+      {sheetOpen && (
+        <div className="mobile-nav-ov" onClick={()=>setSheetOpen(false)}>
+          <div className="mobile-nav-sheet" onClick={e=>e.stopPropagation()}>
+            <div className="mobile-nav-sheet-head">
+              <span>Mục lục báo cáo</span>
+              <button onClick={()=>setSheetOpen(false)} aria-label="Đóng"><Icon.Close d={16}/></button>
+            </div>
+            <div className="mobile-nav-sheet-body">
+              {NAV_GROUPS.map(g => (
+                <div key={g.group} className="mobile-nav-sheet-group">
+                  <div className="sidebar-label">{g.group}</div>
+                  {g.items.map(s=>(
+                    <button key={s.id} className={`sidebar-item${activeId===s.id?" active":""}`}
+                      onClick={()=>{ onNavigate(s.id); setSheetOpen(false) }}>
+                      <span style={{color:"currentColor",display:"flex",flexShrink:0}}>{s.icon}</span>{s.label}
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
-      ))}
-    </nav>
+      )}
+    </>
   )
 }
 
@@ -8783,7 +8825,17 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   .nav-right{gap:7px;flex-wrap:wrap;justify-content:flex-end}
   .mode-dd-lbl{display:none}
   .nav-export{padding:8px 12px;font-size:12px}
+  .mobile-nav-fab{display:flex}
 }
+.mobile-nav-fab{display:none;position:fixed;left:16px;bottom:84px;z-index:160;align-items:center;gap:7px;background:#0F2740;color:#fff;border:none;border-radius:999px;padding:11px 16px;font-size:12.5px;font-weight:700;box-shadow:0 10px 26px rgba(15,39,64,.3);cursor:pointer;max-width:calc(100vw - 32px)}
+.mobile-nav-fab-txt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mobile-nav-ov{position:fixed;inset:0;z-index:225;background:rgba(15,39,64,.45);display:flex;align-items:flex-end}
+.mobile-nav-sheet{background:var(--glass,#fff);width:100%;max-height:72vh;border-radius:20px 20px 0 0;display:flex;flex-direction:column;animation:toastIn .18s ease}
+.mobile-nav-sheet-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;font-weight:800;font-size:14px;color:var(--navy);border-bottom:1px solid var(--border);flex-shrink:0}
+.mobile-nav-sheet-head button{background:transparent;border:none;color:var(--muted);cursor:pointer;padding:4px}
+.mobile-nav-sheet-body{overflow-y:auto;padding:12px 14px 24px}
+.mobile-nav-sheet-group{margin-bottom:10px}
+body.theme-dark .mobile-nav-sheet{background:#0F1828}
 @media(max-width:420px){
   .nav-export-txt{display:none}
   .nav-export{padding:8px 10px}
@@ -9847,7 +9899,7 @@ export default function App() {
     setLastFile(file)
     setLoading(true); setUploadError(null); setLoadingMsg("")
     const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), 240000)  // 240s cho hồ sơ rất dày
+    const timer = setTimeout(() => ctrl.abort(), 300000)  // 300s: đủ buffer cho SmartReader polling 240s + upload + Claude trích xuất sau đó
 
     // Áp dụng kết quả trả về từ backend (dùng chung cho cả 2 đường).
     // LƯU Ý: lỗi từ FastAPI HTTPException nằm ở field "detail", còn lỗi tự
