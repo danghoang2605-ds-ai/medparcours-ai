@@ -1643,6 +1643,12 @@ class EcgDigitizeRequest(BaseModel):
                             # ước lâm sàng (không phải suy đoán của hệ thống).
 
 
+class EcgSheetDigitizeRequest(BaseModel):
+    image_base64: str  # Ảnh NGUYÊN 1 trang ECG 12 chuyển đạo (chưa cắt) — hệ
+                        # thống tự bóc tách 12 ô, không cần bác sĩ chọn tên
+                        # chuyển đạo như /ecg cũ.
+
+
 @app.post("/ecg")
 async def ecg_digitize(request: EcgDigitizeRequest):
     """
@@ -1713,6 +1719,65 @@ async def ecg_digitize(request: EcgDigitizeRequest):
                        "hóa hỗ trợ, cần bác sĩ xác nhận. Không phải kết luận chẩn đoán. "
                        "Tỉ lệ pixel/mm được tự suy ra từ lưới ảnh — luôn là ƯỚC LƯỢNG, "
                        "không phải đo trực tiếp từ thước chuẩn.",
+    }
+
+
+@app.post("/ecg/sheet")
+async def ecg_digitize_sheet(request: EcgSheetDigitizeRequest):
+    """
+    NHIỆM VỤ 1+2 (luồng mới, thay bước bác sĩ tự cắt ảnh + chọn tên chuyển
+    đạo bằng tay): nhận NGUYÊN 1 ảnh trang ECG 12 chuyển đạo -> tự động bóc
+    tách 12 ô (ecg_engine.slice_12_lead_grid, 2 tầng: Tier A dò khoảng trắng
+    thật giữa các ô, Tier B chia đều theo tỉ lệ nếu ảnh không có khoảng trắng
+    phân cách — thường gặp ở ảnh scan giấy in liên tục) -> số hóa TỪNG chuyển
+    đạo bằng đúng pipeline Mức 1/2 đã kiểm chứng.
+
+    AN TOÀN: nếu KHÔNG tự tin bóc tách được (grid_detected=False), trả lỗi rõ
+    ràng, KHÔNG tự chạy ảnh gốc qua như 1 chuyển đạo duy nhất nữa (đây chính
+    là hành vi CŨ gây lỗi khi bác sĩ vô tình tải nguyên trang) — FE phải rơi
+    về luồng cắt ảnh thủ công cũ (/ecg) khi nhận cờ này.
+
+    KHÔNG trả bất kỳ kết luận lâm sàng nào (không ST chênh, không trục điện
+    tim, không phân loại nhịp) — xem ghi chú an toàn trong ecg_engine.py.
+    """
+    img = ecg_engine.decode_base64_image(request.image_base64)
+    if img is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Không đọc được ảnh. Kiểm tra lại định dạng base64 (PNG/JPG)."
+        )
+
+    sheet = ecg_engine.digitize_12_lead_sheet(img)
+    if not sheet["success"]:
+        return {
+            "success": False,
+            "grid_detected": False,
+            "warning": sheet["warning"],
+            "leads": [],
+        }
+
+    return {
+        "success": True,
+        "grid_detected": True,
+        "layout_detected": sheet["layout_detected"],
+        "grid_do_tin_cay": sheet["grid_do_tin_cay"],
+        "grid_warning": sheet["grid_warning"],
+        "leads": sheet["leads"],
+        "so_luong_chuyen_dao_boc_tach_duoc": sheet["so_luong_chuyen_dao_boc_tach_duoc"],
+        "chuyen_dao_dai_dien": sheet["chuyen_dao_dai_dien"],
+        "tan_so_dai_dien": sheet["tan_so_dai_dien"],
+        "permanent_disclaimer": (
+            "Đây là ảnh trang ECG 12 chuyển đạo đã được HỆ THỐNG TỰ ĐỘNG bóc "
+            "tách thành 12 ô riêng — không phải bác sĩ tự cắt/chọn tên như "
+            "trước. Chỉ là số đo hình học (nhịp/tần số ước tính riêng từng "
+            "chuyển đạo), KHÔNG có kết luận ST-T/trục điện tim/phân loại "
+            "nhịp — mọi kết luận lâm sàng vẫn cần bác sĩ đọc trực tiếp trên "
+            "ảnh gốc."
+        ),
+        "disclaimer": "Kết quả số hóa và ước tính nhịp tim chỉ mang tính trực quan "
+                       "hóa hỗ trợ, cần bác sĩ xác nhận. Không phải kết luận chẩn đoán. "
+                       "Ranh giới mỗi ô chuyển đạo do hệ thống tự động bóc tách — xem "
+                       "grid_do_tin_cay/grid_warning để biết mức độ tin cậy của bước này.",
     }
 
 

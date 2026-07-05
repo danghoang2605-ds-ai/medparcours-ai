@@ -310,3 +310,109 @@ class TestEcgSafetyRules:
         r = ecg.apply_ecg_safety_rules(n_leads=1, redflags=[], findings=[])
         assert r["findings_hien_thi"] == []
         assert r["ghi_de_toan_bo"] is None
+
+
+# ─── MỨC 1.5: BÓC TÁCH LƯỚI 12 CHUYỂN ĐẠO (slice_12_lead_grid) ────────────
+def _make_synthetic_12_lead_sheet(n_rows=3, n_cols=4, cell_w=200, cell_h=120,
+                                   gap_px=14, header_h=40):
+    """Vẽ 1 ảnh tổng hợp mô phỏng 1 trang ECG 12 chuyển đạo với khoảng trắng
+    THẬT giữa các ô (kịch bản Tier A — gap rõ ràng), có 1 dải tiêu đề ở đầu
+    (mô phỏng thông tin bệnh nhân) để kiểm tra thuật toán loại trừ đúng."""
+    w = n_cols * cell_w + (n_cols + 1) * gap_px
+    h = header_h + gap_px + n_rows * cell_h + (n_rows + 1) * gap_px
+    img = np.full((h, w, 3), 255, dtype=np.uint8)
+    # Tiêu đề: text ngắn, giới hạn trong 1 vùng hẹp đầu trang (không tràn hết
+    # chiều rộng — giống ảnh ECG thật, tiêu đề bệnh nhân luôn ngắn hơn nhiều
+    # so với toàn bộ chiều rộng trang).
+    cv2.putText(img, "BN 001", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+    y0 = header_h + gap_px
+    for ri in range(n_rows):
+        for ci in range(n_cols):
+            x0 = gap_px + ci * (cell_w + gap_px)
+            yy0 = y0 + gap_px + ri * (cell_h + gap_px)
+            # Vẽ 1 đường sóng zigzag DÀY (3px) trải đều suốt chiều rộng ô, để
+            # mật độ mực theo CỘT đủ vượt ngưỡng phát hiện ở MỌI cột trong ô
+            # (đường ngang mảnh 1px trước đây có mật độ quá thấp theo chiều
+            # cột — lỗi ảnh test, không phải lỗi thuật toán).
+            pts = []
+            for xx in range(x0 + 5, x0 + cell_w - 5, 4):
+                yy = yy0 + cell_h // 2 + (15 if ((xx // 4) % 2 == 0) else -15)
+                pts.append((xx, yy))
+            for i in range(len(pts) - 1):
+                cv2.line(img, pts[i], pts[i + 1], (20, 20, 20), 3)
+    return img
+
+
+def test_slice_12_lead_grid_tier_a_gap_ro_rang():
+    """Ảnh có khoảng trắng THẬT giữa các ô (Tier A) -> nhận diện đúng bố cục
+    3 hàng x 4 cột, đủ tin cậy cao, KHÔNG rơi về Tier B."""
+    img = _make_synthetic_12_lead_sheet(n_rows=3, n_cols=4)
+    res = ecg.slice_12_lead_grid(img)
+    assert res["success"] is True
+    assert res["layout_detected"] == "4x3"
+    assert res["do_tin_cay"] == "cao"
+    assert set(res["crops"].keys()) == {
+        "I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"
+    }
+
+
+def test_slice_12_lead_grid_tier_b_khong_co_gap_that():
+    """ẢNH THẬT (ảnh ECG scan Đăng gửi) — Nihon Kohden, KHÔNG có khoảng trắng
+    thật giữa các ô (lưới giấy liên tục). Tier A phải THẤT BẠI, Tier B phải
+    CỨU được bằng cách chia đều theo tỉ lệ, độ tin cậy THẤP (không phải Cao),
+    và vẫn trả đủ 12 tên chuyển đạo hợp lệ."""
+    real_img_path = "/mnt/user-data/uploads/1783240831239_image.png"
+    img = cv2.imread(real_img_path)
+    if img is None:
+        return  # môi trường test khác không có file ảnh thật này, bỏ qua
+    res = ecg.slice_12_lead_grid(img)
+    assert res["success"] is True
+    assert res["do_tin_cay"] == "thap"
+    assert "ước lượng chia đều" in res["layout_detected"]
+    assert set(res["crops"].keys()) == {
+        "I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"
+    }
+    for name, crop in res["crops"].items():
+        assert crop.shape[0] > 5 and crop.shape[1] > 5, f"Ô {name} bị cắt rỗng/quá nhỏ"
+
+
+def test_slice_12_lead_grid_anh_rong_tra_that_bai_an_toan():
+    """Ảnh rỗng/không đọc được -> KHÔNG crash, trả success=False rõ ràng."""
+    res = ecg.slice_12_lead_grid(None)
+    assert res["success"] is False
+    assert res["crops"] == {}
+
+
+def test_slice_12_lead_grid_anh_qua_nho_khong_the_chia() :
+    """Ảnh quá nhỏ (nhỏ hơn nhiều lần số ô tối thiểu) -> thất bại an toàn ở cả
+    2 tier, KHÔNG cố chia ra ô rỗng/âm."""
+    tiny = np.full((20, 20, 3), 255, dtype=np.uint8)
+    res = ecg.slice_12_lead_grid(tiny)
+    assert res["success"] is False
+
+
+def test_digitize_12_lead_sheet_tra_du_12_chuyen_dao_va_khong_ket_luan_lam_sang():
+    """digitize_12_lead_sheet() phải trả đủ (hoặc tối đa) 12 chuyển đạo, mỗi
+    chuyển đạo CHỈ có số đo hình học (không có trường 'ket_luan'/'chan_doan'
+    nào) — đúng nguyên tắc an toàn: không tự kết luận lâm sàng ở Mức 1.5/2."""
+    img = _make_synthetic_12_lead_sheet(n_rows=3, n_cols=4)
+    res = ecg.digitize_12_lead_sheet(img)
+    assert res["success"] is True
+    assert res["grid_detected"] is True
+    assert res["so_luong_chuyen_dao_boc_tach_duoc"] == 12
+    for lead in res["leads"]:
+        assert lead["local_features"]["st_offset_mm"] is None
+        assert "ket_luan" not in lead
+        assert "chan_doan" not in lead
+
+
+def test_digitize_12_lead_sheet_khi_khong_boc_tach_duoc_tra_grid_detected_false():
+    """Khi slice_12_lead_grid thất bại hoàn toàn -> digitize_12_lead_sheet KHÔNG
+    tự chạy pipeline trên ảnh gốc như 1 chuyển đạo duy nhất nữa (hành vi CŨ gây
+    lỗi) — phải trả grid_detected=False, leads rỗng, kèm warning rõ."""
+    tiny = np.full((20, 20, 3), 255, dtype=np.uint8)
+    res = ecg.digitize_12_lead_sheet(tiny)
+    assert res["success"] is False
+    assert res["grid_detected"] is False
+    assert res["leads"] == []
+    assert res["warning"]

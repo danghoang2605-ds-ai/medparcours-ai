@@ -470,6 +470,356 @@ def digitize_ecg_image(image_bgr: np.ndarray) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# MỨC 1.5: TỰ ĐỘNG BÓC TÁCH LƯỚI 12 CHUYỂN ĐẠO (Grid Slicing)
+# ═══════════════════════════════════════════════════════════════════════════
+# LÝ DO THÊM PHẦN NÀY (bug đã xác nhận qua ảnh ECG thật của Đăng gửi): bác sĩ
+# trước đây phải TỰ TAY cắt ảnh chỉ giữ 1 dải chuyển đạo rồi chọn tên đúng
+# trong dropdown — nếu vô tình tải NGUYÊN trang 12 chuyển đạo (không cắt),
+# thuật toán Mức 1/2 sẽ đọc lẫn NHIỀU dải sóng chồng lên nhau như thể là 1
+# tín hiệu duy nhất, ra số nhịp tim SAI HOÀN TOÀN (đã ghi rõ trong
+# "han_che_ky_thuat" của dữ liệu demo cũ). Phần này thay bước cắt tay bằng
+# tự động phát hiện + cắt đúng 12 ô lưới trước khi đưa từng ô qua pipeline
+# Mức 1/2 hiện có (không đổi thuật toán số hóa từng chuyển đạo — chỉ tự động
+# hóa bước khoanh vùng, vốn là nguồn lỗi thật).
+#
+# QUAN TRỌNG — 2 ẢNH ECG THẬT ĐÃ THẤY DÙNG 2 BỐ CỤC KHÁC NHAU, không phải chỉ
+# 1 kiểu như tài liệu tham khảo ban đầu giả định:
+#   - 4 cột x 3 hàng (I,II,III | aVR,aVL,aVF | V1,V2,V3 | V4,V5,V6) — bố cục
+#     "chuẩn" phổ biến nhất trong tài liệu kỹ thuật.
+#   - 2 cột x 6 hàng (I,II,III,aVR,aVL,aVF | V1,V2,V3,V4,V5,V6) — bố cục THẬT
+#     đã thấy trên ảnh ECG thật Đăng gửi (máy Nihon Kohden và tương tự).
+# KHÔNG hardcode chỉ 1 bố cục — thuật toán bên dưới TỰ PHÁT HIỆN số hàng/cột
+# thật của ảnh bằng cách tìm khoảng trắng (gap) phân cách giữa các ô, rồi đối
+# chiếu với 2 bố cục đã biết ở trên. Nếu ảnh khớp bố cục KHÁC (chưa từng thấy),
+# thuật toán THÀ BÁO KHÔNG NHẬN DIỆN ĐƯỢC (grid_detected=False) còn hơn đoán
+# đại và cắt sai — an toàn hơn cho 1 sản phẩm y tế.
+
+# 2 bố cục chuẩn đã xác nhận qua tài liệu + ảnh thật. Key = (so_hang, so_cot).
+# Value = danh sách theo CỘT (mỗi phần tử là 1 cột, liệt kê tên chuyển đạo
+# theo thứ tự TỪ TRÊN XUỐNG trong cột đó).
+KNOWN_12_LEAD_LAYOUTS = {
+    (3, 4): [["I", "II", "III"], ["aVR", "aVL", "aVF"], ["V1", "V2", "V3"], ["V4", "V5", "V6"]],
+    (6, 2): [["I", "II", "III", "aVR", "aVL", "aVF"], ["V1", "V2", "V3", "V4", "V5", "V6"]],
+}
+
+# Ngưỡng coi 1 hàng/cột pixel là "khoảng trắng" (gap) giữa các ô lưới — tỉ lệ
+# pixel KHÔNG phải nền trắng (chữ, lưới, nét bút) trên hàng/cột đó phải dưới
+# ngưỡng này. 0.008 (0.8%) đủ nhỏ để không nhầm 1 hàng có nét bút/lưới mảnh
+# thành gap, nhưng đủ lớn để chấp nhận nhiễu ảnh scan/JPEG nhẹ.
+GRID_GAP_INK_THRESHOLD = 0.008
+# 1 gap phải dài tối thiểu tỉ lệ này so với tổng chiều dài trục mới được tính
+# là gap thật (phân cách 2 ô) — tránh nhầm 1 khoảng trắng ngắn tình cờ giữa 2
+# nét chữ/sóng thành ranh giới ô.
+GRID_MIN_GAP_FRACTION = 0.006
+# 1 "ô nội dung" (band) phải dài tối thiểu tỉ lệ này mới được tính là 1 hàng/
+# cột lưới thật — loại bỏ mảnh vụn còn sót lại ở rìa ảnh.
+GRID_MIN_BAND_FRACTION = 0.03
+# Chênh lệch chiều cao/rộng tối đa cho phép giữa ô lớn nhất và ô nhỏ nhất
+# trong 1 nhóm ứng viên (hàng hoặc cột) để vẫn coi là "đều nhau, đáng tin" —
+# bố cục lưới ECG thật có thể lệch nhẹ do scan nghiêng, nhưng lệch quá nhiều
+# (vd hàng tiêu đề lẫn vào) thì không đáng tin.
+GRID_BAND_UNIFORMITY_RATIO = 1.6
+
+
+def _ink_density_1d(mask: np.ndarray, axis: int) -> np.ndarray:
+    """Tỉ lệ pixel 'có mực' (chữ/lưới/nét bút, đã tách nền trắng) theo từng
+    hàng (axis=1, trả mảng độ dài = số hàng) hoặc từng cột (axis=0)."""
+    return mask.astype(np.float64).mean(axis=axis)
+
+
+def _bands_from_density(density: np.ndarray, total_len: int) -> list:
+    """Tìm các 'dải nội dung' (band) liên tục bị ngăn cách bởi khoảng trắng
+    (gap) trong mảng mật độ mực 1 chiều. Trả list các (start, end) — chỉ số
+    pixel, end không bao gồm (giống slice Python).
+
+    Đây là kỹ thuật PHÂN VÙNG TÀI LIỆU DỰA TRÊN KHOẢNG TRẮNG (whitespace/gap-
+    based document layout segmentation) — kỹ thuật CV kinh điển, không phải
+    đoán mò. Chủ động THẤT BẠI AN TOÀN (trả band không đủ tin cậy) thay vì cố
+    trả kết quả khi ranh giới không rõ ràng.
+    """
+    is_gap = density < GRID_GAP_INK_THRESHOLD
+    min_gap_px = max(1, int(total_len * GRID_MIN_GAP_FRACTION))
+    min_band_px = max(1, int(total_len * GRID_MIN_BAND_FRACTION))
+
+    bands = []
+    x = 0
+    n = len(density)
+    while x < n:
+        if is_gap[x]:
+            x += 1
+            continue
+        start = x
+        while x < n and not is_gap[x]:
+            x += 1
+        end = x
+        # Bỏ qua nếu đoạn "không gap" này thực chất bị ngắt bởi nhiều gap NGẮN
+        # (dưới min_gap_px) — coi các gap ngắn đó là nhiễu, gộp lại thành 1
+        # band liên tục. Cách đơn giản: nới rộng end nếu gap tiếp theo < min_gap_px.
+        while x < n:
+            gap_start = x
+            while x < n and is_gap[x]:
+                x += 1
+            gap_len = x - gap_start
+            if gap_len < min_gap_px and x < n:
+                # gap quá ngắn để tính là ranh giới thật -> nối tiếp band
+                while x < n and not is_gap[x]:
+                    x += 1
+                end = x
+            else:
+                break
+        if end - start >= min_band_px:
+            bands.append((start, end))
+    return bands
+
+
+def _select_uniform_bands(bands: list, expected_count: int) -> Optional[list]:
+    """Từ danh sách band ứng viên, chọn ra ĐÚNG expected_count band có kích
+    thước ĐỀU NHAU nhất (giả định đây là các ô lưới thật, loại các band lệch
+    hẳn — thường là vùng tiêu đề/chú thích văn bản ở đầu/cuối trang, vốn có
+    kích thước khác biệt rõ với các ô lưới sóng ECG đều đặn).
+
+    Trả None nếu không đủ band, hoặc band tìm được không đủ ĐỀU để tin cậy —
+    THÀ báo không nhận diện được còn hơn cắt sai (an toàn lâm sàng)."""
+    if len(bands) < expected_count:
+        return None
+    # Ưu tiên nhóm expected_count band LỚN NHẤT (ô lưới sóng ECG thường lớn
+    # hơn hẳn dải tiêu đề văn bản mỏng ở đầu trang).
+    sizes = [(b[1] - b[0], b) for b in bands]
+    sizes.sort(key=lambda t: t[0], reverse=True)
+    candidates = [b for _, b in sizes[:expected_count]]
+    heights = [b[1] - b[0] for b in candidates]
+    if max(heights) / min(heights) > GRID_BAND_UNIFORMITY_RATIO:
+        return None
+    return sorted(candidates, key=lambda b: b[0])
+
+
+def slice_12_lead_grid(image_bgr: np.ndarray) -> dict:
+    """
+    Tự động phát hiện lưới 12 chuyển đạo trong 1 ảnh ECG nguyên trang và cắt
+    thành 12 ảnh nhỏ, mỗi ảnh 1 chuyển đạo — thay bước bác sĩ tự cắt/chọn tên
+    chuyển đạo bằng tay (nguồn lỗi thật khi bác sĩ vô tình tải nguyên trang).
+
+    Trả về:
+      {"success": True, "crops": {lead_name: image_bgr_crop, ...},
+       "layout_detected": "3x4"|"6x2", "do_tin_cay": "cao"|"trung_binh",
+       "warning": str|None}
+      hoặc {"success": False, "crops": {}, "warning": str} nếu KHÔNG nhận
+      diện được bố cục đủ tin cậy — FE phải rơi về luồng cắt ảnh thủ công cũ,
+      KHÔNG được tự đoán đại 1 bố cục để có vẻ "thành công".
+    """
+    if image_bgr is None or image_bgr.size == 0:
+        return {"success": False, "crops": {}, "warning": "Ảnh rỗng hoặc không đọc được."}
+
+    h, w = image_bgr.shape[:2]
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    # Mực = pixel rõ ràng khác nền trắng (chữ, lưới, nét bút) — ngưỡng 245 rộng
+    # rãi để bắt cả lưới nhạt màu hồng/xám lẫn nét bút đậm, chỉ loại nền giấy
+    # trắng thật sự.
+    ink_mask = gray < 245
+
+    row_density = _ink_density_1d(ink_mask, axis=1)  # theo từng hàng -> độ dài h
+    col_density = _ink_density_1d(ink_mask, axis=0)  # theo từng cột -> độ dài w
+
+    row_bands_all = _bands_from_density(row_density, h)
+    col_bands_all = _bands_from_density(col_density, w)
+
+    # Thử lần lượt các bố cục đã biết — bố cục nào khớp ĐỦ TIN CẬY cả số hàng
+    # lẫn số cột thì dùng, không thử tiếp (tránh ép khớp bố cục không phù hợp).
+    for (n_rows, n_cols), col_major_names in KNOWN_12_LEAD_LAYOUTS.items():
+        row_bands = _select_uniform_bands(row_bands_all, n_rows)
+        col_bands = _select_uniform_bands(col_bands_all, n_cols)
+        if row_bands is None or col_bands is None:
+            continue
+
+        crops = {}
+        for ci, (cx0, cx1) in enumerate(col_bands):
+            for ri, (ry0, ry1) in enumerate(row_bands):
+                lead_name = col_major_names[ci][ri]
+                crops[lead_name] = image_bgr[ry0:ry1, cx0:cx1].copy()
+
+        # Độ tin cậy: "cao" nếu cả 2 trục đều rất đều (margin rộng so với
+        # ngưỡng), "trung_binh" nếu vừa đủ ngưỡng.
+        row_h = [b[1] - b[0] for b in row_bands]
+        col_w = [b[1] - b[0] for b in col_bands]
+        uniformity = max(max(row_h) / min(row_h), max(col_w) / min(col_w))
+        do_tin_cay = "cao" if uniformity < 1.25 else "trung_binh"
+
+        warning = None
+        if do_tin_cay == "trung_binh":
+            warning = ("Lưới 12 chuyển đạo phát hiện được nhưng các ô không hoàn "
+                       "toàn đều nhau (ảnh có thể hơi nghiêng/lệch khi scan) — "
+                       "cần đối chiếu nhanh với ảnh gốc để chắc mỗi ô đúng tên "
+                       "chuyển đạo đã gán.")
+
+        return {
+            "success": True,
+            "crops": crops,
+            "layout_detected": f"{n_cols}x{n_rows}",
+            "do_tin_cay": do_tin_cay,
+            "warning": warning,
+        }
+
+    # ─── TIER B (dự phòng): CHIA ĐỀU THEO TỈ LỆ ─────────────────────────────
+    # ĐÃ XÁC NHẬN qua test với ảnh ECG thật: nhiều máy in/scan KHÔNG để khoảng
+    # trắng thật giữa các ô chuyển đạo (lưới giấy in liên tục xuyên suốt cả
+    # trang, chỉ có thể có 1 đường kẻ mảnh phân cách, không đủ "trắng tuyệt
+    # đối" để Tier A phát hiện) — Tier A THẤT BẠI AN TOÀN đúng như thiết kế,
+    # nhưng để lại demo hoàn toàn không dùng được. Tier B chấp nhận ĐỘ TIN CẬY
+    # THẤP hơn: tách phần TIÊU ĐỀ (dải có nội dung ngắn ở đầu trang, phát hiện
+    # được nhờ gap thật giữa tiêu đề và phần lưới sóng) rồi CHIA ĐỀU phần còn
+    # lại theo 1 bố cục đã biết — vẫn tốt hơn nhiều so với cách cũ (đọc lẫn cả
+    # trang thành 1 tín hiệu duy nhất, sai hoàn toàn) vì ít nhất mỗi chuyển đạo
+    # được tách vào đúng VÙNG riêng, dù ranh giới có thể lệch vài pixel.
+    if len(row_bands_all) >= 1:
+        # Band DÀI NHẤT theo chiều dọc, nằm ở nửa DƯỚI ảnh trở xuống — giả định
+        # đây là toàn bộ vùng lưới sóng (phần tiêu đề bệnh nhân luôn ngắn hơn
+        # nhiều và luôn nằm phía trên).
+        body_candidates = [b for b in row_bands_all if b[0] >= h * 0.05]
+        if not body_candidates:
+            body_candidates = row_bands_all
+        grid_body = max(body_candidates, key=lambda b: b[1] - b[0])
+        gy0, gy1 = grid_body
+
+        # Xác định biên ngang thật của vùng lưới (không dùng nguyên chiều rộng
+        # ảnh — có thể có lề trắng 2 bên) bằng mật độ mực TRONG ĐÚNG dải hàng
+        # gy0:gy1 này.
+        sub_ink = ink_mask[gy0:gy1, :]
+        col_density_body = sub_ink.astype(np.float64).mean(axis=0)
+        nonzero_cols = np.nonzero(col_density_body > GRID_GAP_INK_THRESHOLD)[0]
+        if nonzero_cols.size == 0:
+            gx0, gx1 = 0, w
+        else:
+            gx0, gx1 = int(nonzero_cols[0]), int(nonzero_cols[-1]) + 1
+
+        # Mặc định thử bố cục 2 cột x 6 hàng TRƯỚC (đã xác nhận là bố cục THẬT
+        # gặp trên ảnh ECG thật của Đăng — máy Nihon Kohden/tương tự phổ biến
+        # tại Việt Nam), sau đó mới thử 4 cột x 3 hàng.
+        for (n_rows, n_cols), col_major_names in [((6, 2), KNOWN_12_LEAD_LAYOUTS[(6, 2)]),
+                                                    ((3, 4), KNOWN_12_LEAD_LAYOUTS[(3, 4)])]:
+            body_h = gy1 - gy0
+            body_w = gx1 - gx0
+            if body_h < n_rows * 8 or body_w < n_cols * 8:
+                continue  # ảnh quá nhỏ để chia hợp lý theo bố cục này
+            row_edges = np.linspace(gy0, gy1, n_rows + 1).astype(int)
+            col_edges = np.linspace(gx0, gx1, n_cols + 1).astype(int)
+            crops = {}
+            for ci in range(n_cols):
+                for ri in range(n_rows):
+                    lead_name = col_major_names[ci][ri]
+                    crops[lead_name] = image_bgr[row_edges[ri]:row_edges[ri + 1],
+                                                  col_edges[ci]:col_edges[ci + 1]].copy()
+            return {
+                "success": True,
+                "crops": crops,
+                "layout_detected": f"{n_cols}x{n_rows} (ước lượng chia đều theo tỉ lệ)",
+                "do_tin_cay": "thap",
+                "warning": ("KHÔNG dò được ranh giới rõ ràng giữa các ô chuyển đạo (ảnh "
+                            "không có khoảng trắng phân cách thật, thường gặp ở ảnh scan/"
+                            "chụp giấy in liên tục) — hệ thống CHIA ĐỀU theo tỉ lệ, giả định "
+                            f"bố cục {n_cols} cột x {n_rows} hàng. Ranh giới mỗi ô có thể lệch "
+                            "vài mm so với ảnh gốc. BẮT BUỘC bác sĩ đối chiếu từng ô với ảnh "
+                            "gốc trước khi dùng số liệu, và có thể cần sửa lại tên chuyển đạo "
+                            "nếu bố cục thật khác giả định này."),
+            }
+
+    return {
+        "success": False,
+        "crops": {},
+        "warning": ("Không tự động nhận diện được bố cục lưới 12 chuyển đạo chuẩn "
+                    "(đã thử 2 bố cục phổ biến: 4 cột x 3 hàng, 2 cột x 6 hàng, kể cả "
+                    "chia đều theo tỉ lệ). Ảnh có thể bị cắt lệch quá nhiều, chất lượng "
+                    "quá kém, hoặc không phải ảnh ECG 12 chuyển đạo chuẩn. Vui lòng cắt "
+                    "ảnh chỉ giữ lại 1 dải chuyển đạo và dùng luồng nhập thủ công."),
+    }
+
+
+def digitize_12_lead_sheet(image_bgr: np.ndarray) -> dict:
+    """
+    Bóc tách + số hóa TOÀN BỘ 12 chuyển đạo từ 1 ảnh trang ECG đầy đủ. Với
+    mỗi chuyển đạo cắt được, chạy lại ĐÚNG pipeline Mức 1/2 đã kiểm chứng
+    (digitize_ecg_image + estimate_px_per_mm + detect_r_peaks +
+    compute_heart_rate) — không đổi thuật toán số hóa từng chuyển đạo, chỉ tự
+    động hóa bước khoanh vùng.
+
+    KHÔNG trả bất kỳ kết luận lâm sàng nào (không ST chênh, không trục điện
+    tim, không phân loại nhịp) — phần "local_features" mỗi chuyển đạo CHỈ là
+    số đo hình học thô (số đỉnh R, tần số ước tính riêng của dải đó), việc
+    biện luận vùng tổn thương ST-T cần khung ngưỡng do Tấn/Ngân xác nhận,
+    CHƯA được code ở đây (xem ghi chú trong apply_ecg_safety_rules).
+    """
+    grid = slice_12_lead_grid(image_bgr)
+    if not grid["success"]:
+        return {"success": False, "grid_detected": False, "warning": grid["warning"],
+                "leads": []}
+
+    leads_out = []
+    for lead_name in ["I", "II", "III", "aVR", "aVL", "aVF",
+                       "V1", "V2", "V3", "V4", "V5", "V6"]:
+        crop = grid["crops"].get(lead_name)
+        if crop is None:
+            continue
+        result = digitize_ecg_image(crop)
+        calib = estimate_px_per_mm(crop)
+        r_peaks = detect_r_peaks(result["signal"], px_per_mm=calib["px_per_mm"])
+        heart_rate = compute_heart_rate(r_peaks["rr_intervals_px"], calib["px_per_mm"])
+
+        redflags = []
+        if calib.get("do_tin_cay") == "thap":
+            redflags.append("Ảnh mờ hoặc lưới không rõ (chất lượng ảnh thấp)")
+        if r_peaks.get("warning"):
+            redflags.append("Nhiễu cơ hoặc không dò được đỉnh R rõ ràng")
+        if heart_rate.get("warning"):
+            redflags.append(heart_rate["warning"])
+
+        leads_out.append({
+            "lead_name": lead_name,
+            "image_base64_crop": encode_image_to_base64_png(crop),
+            "signal": result["signal"],
+            "columns_with_signal": result["columns_with_signal"],
+            "digitize_warning": result["warning"],
+            "calibration": calib,
+            "r_peaks": r_peaks,
+            "heart_rate": heart_rate,
+            "redflags": redflags,
+            "local_features": {
+                "so_dinh_r_phat_hien": len(r_peaks.get("peaks", [])),
+                "tan_so_uoc_tinh_rieng_dai_nay": heart_rate.get("bpm_avg"),
+                # CỐ Ý để trống — đo lệch ST/J-point CHƯA được triển khai, cần
+                # Tấn/Ngân xác nhận thuật toán/ngưỡng trước khi tính bất kỳ số
+                # nào ở đây (xem quy tắc an toàn lâm sàng của dự án).
+                "st_offset_mm": None,
+                "ghi_chu_st": "Chưa triển khai — cần Tấn/Ngân xác nhận thuật toán đo trước khi tính.",
+            },
+        })
+
+    # Chuyển đạo đại diện để hiển thị "Tần số tim" chính ở form đọc điện tim —
+    # ưu tiên các chuyển đạo khuyến nghị lâm sàng cho dải nhịp, lấy chuyển đạo
+    # ĐẦU TIÊN có bpm hợp lệ.
+    RECOMMENDED = ["II", "V2", "V3", "V4", "V5"]
+    primary = None
+    for name in RECOMMENDED:
+        match = next((L for L in leads_out if L["lead_name"] == name
+                       and L["heart_rate"].get("bpm_avg") is not None), None)
+        if match:
+            primary = match
+            break
+    if primary is None:
+        primary = next((L for L in leads_out if L["heart_rate"].get("bpm_avg") is not None), None)
+
+    return {
+        "success": True,
+        "grid_detected": True,
+        "layout_detected": grid["layout_detected"],
+        "grid_do_tin_cay": grid["do_tin_cay"],
+        "grid_warning": grid["warning"],
+        "leads": leads_out,
+        "so_luong_chuyen_dao_boc_tach_duoc": len(leads_out),
+        "chuyen_dao_dai_dien": primary["lead_name"] if primary else None,
+        "tan_so_dai_dien": primary["heart_rate"] if primary else None,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # MỨC 2: Đo R-R + nhịp tim (nguồn công thức/ngưỡng: sách "Đọc Điện Tâm Đồ Dễ
 # Hơn" - BS Nguyễn Tôn Kinh Thi)
 # ═══════════════════════════════════════════════════════════════════════════
