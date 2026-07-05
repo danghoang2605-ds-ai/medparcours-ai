@@ -3024,8 +3024,8 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
                 onDrop={e=>{e.preventDefault();setDragging(false);addFiles(e.dataTransfer.files)}}>
                 <div className="upload-merged-inner">
                   <div className="upload-icon"><Icon.Upload d={28} color="#1D6FE8"/></div>
-                  <p className="upload-title">Bệnh án &amp; điện tâm đồ</p>
-                  <p className="upload-sub">Kéo thả tài liệu vào đây, hoặc chọn 1 trong 2 cách bên dưới</p>
+                  <p className="upload-title">Bệnh án </p>
+                  <p className="upload-sub">Kéo thả tài liệu vào đây</p>
                   <div className="upload-merged-actions">
                     <button className="btn-primary" onClick={()=>inputRef.current.click()}><Icon.Upload d={15} color="white"/>Chọn bệnh án</button>
                   </div>
