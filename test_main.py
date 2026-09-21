@@ -400,9 +400,9 @@ def test_faq_bot_fallback_khi_thieu_bot_id(client, monkeypatch):
 def test_faq_bot_thanh_cong_khi_co_du_cau_hinh(client, monkeypatch):
     """Mock requests.post trả đúng cấu trúc card_data thật (theo docx) -> lấy
     đúng text từ card loại 'text'."""
-    monkeypatch.setenv("VNPT_TOKEN_ID", "tid")
-    monkeypatch.setenv("VNPT_TOKEN_KEY", "tkey")
-    monkeypatch.setenv("VNPT_ACCESS_TOKEN", "tok")
+    monkeypatch.setenv("VNPT_FAQ_TOKEN_ID", "tid")
+    monkeypatch.setenv("VNPT_FAQ_TOKEN_KEY", "tkey")
+    monkeypatch.setenv("VNPT_FAQ_ACCESS_TOKEN", "tok")
     monkeypatch.setenv("VNPT_FAQ_BOT_ID", "bot-abc-123")
     fake_resp = MagicMock()
     fake_resp.raise_for_status = lambda: None
@@ -411,7 +411,15 @@ def test_faq_bot_thanh_cong_khi_co_du_cau_hinh(client, monkeypatch):
             {"type": "text", "text": "MedParcours là trợ lý AI hỗ trợ đọc hồ sơ bệnh án."}
         ]}}
     }
-    with patch("vnpt_client.requests.post", return_value=fake_resp):
+    with patch("main.requests.post") as mock_post:
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=fake_resp)
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+        fake_resp.status_code = 200
+        fake_resp.iter_lines.return_value = [
+            'data:{"object":{"sb":{"card_data":[{"type":"text","text":"MedParcours là trợ lý AI hỗ trợ đọc hồ sơ bệnh án."}]}}}'
+        ]
+        mock_post.return_value = mock_ctx
         resp = client.post("/faq-bot", json={"question": "MedParcours là gì?"})
     assert resp.status_code == 200
     assert "trợ lý AI" in resp.json()["text"]

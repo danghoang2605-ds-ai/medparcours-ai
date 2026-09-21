@@ -30,6 +30,9 @@ import vnpt_client
 import document_extract
 import database
 from cde.engine import evaluate_v2
+import ecg_engine
+import numpy as np
+import cv2
 from auth import get_current_user
 from db import (
     SupabaseDataError,
@@ -1250,17 +1253,15 @@ async def analyze_record(
     user: dict = Depends(get_current_user),
 ):
     """
-    Upload hồ sơ → bóc text → phân tích.
-    Hỗ trợ: PDF (pypdf), Word .docx, Excel .xlsx, PowerPoint .pptx
-    (python-docx/openpyxl/python-pptx — text trích trực tiếp, không qua OCR).
+    Upload a medical record file, extract text, and run the analysis pipeline.
 
-    CHƯA hỗ trợ: ảnh (.png/.jpg — cần OCR thật, để dành giai đoạn 2 theo đúng
-    định hướng ban đầu của REPORT_SYSTEM), và .doc/.xls/.ppt định dạng cũ
-    (không phải Open XML, cần thư viện khác). Các loại này trả lỗi 400 RÕ
-    NGHĨA "chưa hỗ trợ định dạng X" — không phải lỗi server chung, để FE hiển
-    thị đúng nguyên nhân cho người dùng.
+    Supported formats:
+      - PDF (.pdf) via pypdf
+      - Word (.docx), Excel (.xlsx), PowerPoint (.pptx) via python-docx/openpyxl/python-pptx
+      - Images (.png/.jpg/.jpeg) via Claude Vision (fallback when VNPT SmartReader is not configured)
 
-    File lớn (PDF) nên dùng /analyze_text (bóc chữ ở trình duyệt qua pdf.js).
+    Legacy Office formats (.doc/.xls/.ppt) are not supported — return 400 with a clear message.
+    For large PDFs, prefer /analyze_text (client-side text extraction via pdf.js).
     """
     filename_lower = file.filename.lower()
     ext = "." + filename_lower.rsplit(".", 1)[-1] if "." in filename_lower else ""
@@ -2060,10 +2061,18 @@ Hãy trả lời trực tiếp bằng tiếng Việt."""
         )
     except RuntimeError as exc:
         print(f"[VNPT FAQ SMARTBOT ERROR] {exc}")
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            "text": "Tính năng hỏi đáp hệ thống đang bảo trì. Vui lòng thử lại sau hoặc liên hệ đội ngũ hỗ trợ.",
+            "provider": "fallback",
+            "vnpt_error": str(exc),
+        }
     except Exception as exc:
         print(f"[VNPT FAQ SMARTBOT ERROR] {type(exc).__name__}: {exc}")
-        raise HTTPException(status_code=502, detail=f"Lỗi không xác định khi gọi VNPT SmartBot: {exc}") from exc
+        return {
+            "text": "Tính năng hỏi đáp hệ thống đang bảo trì. Vui lòng thử lại sau hoặc liên hệ đội ngũ hỗ trợ.",
+            "provider": "fallback",
+            "vnpt_error": f"{type(exc).__name__}: {exc}",
+        }
 
     return {"text": answer, "provider": "vnpt-smartbot"}
 
@@ -2234,3 +2243,84 @@ async def consultation_summarize_audio(file: UploadFile = File(...)):
         raise HTTPException(status_code=502, detail=f"Giải băng thành công nhưng không tóm tắt được: {e}")
 
     return {"success": True, "transcript": transcript, "summary": structured, "source": "CLAUDE_FALLBACK"}
+
+
+# ─── ECG DIGITIZATION ──────────────────────────────────────────────────────
+
+VALID_12_LEADS = {"I", "II", "III", "aVR", "aVL", "aVF",
+                  "V1", "V2", "V3", "V4", "V5", "V6"}
+# Leads recommended for rhythm strip analysis (clinical standard)
+RECOMMENDED_RHYTHM_LEADS = {"II", "V1", "V2", "V3", "V4", "V5"}
+
+MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MB
+
+
+class EcgRequest(BaseModel):
+    image_base64: str
+    lead_name: str = "II"
+
+
+@app.get("/ecg/synthetic")
+async def ecg_synthetic(heart_rate_bpm: int = 75):
+    """Generate a synthetic ECG image, digitize it, and return the full
+    pipeline result (signal + calibration + heart rate).  Useful for
+    frontend development and demo without real ECG images."""
+    img = ecg_engine.generate_synthetic_ecg(heart_rate_bpm=heart_rate_bpm)
+    digitized = ecg_engine.digitize_ecg_image(img)
+
+    # Run calibration (px/mm from grid detection)
+    calib = ecg_engine.estimate_px_per_mm(img)
+
+    # Detect R-peaks and compute heart rate
+    r_peaks = ecg_engine.detect_r_peaks(digitized["signal"])
+    heart_rate = ecg_engine.compute_heart_rate(
+        r_peaks["rr_intervals_px"], calib.get("px_per_mm")
+    )
+
+    result = {
+        "success": True,
+        **digitized,
+        "calibration": calib,
+        "heart_rate": heart_rate,
+        "is_synthetic": True,
+        "disclaimer": (
+            "Dữ liệu ECG tổng hợp (giả lập) -- chỉ dùng để kiểm tra giao diện, "
+            "không mang ý nghĩa lâm sàng."
+        ),
+    }
+    return result
+
+
+@app.post("/ecg")
+async def ecg_digitize(req: EcgRequest):
+    """Digitize an ECG image (base64) into a structured signal + heart rate."""
+    lead_name = req.lead_name.strip() if req.lead_name else "II"
+    if lead_name not in VALID_12_LEADS:
+        lead_name = "II"
+
+    try:
+        raw = base64.b64decode(req.image_base64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="image_base64 is not valid base64")
+
+    if len(raw) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail=f"Image exceeds {MAX_IMAGE_BYTES // (1024*1024)}MB limit")
+
+    arr = np.frombuffer(raw, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="Cannot decode image (corrupt or unsupported format)")
+
+    result = ecg_engine.digitize_ecg_image(img)
+    result["lead_name"] = lead_name
+    result["permanent_disclaimer"] = ecg_engine.ecg_permanent_disclaimer(lead_name)
+
+    redflags = []
+    if lead_name not in RECOMMENDED_RHYTHM_LEADS:
+        redflags.append(
+            f"Chuyển đạo {lead_name} không nằm trong danh sách khuyến nghị "
+            f"cho phân tích dải nhịp. Kết quả nhịp tim có thể kém tin cậy."
+        )
+    result["redflags"] = redflags
+
+    return result

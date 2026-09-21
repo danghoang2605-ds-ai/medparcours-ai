@@ -133,7 +133,7 @@ def test_list_patients_db_loi_tra_ve_rong_khong_phai_503(client, monkeypatch):
     data = resp.json()
     assert data["success"] is True
     assert data["patients"] == []
-    assert "db_warning" in data
+    assert "storage_error" in data
 
 
 # ─── POST /patient/update — tính năng "cập nhật theo thời gian thực" ──────
