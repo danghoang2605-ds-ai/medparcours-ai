@@ -11,7 +11,3 @@ scipy
 python-docx
 python-pptx
 openpyxl
-supabase
-pyjwt
-requests>=2.31.0
-libsql-client

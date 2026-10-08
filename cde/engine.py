@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from clinical_rules import (
     compute_egfr, check_drug_safety, run_priority_screens, build_trend_facts,
     compute_cha2ds2_vasc, compute_has_bled, compute_ttr, detect_care_gaps,
-    _gather_text,
+    _gather_text, parse_sex,
 )
 try:
     from .disease_classifier import classify_profiles, has_profile
@@ -72,7 +72,7 @@ def evaluate_v2(report: dict) -> dict:
     creat_val = creat.get("rawVal") if creat else None
     egfr = compute_egfr(
         creat_val, info.get("tuoi"),
-        "nam" in (info.get("gioi_tinh") or "").lower(),
+        parse_sex(info.get("gioi_tinh")) == "male",
     )
 
     # ── Layer 2: Disease Classifier — danh sách profile active (0..N) ────────
@@ -173,7 +173,7 @@ def evaluate_v2(report: dict) -> dict:
     baseline_labs = check_baseline_labs_completeness(labs)
 
     # SCORE2: chỉ kiểm tra applicability, KHÔNG tự tính điểm (xem lý do trong
-    # universal_indicators.py — cần Tấn/Ngân xác nhận hệ số trước khi tính).
+    # universal_indicators.py — cần chuyên gia lâm sàng xác nhận hệ số trước khi tính).
     # Lipid/HDL hiện chưa có field chuẩn riêng trong schema -> dò qua xet_nghiem_key.
     chol_item = lab_of("Cholesterol") or lab_of("LDL")
     hdl_item = lab_of("HDL")

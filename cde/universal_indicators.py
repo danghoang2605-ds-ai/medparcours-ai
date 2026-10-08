@@ -190,7 +190,7 @@ def compute_score2_applicability(tuoi, gioi_tinh, hut_thuoc, ha_tt, cholesterol_
         "thang_diem_phu_hop": do_tuoi_phu_hop,
         "du_du_lieu_de_tinh": len(missing) == 0 and do_tuoi_phu_hop is not None,
         "thieu_du_lieu": missing,
-        "luu_y": "Hệ thống CHƯA tự tính điểm SCORE2 thật — cần Tấn/Ngân xác nhận "
+        "luu_y": "Hệ thống CHƯA tự tính điểm SCORE2 thật — cần chuyên gia lâm sàng xác nhận "
                  "bộ hệ số hồi quy phù hợp trước khi code phần tính điểm. Hiện tại "
                  "chỉ kiểm tra đủ dữ liệu đầu vào.",
         "nguon": "ESC SCORE2/SCORE2-OP — dự phòng tiên phát nguy cơ 10 năm, "

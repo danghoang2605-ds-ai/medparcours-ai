@@ -1,13 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, Component } from "react"
-import { supabase, supabaseConfigured } from "./supabaseClient"
 import { callApi } from "./api"
-
-// API_URL: trỏ tới backend trên Hugging Face Spaces.
-// SAU KHI tạo Space, thay URL bên dưới bằng URL thật, dạng:
-//   https://<tên-tài-khoản-HF>-mediflow-ai.hf.space   (chữ thường, dùng dấu gạch ngang)
-// Có thể ghi đè bằng window.MEDIFLOW_API_URL trong index.html mà không cần sửa file này.
-const API_URL = (typeof window !== "undefined" && window.MEDIFLOW_API_URL) || "https://danghoang2605-mediflow-ai.hf.space"
-const DEFAULT_BENH_VIEN_ID = "fd070774-17e3-4d74-8f28-f09258b24209"
+import { localStore } from "./localStore"
+import { getLang, setLang, onLangChange, startI18n, translateDocument } from "./i18n"
+import { MOCK_REPORT_EN } from "./demoData.en"
 
 // ─── Lớp gọi Backend (Hugging Face Spaces) ───────────────────────────────────
 // analyzeText/analyze: phân tích hồ sơ. mdt/teaching: lấy biên bản hội chẩn và
@@ -55,17 +50,13 @@ const mpApi = {
   },
   // mdt/teaching: đã bỏ (xem ghi chú trong MDTView/TeachingView) — endpoint
   // /mdt và /teaching (phẳng) chưa từng được ghép vào main.py.
-  // ─── Lưu trữ hồ sơ lâu dài (tính năng "cập nhật hồ sơ theo thời gian
-  // thực") — KHÔNG đụng gì tới các hàm trên, hồ sơ demo/luồng phân tích
-  // 1 lần vẫn hoạt động y hệt cũ dù backend chưa cấu hình Turso (4 hàm này
-  // chỉ được gọi khi bác sĩ chủ động bấm "Lưu hồ sơ"/"Cập nhật hồ sơ").
-  savePatient: (report) => mpFetchJSON("/patient/save", { report }),
-  getPatient: (soBenhAn) => mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}`, null, 45000, "GET"),
-  listPatients: () => mpFetchJSON("/patient", null, 45000, "GET"),
-  deletePatient: (soBenhAn) => mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}`, null, 45000, "DELETE"),
-  renamePatient: (soBenhAn, tenMoi) =>
-    mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}/ten`, { ten_moi: tenMoi }, 45000, "PATCH"),
-  // ─── FAQ Bot & SmartVoice (VNPT) — độc lập với MedAmi lâm sàng ─────────
+  // ─── Patient records: stored in this browser only (see localStore.js) ───
+  savePatient: (report, analysis) => localStore.save(report, analysis),
+  getPatient: (soBenhAn) => localStore.get(soBenhAn),
+  listPatients: () => localStore.list(),
+  deletePatient: (soBenhAn) => localStore.remove(soBenhAn),
+  renamePatient: (soBenhAn, tenMoi) => localStore.rename(soBenhAn, tenMoi),
+  // ─── Product-support assistant (independent from clinical MedAmi) ─────
   askFaqBot: async (question, senderId="user_test") => {
     const data = await mpFetchJSON("/chat", {
       question,
@@ -77,73 +68,40 @@ const mpApi = {
     }, 90000)
     return { text: data.answer || data.text || "", provider: data.provider }
   },
-  sendFeedback: (soBenhAn, muc, noiDung, ghiChu="") =>
-    mpFetchJSON("/feedback", { so_benh_an: soBenhAn||"", muc, noi_dung: noiDung, ghi_chu: ghiChu }, 15000),
-  getPatientHistory: (soBenhAn, limit=5) =>
-    mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}/history?limit=${limit}`, null, 20000, "GET"),
-  saveChatMessage: (soBenhAn, role, content) =>
-    mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}/chat`, { role, content }, 15000),
-  getChatHistory: (soBenhAn, limit=100) =>
-    mpFetchJSON(`/patient/${encodeURIComponent(soBenhAn)}/chat?limit=${limit}`, null, 20000, "GET"),
-  ekycOcrCccd: async (fileFront) => {
-    const fd = new FormData()
-    fd.append("file_front", fileFront)
-    const res = await callApi("/ekyc/ocr-cccd", { method: "POST", body: fd })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data?.detail || "Không đọc được thông tin từ ảnh CCCD")
-    return data
+  sendFeedback: async () => ({ success: true }),
+  getPatientHistory: (soBenhAn, limit=5) => localStore.history(soBenhAn, limit),
+  saveChatMessage: (soBenhAn, role, content) => localStore.addChat(soBenhAn, role, content),
+  getChatHistory: (soBenhAn, limit=100) => localStore.chat(soBenhAn, limit),
+  // Voice runs entirely in the browser (Web Speech API); no server round-trip.
+  textToSpeech: async () => ({ success: false, use_local_tts: true }),
+  speechToText: async () => ({ success: false, text: "", error_code: "STT_FALLBACK" }),
+  // Updates: send the locally stored record to the stateless merge endpoint,
+  // then save the merged result back to the browser store.
+  updatePatient: async (soBenhAn, hoSoText, pages, nguonTaiLieu) => {
+    const rec = await localStore.get(soBenhAn)
+    const merged = await mpFetchJSON("/records/merge",
+      { existing_report: rec.report, ho_so_text: hoSoText, pages }, 300000)
+    if (!merged.success) return merged
+    return localStore.applyMerge(soBenhAn, merged, nguonTaiLieu)
   },
-  ekycFaceLiveness: async (fileFace) => {
-    const fd = new FormData()
-    fd.append("file", fileFace)
-    const res = await callApi("/ekyc/face-liveness", { method: "POST", body: fd })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data?.detail || "Không xác thực được khuôn mặt")
-    return data
-  },
-  summarizeConsultationAudio: async (audioFile) => {
-    const fd = new FormData()
-    fd.append("file", audioFile, audioFile.name || "meeting.wav")
-    const res = await callApi("/consultation/summarize-audio", { method: "POST", body: fd })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data?.detail || "Không tóm tắt được bản ghi âm")
-    return data
-  },
-  textToSpeech: async (text) => {
-    const res = await callApi("/voice/tts", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text })
-    })
-    const ct = res.headers.get("content-type") || ""
-    if (ct.includes("audio")) return { success: true, blob: await res.blob() }
-    return await res.json()  // {success:false, use_local_tts:true, ...}
-  },
-  speechToText: async (audioBlob, filename) => {
-    // Tên file PHẢI khớp định dạng THẬT của blob — backend đoán MIME type
-    // gửi VNPT dựa vào đuôi file (mimetypes.guess_type), không phải dựa
-    // vào audioBlob.type — filename sai đuôi sẽ khai báo sai định dạng.
-    const fd = new FormData(); fd.append("file", audioBlob, filename || "ghi_am.webm")
-    const res = await callApi("/voice/stt", { method:"POST", body: fd })
-    return await res.json()  // luôn 200, xem error_code nếu success=false
-  },
-  updatePatient: (soBenhAn, hoSoText, pages, nguonTaiLieu) =>
-    mpFetchJSON("/patient/update", { so_benh_an: soBenhAn, ho_so_text: hoSoText, pages, nguon_tai_lieu: nguonTaiLieu }, 300000),
   updatePatientFile: async (soBenhAn, file, nguonTaiLieu) => {
+    const rec = await localStore.get(soBenhAn)
     const fd = new FormData()
-    fd.append("so_benh_an", soBenhAn)
-    fd.append("nguon_tai_lieu", nguonTaiLieu || file.name || "")
+    fd.append("existing_report", JSON.stringify(rec.report))
     fd.append("file", file)
     const ctrl = new AbortController()
     const timer = setTimeout(()=>ctrl.abort(), 300000)
     try {
-      const res = await callApi("/patient/update_file", { method:"POST", body: fd, signal: ctrl.signal })
+      const res = await callApi("/records/merge-file", { method:"POST", body: fd, signal: ctrl.signal })
+      let data = null
+      try { data = await res.json() } catch {}
       if (!res.ok) {
-        let detail = ""
-        try { detail = (await res.json()).detail || "" } catch {}
-        const err = new Error(detail || ("API "+res.status))
+        const err = new Error(data?.detail || ("API "+res.status))
         err.status = res.status
         throw err
       }
-      return await res.json()
+      if (!data?.success) return data
+      return localStore.applyMerge(soBenhAn, data, nguonTaiLieu || file.name)
     } finally { clearTimeout(timer) }
   },
 }
@@ -1278,12 +1236,15 @@ function expandAbbr(text) {
   if (!text) return text
   let result = text
   // Hồ sơ HIS dùng "#" với nghĩa "khoảng/xấp xỉ". Đổi cho dễ đọc.
-  result = result.replace(/\s*#\s*/g, " khoảng ")
+  const en = getLang() === "en"
+  result = result.replace(/\s*#\s*/g, en ? " about " : " khoảng ")
   // Gọn khoảng trắng thừa
   result = result.replace(/\s{2,}/g, " ").trim()
   // Vá lỗi tách chữ tiếng Việt do AI sinh ra (vd "v ấn đề" -> "vấn đề"):
   // phụ âm đơn đứng tách giữa 2 dấu cách, ngay trước nguyên âm có dấu, không phải từ hợp lệ.
   result = result.replace(/(^|\s)([bcdghklmnpqrstvxBCDGHKLMNPQRSTVX]) (?=[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ])/g, "$1$2")
+  // Vietnamese abbreviation expansion only applies to Vietnamese text.
+  if (en) return result
   Object.entries(ABBR_MAP).forEach(([abbr, full]) => {
     let replaced = false
     result = result.replace(new RegExp(`(?<!\\()\\b${abbr}\\b(?! \\()(?![^(]*\\))`, "g"), m => {
@@ -1763,39 +1724,46 @@ function checkDrugSafety(meds, egfr, ctx) {
 // thật vẫn lấy risk_scores từ analysis — giữ đúng 1 nguồn sự thật khi có thể.
 // Nếu sửa ngưỡng/từ khóa ở clinical_rules.py, PHẢI soát lại bản JS này theo.
 const CRS_CV_KEYWORDS = {
-  suy_tim: ["suy tim","ef giam","phan suat tong mau giam","rlcn tam thu"],
-  tang_huyet_ap: ["tang huyet ap","tha","cao huyet ap"],
-  dtd: ["dai thao duong","dtd","hba1c"],
+  suy_tim: ["suy tim","ef giam","phan suat tong mau giam","rlcn tam thu","heart failure","reduced ef","hfref","lv dysfunction","systolic dysfunction"],
+  tang_huyet_ap: ["tang huyet ap","tha","cao huyet ap","hypertension","htn","high blood pressure"],
+  dtd: ["dai thao duong","dtd","hba1c","diabetes","t2dm","t1dm"],
   // LƯU Ý: đã bỏ "huyet khoi"/"thuyen tac" — quá rộng, thường khớp nhầm câu
   // CẢNH BÁO NGUY CƠ (vd "nguy cơ huyết khối van do INR thấp") không phải
   // biến cố tiền sử thật. Đồng bộ với clinical_rules.py CV_KEYWORDS.
-  dot_quy: ["dot quy","tai bien mach mau nao","nhoi mau nao","tia ","thieu mau nao cuc bo"],
+  dot_quy: ["dot quy","tai bien mach mau nao","nhoi mau nao","tia","thieu mau nao cuc bo","stroke","cerebrovascular accident","cva","transient ischemic attack"],
   // Bổ sung sau khi phát hiện bỏ sót thật với PATIENT_B ("Bệnh mạch vành đã
   // đặt 2 stent ĐMV" không khớp bộ cũ). Đồng bộ với clinical_rules.py.
-  benh_mach_mau: ["nhoi mau co tim","nmct","benh dong mach ngoai bien","hep dong mach canh","mang xo vua dmc","xo vua dong mach","benh mach mau","benh mach vanh","dat stent","stent dmv","stent mach vanh","can thiep mach vanh","dat gia do mach vanh","bac cau mach vanh","cabg","pci"],
+  benh_mach_mau: ["nhoi mau co tim","nmct","benh dong mach ngoai bien","hep dong mach canh","mang xo vua dmc","xo vua dong mach","benh mach mau","benh mach vanh","dat stent","stent dmv","stent mach vanh","can thiep mach vanh","dat gia do mach vanh","bac cau mach vanh","cabg","pci","myocardial infarction","peripheral artery disease","carotid stenosis","atherosclerosis","coronary artery disease","cad","coronary stent","coronary bypass"],
 }
 const CRS_HB_KEYWORDS = {
-  benh_gan: ["xo gan","viem gan","suy gan","benh gan man"],
+  benh_gan: ["xo gan","viem gan","suy gan","benh gan man","cirrhosis","hepatitis","liver failure","chronic liver disease"],
   // LƯU Ý: đã bỏ "chay mau" đơn lẻ — quá rộng, khớp nhầm câu cảnh báo nguy
   // cơ dự phòng. Đồng bộ với clinical_rules.py HB_KEYWORDS["tien_su_chay_mau"].
-  chay_mau: ["xuat huyet","tien su chay mau","loet da day xuat huyet"],
-  thuoc_chay_mau: ["nsaid","aspirin","khang ket tap tieu cau","ibuprofen","diclofenac"],
-  ruou: ["nghien ruou","uong ruou nhieu","lam dung ruou","ruou bia"],
+  chay_mau: ["xuat huyet","tien su chay mau","loet da day xuat huyet","hemorrhage","haemorrhage","history of bleeding","gi bleed","bleeding ulcer"],
+  thuoc_chay_mau: ["nsaid","aspirin","khang ket tap tieu cau","ibuprofen","diclofenac","antiplatelet","clopidogrel"],
+  ruou: ["nghien ruou","uong ruou nhieu","lam dung ruou","ruou bia","alcohol abuse","alcoholism","heavy drinking"],
 }
 // Cụm phủ định + cửa sổ ký tự — ĐỒNG BỘ với NEGATION_PHRASES/NEGATION_WINDOW_CHARS
 // trong clinical_rules.py. Sửa 1 nơi thì PHẢI sửa nơi kia theo.
-const CRS_NEGATION_PHRASES = ["khong ghi nhan","khong co","khong bi","chua tung","chua co","khong phat hien","phu nhan","loai tru"]
+const CRS_NEGATION_PHRASES = ["khong ghi nhan","khong co","khong bi","chua tung","chua co","khong phat hien","phu nhan","loai tru","khong phai","no history of","no known","denies","denied","negative for","without","ruled out","no evidence of","not "]
 const CRS_NEGATION_WINDOW = 35
+// Whole-word match only: plain substring search let "tha" (hypertension
+// abbreviation) match inside "thay van" (valve replacement) or English "that".
+const _crsKwCache = new Map()
+function crsKwRegex(kw){
+  if(!_crsKwCache.has(kw)){
+    const esc = kw.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    _crsKwCache.set(kw, new RegExp(`(?<![a-z0-9])${esc}(?![a-z0-9])`, "g"))
+  }
+  const re = _crsKwCache.get(kw); re.lastIndex = 0; return re
+}
 function crsHasAnyPositive(haystack, keywords) {
   for (const kw of keywords) {
-    let start = 0
-    while (true) {
-      const idx = haystack.indexOf(kw, start)
-      if (idx === -1) break
-      const windowStart = Math.max(0, idx - CRS_NEGATION_WINDOW)
-      const window = haystack.slice(windowStart, idx)
+    const re = crsKwRegex(kw)
+    let m
+    while ((m = re.exec(haystack)) !== null) {
+      const window = haystack.slice(Math.max(0, m.index - CRS_NEGATION_WINDOW), m.index)
       if (!CRS_NEGATION_PHRASES.some(neg => window.includes(neg))) return true
-      start = idx + kw.length
     }
   }
   return false
@@ -1815,13 +1783,22 @@ function crsIsMechanicalValve(report) {
   const txt = crsGatherText(report)
   const pt = crsStripAccents((report.phau_thuat || {}).phuong_phap || "")
   const combined = txt + " " + pt
-  return ["van co hoc","on-x","on x","st jude","thay van"].some(m => combined.includes(m))
+  return ["van co hoc","on-x","on x","st jude","thay van","mechanical valve","mechanical aortic","mechanical mitral"].some(m => combined.includes(m))
+}
+// Recorded sex -> "male" | "female" | null. Works for Vietnamese and English
+// labels; checks female first so "Female" is never read as "male".
+function parseSex(v){
+  const t = crsStripAccents(String(v||"")).trim().toLowerCase()
+  if(!t) return null
+  const w = new Set(t.replace(/[\/-]/g," ").split(/\s+/))
+  if(["nu","female","f","woman"].some(x=>w.has(x))) return "female"
+  if(["nam","male","m","man"].some(x=>w.has(x))) return "male"
+  return null
 }
 function computeCha2ds2VascClient(report) {
   const info = report.thong_tin_benh_nhan || {}
   const tuoi = info.tuoi
-  const gioiStripped = crsStripAccents(info.gioi_tinh || "")
-  const gioiTinhNu = !gioiStripped.includes("nam") && gioiStripped.includes("nu")
+  const gioiTinhNu = parseSex(info.gioi_tinh) === "female"
   const txt = crsGatherText(report)
   const items = []
   let total = 0
@@ -1902,7 +1879,7 @@ function computeHasBledClient(report, egfr, inrTrend) {
 function computeRiskScoresClient(report) {
   const labs = report.xet_nghiem_meta || report.xet_nghiem_key || []
   const creat = labs.find(l => l.key === "Creatinin")
-  const egfr = computeEGFR(creat?.rawVal, report.thong_tin_benh_nhan?.tuoi, /nam/i.test(report.thong_tin_benh_nhan?.gioi_tinh || ""))
+  const egfr = computeEGFR(creat?.rawVal, report.thong_tin_benh_nhan?.tuoi, parseSex(report.thong_tin_benh_nhan?.gioi_tinh) === "male")
   const inrLab = labs.find(l => (l.key || "").trim().toUpperCase() === "INR")
   const inrTrend = inrLab?.trend
   return {
@@ -1944,7 +1921,7 @@ function runPriorityScreens(report) {
 
   // Suy thận (KDIGO): eGFR
   const creat = labOf("Creatinin")?.rawVal
-  const egfr = computeEGFR(creat, report.thong_tin_benh_nhan?.tuoi, /nam/i.test(report.thong_tin_benh_nhan?.gioi_tinh))
+  const egfr = computeEGFR(creat, report.thong_tin_benh_nhan?.tuoi, parseSex(report.thong_tin_benh_nhan?.gioi_tinh) === "male")
   if (egfr != null) {
     if (egfr < 30) add("critical","Suy thận nặng", `eGFR ${egfr} mL/phút/1.73m2 (dưới 30)`, "KDIGO 2026")
     else if (egfr < 45) add("warning","Suy giảm chức năng thận", `eGFR ${egfr} mL/phút/1.73m2`, "KDIGO 2026")
@@ -2244,23 +2221,27 @@ function useSpeechToText(onTranscript) {
 function reportToText(r){
   if(!r) return ""
   const p = r.thong_tin_benh_nhan || {}
+  const en = getLang() === "en"
+  const H = en
+    ? { t:"CLINICAL REPORT - MedParcours AI", p:"Patient", age:"y/o", rec:"Record no.", adm:"Admitted", dis:"Discharged", dx:"PRIMARY DIAGNOSIS:", sum:"OVERALL SUMMARY:", tk:"KEY TAKEAWAYS:", ps:"PROBLEM STATUS:", pr:"PRIORITY ACTIONS:", med:"MEDICATIONS:", foot:"(Generated by MedParcours AI. Requires physician review before clinical use.)" }
+    : { t:H.t, p:"Bệnh nhân", age:"tuổi", rec:"Số bệnh án", adm:"Vào viện", dis:"Ra viện", dx:H.dx, sum:H.sum, tk:H.tk, ps:H.ps, pr:H.pr, med:H.med, foot:H.foot }
   const L = []
-  L.push("BÁO CÁO LÂM SÀNG - MedParcours AI")
-  L.push(`Bệnh nhân: ${p.ho_ten||""} | ${p.tuoi||"?"} tuổi | ${p.gioi_tinh||""}`)
-  if(p.so_benh_an) L.push(`Số bệnh án: ${p.so_benh_an}`)
-  if(p.ngay_vao_vien||p.ngay_ra_vien) L.push(`Vào viện: ${p.ngay_vao_vien||"-"} | Ra viện: ${p.ngay_ra_vien||"-"}`)
-  if(r.chan_doan_chinh){ L.push(""); L.push("CHẨN ĐOÁN CHÍNH:"); L.push(r.chan_doan_chinh) }
-  if(r.tom_tat_toan_canh){ L.push(""); L.push("TÓM TẮT TOÀN CẢNH:"); L.push(r.tom_tat_toan_canh) }
-  if(r.clinical_takeaway && r.clinical_takeaway.length){ L.push(""); L.push("KẾT LUẬN NHANH:"); r.clinical_takeaway.forEach(t=>L.push("- "+t.txt)) }
-  if(r.problem_status && r.problem_status.hien_tai && r.problem_status.hien_tai.length){ L.push(""); L.push("TRẠNG THÁI VẤN ĐỀ:"); r.problem_status.hien_tai.forEach(x=>L.push("- "+x.ten+": "+(x.mo_ta||""))) }
-  if(r.hanh_dong_uu_tien && r.hanh_dong_uu_tien.length){ L.push(""); L.push("HÀNH ĐỘNG ƯU TIÊN:"); r.hanh_dong_uu_tien.forEach((a,i)=>L.push((i+1)+". "+(a.viec||"")+(a.ly_do?" ("+a.ly_do+")":""))) }
-  if(r.thuoc_cuoi_ky && r.thuoc_cuoi_ky.length){ L.push(""); L.push("THUỐC:"); r.thuoc_cuoi_ky.forEach(m=>L.push("- "+(m.ten_thuoc||"")+(m.lieu?" "+m.lieu:"")+(m.cach_dung?", "+m.cach_dung:""))) }
-  L.push(""); L.push("(Tạo bởi MedParcours AI. Cần bác sĩ xem xét trước khi dùng cho mục đích lâm sàng.)")
+  L.push(H.t)
+  L.push(`${H.p}: ${p.ho_ten||""} | ${p.tuoi||"?"} ${H.age} | ${p.gioi_tinh||""}`)
+  if(p.so_benh_an) L.push(`${H.rec}: ${p.so_benh_an}`)
+  if(p.ngay_vao_vien||p.ngay_ra_vien) L.push(`${H.adm}: ${p.ngay_vao_vien||"-"} | ${H.dis}: ${p.ngay_ra_vien||"-"}`)
+  if(r.chan_doan_chinh){ L.push(""); L.push(H.dx); L.push(r.chan_doan_chinh) }
+  if(r.tom_tat_toan_canh){ L.push(""); L.push(H.sum); L.push(r.tom_tat_toan_canh) }
+  if(r.clinical_takeaway && r.clinical_takeaway.length){ L.push(""); L.push(H.tk); r.clinical_takeaway.forEach(t=>L.push("- "+t.txt)) }
+  if(r.problem_status && r.problem_status.hien_tai && r.problem_status.hien_tai.length){ L.push(""); L.push(H.ps); r.problem_status.hien_tai.forEach(x=>L.push("- "+x.ten+": "+(x.mo_ta||""))) }
+  if(r.hanh_dong_uu_tien && r.hanh_dong_uu_tien.length){ L.push(""); L.push(H.pr); r.hanh_dong_uu_tien.forEach((a,i)=>L.push((i+1)+". "+(a.viec||"")+(a.ly_do?" ("+a.ly_do+")":""))) }
+  if(r.thuoc_cuoi_ky && r.thuoc_cuoi_ky.length){ L.push(""); L.push(H.med); r.thuoc_cuoi_ky.forEach(m=>L.push("- "+(m.ten_thuoc||"")+(m.lieu?" "+m.lieu:"")+(m.cach_dung?", "+m.cach_dung:""))) }
+  L.push(""); L.push(H.foot)
   return L.join("\n")
 }
 function exportLabsCSV(r) {
   const labs = (r.xet_nghiem_meta || r.xet_nghiem_key || [])
-  const rows = [["Chi so","Mo ta","Don vi","Ngay","Gia tri","Binh thuong","Trang thai"]]
+  const rows = [getLang()==="en" ? ["Test","Description","Unit","Date","Value","Normal range","Status"] : ["Chi so","Mo ta","Don vi","Ngay","Gia tri","Binh thuong","Trang thai"]]
   labs.forEach(l => {
     if (!l) return
     const dates = l.trendDates || [], vals = l.trend || []
@@ -2277,7 +2258,7 @@ function exportLabsCSV(r) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     const name = (r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an) || "benh_an"
-    a.href = url; a.download = "xet_nghiem_" + name + ".csv"
+    a.href = url; a.download = (getLang()==="en" ? "labs_" : "xet_nghiem_") + name + ".csv"
     document.body.appendChild(a); a.click(); document.body.removeChild(a)
     setTimeout(() => URL.revokeObjectURL(url), 1500)
     mpToast("Đã xuất CSV xét nghiệm")
@@ -2285,43 +2266,60 @@ function exportLabsCSV(r) {
 }
 
 function triggerHandoff(r, docNote, bookmarks) {
+  const en = getLang() === "en"
+  const L = en ? {
+    phases:["","Pre-op","Post-op inpatient","Outpatient follow-up"], phase:"Phase", noAlert:"No alerts requiring immediate action.",
+    noMeds:"No maintenance medications.", maint:" (maintenance)", followUp:"Per follow-up orders.", bm:"Items bookmarked by the doctor",
+    note:"Doctor's notes", head:"MedParcours AI - One-page handoff", recNo:"Record no.", age:"y/o", adm:"Admitted", dis:"Discharged",
+    printed:"Printed", confirm:"Requires physician confirmation", dx:"Diagnosis & status", alerts:"Alerts to monitor",
+    meds:"Current medications", drug:"Drug", dose:"Dose", how:"How to take", todo:"To do at the next visit",
+    footer:"Generated by MedParcours AI. Requires physician review before clinical use.", title:"Handoff summary", locale:"en-US", lang:"en",
+  } : {
+    phases:["","Tiền phẫu","Hậu phẫu nội trú","Ngoại trú tái khám"], phase:"Giai đoạn", noAlert:"Không có cảnh báo cần xử trí ngay.",
+    noMeds:"Không có thuốc duy trì.", maint:" (duy trì)", followUp:"Theo y lệnh tái khám.", bm:"Mục bác sĩ đã đánh dấu",
+    note:"Ghi chú bác sĩ", head:"MedParcours AI - Tóm tắt bàn giao 1 trang", recNo:"Số bệnh án", age:"tuổi", adm:"Vào viện", dis:"Ra viện",
+    printed:"In ngày", confirm:"Cần bác sĩ xác nhận", dx:"Chẩn đoán & trạng thái", alerts:"Cảnh báo cần theo dõi",
+    meds:"Thuốc đang dùng", drug:"Thuốc", dose:"Liều", how:"Cách dùng", todo:"Việc cần làm ở lần tái khám",
+    footer:"Tạo tự động bởi MedParcours AI. Cần bác sĩ xem xét trước khi dùng lâm sàng.", title:"Tóm tắt bàn giao", locale:"vi-VN", lang:"vi",
+  }
   const p = r.thong_tin_benh_nhan || {}
   const esc = s => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
   let findings = []
   try { findings = (runPriorityScreens(r).findings||[]).filter(f=>f.muc!=="stable").sort((a,b)=>TIER_ORDER[a.muc]-TIER_ORDER[b.muc]) } catch {}
-  const PH = ["","Tiền phẫu","Hậu phẫu nội trú","Ngoại trú tái khám"]
+  const PH = L.phases
   let phaseLabel = ""
-  try { const pi = computePhaseInfo(r); phaseLabel = "Giai đoạn " + pi.currentPhase + (PH[pi.currentPhase] ? ": " + PH[pi.currentPhase] : "") } catch {}
+  try { const pi = computePhaseInfo(r); phaseLabel = L.phase + " " + pi.currentPhase + (PH[pi.currentPhase] ? ": " + PH[pi.currentPhase] : "") } catch {}
   const labs = r.xet_nghiem_meta || r.xet_nghiem_key || []
   const ef = labs.find(l => l && l.key === "EF")
   const meds = r.thuoc_cuoi_ky || []
   const prios = (r.hanh_dong_uu_tien||[]).slice().sort((a,b)=>(a.uu_tien||9)-(b.uu_tien||9))
   const alertRows = findings.length
     ? findings.map(f=>`<li><b>[${TIER_META[f.muc].label}]</b> ${esc(f.ten)} - ${esc(f.ly_do)}</li>`).join("")
-    : "<li>Khong co canh bao can xu tri ngay.</li>"
+    : `<li>${L.noAlert}</li>`
   const medRows = meds.length
-    ? meds.map(m=>`<tr><td><b>${esc(m.ten_thuoc)}</b></td><td>${esc(m.lieu||"")}</td><td>${esc(m.cach_dung||"")}${m.keo_dai?" (duy tri)":""}</td></tr>`).join("")
-    : `<tr><td colspan="3">Khong co thuoc duy tri.</td></tr>`
+    ? meds.map(m=>`<tr><td><b>${esc(m.ten_thuoc)}</b></td><td>${esc(m.lieu||"")}</td><td>${esc(m.cach_dung||"")}${m.keo_dai?L.maint:""}</td></tr>`).join("")
+    : `<tr><td colspan="3">${L.noMeds}</td></tr>`
   const prioRows = prios.length
     ? prios.map(a=>`<li>${esc(a.viec)}${a.ly_do?` <span style="color:#555">- ${esc(a.ly_do)}</span>`:""}</li>`).join("")
-    : "<li>Theo y lenh tai kham.</li>"
+    : `<li>${L.followUp}</li>`
   const bmBlk = (bookmarks && bookmarks.length)
-    ? `<h2>Muc bac si da danh dau</h2><ul>${bookmarks.map(b=>`<li>${esc(b.label)}${b.sub?" - "+esc(b.sub):""}</li>`).join("")}</ul>` : ""
+    ? `<h2>${L.bm}</h2><ul>${bookmarks.map(b=>`<li>${esc(b.label)}${b.sub?" - "+esc(b.sub):""}</li>`).join("")}</ul>` : ""
   const noteBlk = (docNote && docNote.trim())
-    ? `<h2>Ghi chu bac si</h2><div class="box" style="white-space:pre-wrap">${esc(docNote)}</div>` : ""
+    ? `<h2>${L.note}</h2><div class="box" style="white-space:pre-wrap">${esc(docNote)}</div>` : ""
   const win = window.open("", "_blank", "width=850,height=700")
-  win.document.write(`<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>Tom tat ban giao: ${esc(p.ho_ten)}</title>
+  win.document.write(`<!DOCTYPE html><html lang="${L.lang}"><head><meta charset="UTF-8"><title>${L.title}: ${esc(p.ho_ten)}</title>
 <style>body{font-family:'Times New Roman',serif;color:#000;font-size:11pt;line-height:1.5;background:#fff;margin:0}.page{padding:14mm 14mm;max-width:210mm;margin:0 auto}h1{font-size:14pt;text-transform:uppercase;margin:0 0 3pt}h2{font-size:10pt;font-weight:700;text-transform:uppercase;border-bottom:1.5px solid #000;padding-bottom:2pt;margin:11pt 0 5pt}.hdr{border-bottom:2.5px solid #000;padding-bottom:8pt;margin-bottom:6pt;display:flex;justify-content:space-between}.hdr-r{text-align:right;font-size:8.5pt;color:#444}.sub{font-size:9pt;color:#444;margin:1pt 0}.diag{font-size:11pt;font-weight:700;margin:4pt 0}ul{margin:4pt 0;padding-left:18pt}li{margin:2pt 0;font-size:10pt}table{width:100%;border-collapse:collapse;font-size:9.5pt;margin:4pt 0}th{background:#eee;font-weight:700;text-align:left;padding:3pt 6pt;border:1px solid #aaa;font-size:8.5pt;text-transform:uppercase}td{padding:3pt 6pt;border:1px solid #ccc;vertical-align:top}.box{border:1px solid #999;border-left:4px solid #000;padding:5pt 9pt;margin:4pt 0;font-size:9.5pt}.pill{display:inline-block;border:1px solid #555;border-radius:9pt;padding:1pt 8pt;font-size:9pt;margin-right:5pt}.footer{border-top:1px solid #999;margin-top:14pt;padding-top:5pt;font-size:8pt;color:#666;display:flex;justify-content:space-between}@media print{@page{size:A4;margin:14mm}}</style>
 </head><body><div class="page">
-<div class="hdr"><div><div style="font-size:8.5pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:3pt">MedParcours AI - Tom tat ban giao 1 trang</div><h1>${esc(p.ho_ten)}</h1><div class="sub">So benh an: ${esc(p.so_benh_an)} | ${esc(p.tuoi)} tuoi, ${esc(p.gioi_tinh)}</div><div class="sub">Vao vien: ${esc(p.ngay_vao_vien)} | Ra vien: ${esc(p.ngay_ra_vien)}</div></div><div class="hdr-r">In ngay: ${new Date().toLocaleDateString("vi-VN")}<br>MedParcours AI v1.2<br><span style="color:#c00;font-weight:700">Can bac si xac nhan</span></div></div>
-<h2>Chan doan & trang thai</h2><div class="diag">${esc(r.chan_doan_chinh)}</div><div><span class="pill">${esc(phaseLabel)}</span>${ef?`<span class="pill">EF ${esc(ef.val)}</span>`:""}</div>
-<h2>Canh bao can theo doi</h2><ul>${alertRows}</ul>
-<h2>Thuoc dang dung</h2><table><tr><th>Thuoc</th><th>Lieu</th><th>Cach dung</th></tr>${medRows}</table>
-<h2>Viec can lam o lan tai kham</h2><ul>${prioRows}</ul>
+<div class="hdr"><div><div style="font-size:8.5pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:3pt">${L.head}</div><h1>${esc(p.ho_ten)}</h1><div class="sub">${L.recNo}: ${esc(p.so_benh_an)} | ${esc(p.tuoi)} ${L.age}, ${esc(p.gioi_tinh)}</div><div class="sub">${L.adm}: ${esc(p.ngay_vao_vien)} | ${L.dis}: ${esc(p.ngay_ra_vien)}</div></div><div class="hdr-r">${L.printed}: ${new Date().toLocaleDateString(L.locale)}<br>MedParcours AI<br><span style="color:#c00;font-weight:700">${L.confirm}</span></div></div>
+<h2>${L.dx}</h2><div class="diag">${esc(r.chan_doan_chinh)}</div><div><span class="pill">${esc(phaseLabel)}</span>${ef?`<span class="pill">EF ${esc(ef.val)}</span>`:""}</div>
+<h2>${L.alerts}</h2><ul>${alertRows}</ul>
+<h2>${L.meds}</h2><table><tr><th>${L.drug}</th><th>${L.dose}</th><th>${L.how}</th></tr>${medRows}</table>
+<h2>${L.todo}</h2><ul>${prioRows}</ul>
 ${bmBlk}${noteBlk}
-<div class="footer"><span>Tao tu dong boi MedParcours AI v1.2. Can bac si xem xet truoc khi dung lam sang.</span><span>HackAIthon 2026</span></div>
+<div class="footer"><span>${L.footer}</span><span>MedParcours AI</span></div>
 </div><script>window.onload=function(){window.print()}<\/script></body></html>`)
   win.document.close()
+  translateDocument(win.document)  // alert labels from the rule engine
 }
 
 // ─── Bản tóm tắt cho bệnh nhân — KHÔNG thuật ngữ y khoa, KHÔNG số liệu kỹ
@@ -2329,26 +2327,47 @@ ${bmBlk}${noteBlk}
 // người nhà cần biết: chẩn đoán viết đơn giản, thuốc cần uống, lịch tái
 // khám, khi nào cần đi khám ngay. Tách hẳn khỏi bản dành cho bác sĩ.
 function triggerPatientSummary(r) {
+  const en = getLang() === "en"
+  const T = en ? {
+    lang:"en", title:"Patient summary", h1:"Your health summary", to:"For", age:"years old", date:"Prepared on",
+    now:"Your current condition", monitoring:"Your doctor is monitoring your condition.",
+    meds:"Medicines to take at home", name:"Medicine", dose:"Dose", how:"How to take", noMeds:"No home medicines.",
+    todo:"What to do next", followUp:"Keep your follow-up appointments.",
+    warnT:"When to get help right away",
+    warn:["Chest pain, fainting or a racing heartbeat","Shortness of breath or new swelling of the legs","High fever","Unusual bleeding or bruising, black stools, or blood in urine","Sudden weakness, numbness, trouble speaking or seeing"],
+    noteB:"Important:", note:"This summary is a memory aid and does NOT replace your doctor's instructions. If you have any of the symptoms above, go to the nearest medical facility immediately; do not wait for your next appointment.",
+    footer:"Generated by MedParcours AI. Supporting document, not an official prescription or order.", locale:"en-US",
+  } : {
+    lang:"vi", title:"Tóm tắt dành cho bệnh nhân", h1:"Tóm tắt tình trạng sức khỏe", to:"Kính gửi", age:"tuổi", date:"Ngày lập",
+    now:"Tình trạng hiện tại", monitoring:"Đang được bác sĩ theo dõi.",
+    meds:"Thuốc cần uống tại nhà", name:"Tên thuốc", dose:"Liều dùng", how:"Cách dùng", noMeds:"Chưa có đơn thuốc cần dùng tại nhà.",
+    todo:"Những việc cần làm", followUp:"Tuân theo đúng lịch hẹn tái khám của bác sĩ.",
+    warnT:"Khi nào cần đi khám ngay",
+    warn:["Đau ngực, ngất hoặc tim đập rất nhanh","Khó thở hoặc phù chân mới xuất hiện","Sốt cao","Chảy máu bất thường, bầm tím, đi ngoài phân đen hoặc tiểu ra máu","Đột ngột yếu, tê nửa người, nói khó hoặc nhìn mờ"],
+    noteB:"Lưu ý quan trọng:", note:"Đây chỉ là bản tóm tắt hỗ trợ ghi nhớ, KHÔNG thay thế lời dặn trực tiếp của bác sĩ. Nếu có các dấu hiệu trên, hãy đến cơ sở y tế gần nhất ngay lập tức, không chờ đến lịch tái khám.",
+    footer:"Tạo bởi MedParcours AI — tài liệu hỗ trợ, không phải đơn thuốc/chỉ định chính thức.", locale:"vi-VN",
+  }
   const p = r.thong_tin_benh_nhan || {}
   const esc = s => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
-  const meds = r.thuoc_cuoi_ky || []
+  const meds = (r.thuoc_cuoi_ky || []).filter(m => !m.ket_thuc)  // only medicines still being taken
   const medRows = meds.length
     ? meds.map(m=>`<tr><td><b>${esc(m.ten_thuoc)}</b></td><td>${esc(m.lieu||"")}</td><td>${esc(m.cach_dung||"")}</td></tr>`).join("")
-    : `<tr><td colspan="3">Chưa có đơn thuốc cần dùng tại nhà.</td></tr>`
-  const prios = (r.hanh_dong_uu_tien||[]).slice(0,4)
-  const prioRows = prios.length
-    ? prios.map(a=>`<li>${esc(a.viec)}</li>`).join("")
-    : "<li>Tuân theo đúng lịch hẹn tái khám của bác sĩ.</li>"
+    : `<tr><td colspan="3">${T.noMeds}</td></tr>`
+  const prios = (r.hanh_dong_uu_tien||[]).slice().sort((a,b)=>(a.uu_tien||9)-(b.uu_tien||9)).slice(0,4)
+  const prioRows = (prios.length ? prios.map(a=>`<li>${esc(a.viec)}</li>`) : []).concat([`<li>${T.followUp}</li>`]).join("")
+  const status = (r.clinical_takeaway||[]).filter(t=>t.loai==="good").map(t=>`<li>${esc(t.txt)}</li>`).join("")
   const win = window.open("", "_blank", "width=800,height=700")
-  win.document.write(`<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>Tóm tắt dành cho bệnh nhân: ${esc(p.ho_ten)}</title>
-<style>body{font-family:Arial,sans-serif;color:#1a1a1a;font-size:12pt;line-height:1.7;background:#fff;margin:0}.page{padding:16mm;max-width:210mm;margin:0 auto}h1{font-size:17pt;margin:0 0 4pt;color:#1D6FE8}h2{font-size:12pt;font-weight:700;color:#1D6FE8;margin:16pt 0 6pt;border-bottom:2px solid #DBEAFE;padding-bottom:3pt}.hdr{border-bottom:3px solid #1D6FE8;padding-bottom:10pt;margin-bottom:14pt}.sub{font-size:10pt;color:#555}table{width:100%;border-collapse:collapse;font-size:11pt;margin:6pt 0}th{background:#EFF6FF;font-weight:700;text-align:left;padding:6pt 8pt;border:1px solid #BFDBFE}td{padding:6pt 8pt;border:1px solid #DBEAFE}ul{margin:6pt 0;padding-left:20pt}li{margin:4pt 0}.note{background:#FFFBEB;border:1px solid #FDE68A;border-radius:8pt;padding:10pt 12pt;margin:12pt 0;font-size:10.5pt;color:#92400E}.footer{border-top:1px solid #ddd;margin-top:20pt;padding-top:8pt;font-size:9pt;color:#888;text-align:center}@media print{@page{size:A4;margin:16mm}}</style>
+  if (!win) { mpToast(en ? "Allow pop-ups to open the patient summary" : "Hãy cho phép cửa sổ bật lên để mở bản tóm tắt", "err"); return }
+  win.document.write(`<!DOCTYPE html><html lang="${T.lang}"><head><meta charset="UTF-8"><title>${T.title}: ${esc(p.ho_ten)}</title>
+<style>body{font-family:Arial,sans-serif;color:#1a1a1a;font-size:12pt;line-height:1.7;background:#fff;margin:0}.page{padding:16mm;max-width:210mm;margin:0 auto}h1{font-size:17pt;margin:0 0 4pt;color:#1D6FE8}h2{font-size:12pt;font-weight:700;color:#1D6FE8;margin:16pt 0 6pt;border-bottom:2px solid #DBEAFE;padding-bottom:3pt}.hdr{border-bottom:3px solid #1D6FE8;padding-bottom:10pt;margin-bottom:14pt}.sub{font-size:10pt;color:#555}table{width:100%;border-collapse:collapse;font-size:11pt;margin:6pt 0}th{background:#EFF6FF;font-weight:700;text-align:left;padding:6pt 8pt;border:1px solid #BFDBFE}td{padding:6pt 8pt;border:1px solid #DBEAFE}ul{margin:6pt 0;padding-left:20pt}li{margin:4pt 0}.warn{background:#FEF2F2;border:1px solid #FECACA;border-radius:8pt;padding:8pt 12pt;margin:8pt 0}.warn h2{color:#B91C1C;border:0;margin-top:0}.note{background:#FFFBEB;border:1px solid #FDE68A;border-radius:8pt;padding:10pt 12pt;margin:12pt 0;font-size:10.5pt;color:#92400E}.footer{border-top:1px solid #ddd;margin-top:20pt;padding-top:8pt;font-size:9pt;color:#888;text-align:center}@media print{@page{size:A4;margin:16mm}}</style>
 </head><body><div class="page">
-<div class="hdr"><h1>Tóm tắt tình trạng sức khỏe</h1><div class="sub">Kính gửi: <b>${esc(p.ho_ten)}</b> — ${esc(p.tuoi)} tuổi</div><div class="sub">Ngày lập: ${new Date().toLocaleDateString("vi-VN")}</div></div>
-<h2>Tình trạng hiện tại</h2><p>${esc(r.chan_doan_chinh || "Đang được bác sĩ theo dõi.")}</p>
-<h2>Thuốc cần uống tại nhà</h2><table><tr><th>Tên thuốc</th><th>Liều dùng</th><th>Cách dùng</th></tr>${medRows}</table>
-<h2>Những việc cần làm</h2><ul>${prioRows}</ul>
-<div class="note"><b>Lưu ý quan trọng:</b> Đây chỉ là bản tóm tắt hỗ trợ ghi nhớ, KHÔNG thay thế lời dặn trực tiếp của bác sĩ. Nếu có triệu chứng bất thường (đau ngực, khó thở, sốt cao, chảy máu bất thường...), hãy đến cơ sở y tế gần nhất ngay lập tức, không chờ đến lịch tái khám.</div>
-<div class="footer">Tạo bởi MedParcours AI — tài liệu hỗ trợ, không phải đơn thuốc/chỉ định chính thức.</div>
+<div class="hdr"><h1>${T.h1}</h1><div class="sub">${T.to}: <b>${esc(p.ho_ten)}</b>${p.tuoi?` · ${esc(p.tuoi)} ${T.age}`:""}</div><div class="sub">${T.date}: ${new Date().toLocaleDateString(T.locale)}</div></div>
+<h2>${T.now}</h2><p>${esc(r.chan_doan_chinh || T.monitoring)}</p>${status?`<ul>${status}</ul>`:""}
+<h2>${T.meds}</h2><table><tr><th>${T.name}</th><th>${T.dose}</th><th>${T.how}</th></tr>${medRows}</table>
+<h2>${T.todo}</h2><ul>${prioRows}</ul>
+<div class="warn"><h2>${T.warnT}</h2><ul>${T.warn.map(w=>`<li>${w}</li>`).join("")}</ul></div>
+<div class="note"><b>${T.noteB}</b> ${T.note}</div>
+<div class="footer">${T.footer}</div>
 </div><script>window.onload=function(){window.print()}<\/script></body></html>`)
   win.document.close()
 }
@@ -2452,9 +2471,10 @@ ${bodyHtml}
 <div style="display:flex;justify-content:space-between;margin-top:24pt"><div><div class="stamp">Xác nhận bác sĩ phụ trách</div></div><div><div class="stamp">Ký tên bác sĩ</div></div></div>
 ${bookmarks && bookmarks.length ? `<h2>Mục đánh dấu cần theo dõi</h2><ul>${bookmarks.map(b=>`<li>${(b.label||"").replace(/&/g,"&amp;").replace(/</g,"&lt;")}${b.sub?` - ${b.sub.replace(/&/g,"&amp;").replace(/</g,"&lt;")}`:""}</li>`).join("")}</ul>` : ""}
         ${docNote && docNote.trim() ? `<h2>Ghi chú của bác sĩ</h2><div class="alert"><div class="as" style="white-space:pre-wrap">${docNote.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</div></div>` : ""}
-<div class="footer"><span>Báo cáo tạo tự động bởi MedParcours AI v1.2. Cần bác sĩ xem xét trước khi dùng cho mục đích lâm sàng.</span><span>HackAIthon 2026</span></div>
+<div class="footer"><span>Báo cáo tạo tự động bởi MedParcours AI v1.2. Cần bác sĩ xem xét trước khi dùng cho mục đích lâm sàng.</span><span>MedParcours AI</span></div>
 </div><script>window.onload=function(){window.print()}<\/script></body></html>`)
   win.document.close()
+  translateDocument(win.document)
 }
 
 // ─── SHARED COMPONENTS ────────────────────────────────────────────────────────
@@ -3046,39 +3066,8 @@ async function countPdfPages(file) {
   } catch { return null }
 }
 
-// ─── LOGO ĐỐI TÁC / ĐƠN VỊ ─────────────────────────────────────────────────────
-// Đặt file ảnh vào thư mục logos/ Ở GỐC REPO (KHÔNG phải public/logos/ —
-// đó là quy ước cũ của Vite, không áp dụng cho cấu trúc hiện tại) với đúng
-// tên bên dưới. GitHub Actions (.github/workflows/deploy-pages.yml) và
-// Dockerfile.frontend đều có bước copy logos/ vào bản deploy — nếu thiếu
-// logo, kiểm tra file ảnh có đúng tên VÀ đúng ở logos/ (gốc) chưa.
-const PARTNER_GROUPS = [
-  { label:"Cuộc thi",            logos:[{ file:"hackaithon.png", alt:"HackAIthon 2026" }] },
-  { label:"Đơn vị tổ chức",      logos:[{ file:"hoi-sinh-vien.png", alt:"Hội Sinh viên Việt Nam" }, { file:"vietcombank.png", alt:"Vietcombank" }] },
-  { label:"Bảo trợ chuyên môn",  logos:[{ file:"vnpt_ai.png", alt:"VNPT AI" }] },
-  { label:"Đơn vị thực hiện",    logos:[{ file:"vsds.png", alt:"VSDS" }] },
-]
-function LogoBar({ compact }) {
-  return (
-    <div className={`logo-bar${compact?" compact":""}`}>
-      {PARTNER_GROUPS.map((g,i)=>(
-        <div key={i} className="logo-group">
-          <div className="logo-group-lbl">{g.label}</div>
-          <div className="logo-group-imgs">
-            {g.logos.map((l,j)=>(
-              <div key={j} className="logo-slot" title={l.alt}>
-                <img src={asset("logos/"+l.file)} alt={l.alt} className="partner-logo" onError={e=>{e.currentTarget.classList.add("hide")}}/>
-                <span className="logo-ph">{l.alt}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
 
-function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, onRetry, onOpenHistory, onLogout, recentPatients, onOpenRecent }) {
+function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, onRetry, onOpenHistory, recentPatients, onOpenRecent }) {
   // "Cần chú ý hôm nay" — dùng cap_nhat_luc (ngày CẬP NHẬT gần nhất) làm
   // proxy cho "lâu chưa xem lại", KHÔNG phải "ngày hẹn tái khám tiếp theo"
   // (dữ liệu hiện không có trường lịch hẹn tương lai riêng — không bịa ra).
@@ -3151,12 +3140,11 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
         </div>
         <div className="top-nav-actions">
           <ThemeToggle/>
-          <button className="up-logout" onClick={async()=>{ if(await mpConfirm({title:"Đăng xuất?",message:"Bạn sẽ quay lại màn hình đăng nhập.",okText:"Đăng xuất",danger:true})) onLogout() }} title="Đăng xuất tài khoản"><Icon.Close d={12} color="#64748B"/>Đăng xuất</button>
         </div>
       </nav>
       <div className="hero-wrap">
         <div>
-          <div className="hero-tag"><Icon.Heart d={12} color="#1D6FE8" /><div className="hero-tag-lines"><span><b>Team UN1SVENGERS</b></span><span>Vietnamese Student HackAIthon 2026 · Bảng B Challenger</span><span>Đề tài 5: Y tế</span></div></div>
+          <div className="hero-tag"><Icon.Heart d={12} color="#1D6FE8" /><div className="hero-tag-lines"><span><b>MedParcours AI</b></span><span>Clinical decision support</span></div></div>
           <h1 className="hero-h1">Hồ sơ bệnh nhân<br /><em>phân tích trong 90 giây.</em></h1>
           <p className="hero-desc">Bác sĩ upload PDF xuất từ HIS. AI đọc toàn bộ hồ sơ, tổng hợp báo cáo có cấu trúc, phát hiện cảnh báo nguy cơ và sẵn sàng trả lời mọi câu hỏi lâm sàng.</p>
           <div className="feat-list">
@@ -3336,7 +3324,6 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
           )}
         </div>
       </div>
-      <LogoBar/>
     </div>
   )
 }
@@ -3424,225 +3411,7 @@ function SidebarMinimap({ activeId, onNavigate }) {
 }
 
 // ─── REPORT PAGE ──────────────────────────────────────────────────────────────
-// ─── Mô phỏng tra cứu liên thông CCCD (Đề án 06) — TÍNH NĂNG DỰ KIẾN ──────
-// CỐ Ý gắn nhãn "Mô phỏng" rõ ràng — đây KHÔNG phải tích hợp thật với CSDL
-// quốc gia (chưa có quyền truy cập/API thật), chỉ minh họa luồng UX dự
-// kiến. Không hiện kết quả "thành công" mà không kèm nhãn, tránh gây hiểu
-// nhầm đây là chức năng đã hoạt động thật khi demo/chấm điểm.
-function CccdLookupModal({ onClose }) {
-  const [step, setStep] = useState("idle") // idle | ocr_loading | ocr_done | loading | success | error
-  const [file, setFile] = useState(null)
-  const [cccdNumber, setCccdNumber] = useState("")
-  const [ocrData, setOcrData] = useState(null)
-  const [cardWarning, setCardWarning] = useState(null)
-  const [errMsg, setErrMsg] = useState("")
-  const fileInputRef = useRef()
-
-  const pickFile = (f) => {
-    if (!f) return
-    setFile(f)
-    setStep("ocr_loading")
-    mpApi.ekycOcrCccd(f)
-      .then(res => { setOcrData(res.data); setCardWarning(res.card_warning || null); setStep("ocr_done") })
-      .catch(err => {
-        // Demo fallback: nếu VNPT eKYC OCR lỗi kỹ thuật, tự chuyển sang bước
-        // tra cứu mô phỏng để không kẹt demo. Khi API ổn định, có thể đổi lại
-        // thành setStep("error") để bắt buộc quét thật.
-        console.warn(`[eKYC OCR lỗi — tự chuyển sang demo] ${err.message}`)
-        runLookup()
-      })
-  }
-
-  const runLookup = () => {
-    setStep("loading")
-    // Bước "tra cứu liên thông CSDL Quốc gia" là MÔ PHỎNG — không có quyền
-    // truy cập CSDL đó thật, dù đi từ đường NHẬP SỐ hay QUÉT ẢNH. Bước OCR
-    // (đường quét ảnh) vẫn là kết quả THẬT từ ảnh vừa tải lên, không bịa —
-    // chỉ riêng bước "tìm thấy hồ sơ liên thông" sau đó là mô phỏng.
-    setTimeout(() => setStep("success"), 1500)
-  }
-
-  const openRecord = (id) => {
-    window.dispatchEvent(new CustomEvent("mp-load-demo-patient", { detail: { id } }))
-    onClose()
-  }
-
-  return (
-    <div className="cfm-ov" onClick={onClose}>
-      <div className="cfm sim-modal" onClick={e=>e.stopPropagation()}>
-        <div className="cfm-t"><Icon.Note d={16}/>Tra cứu liên thông CCCD qua VNPT eKYC</div>
-        {step === "idle" && (
-          <>
-            <p className="sim-desc">Nhập số CCCD, hoặc tải ảnh thẻ lên để tự động trích xuất thông tin (VNPT eKYC OCR).</p>
-            <label className="sim-field-lbl">1. Nhập số CCCD</label>
-            <input className="sim-input" value={cccdNumber} onChange={e=>setCccdNumber(e.target.value.replace(/\D/g,""))}
-              placeholder="Nhập 12 số CCCD..." maxLength={12} inputMode="numeric"/>
-            <button className="btn-primary" style={{width:"100%",justifyContent:"center",marginTop:8}}
-              disabled={cccdNumber.length !== 12} onClick={runLookup}>Truy xuất theo số CCCD</button>
-            <div className="sim-or-divider">hoặc</div>
-            <label className="sim-field-lbl">2. Quét ảnh CCCD</label>
-            <input type="file" accept="image/*" ref={fileInputRef} style={{display:"none"}} onChange={e=>pickFile(e.target.files[0])}/>
-            <button className="sim-upload-btn" onClick={()=>fileInputRef.current.click()}><Icon.Upload d={14} color="#1D6FE8"/>Tải ảnh CCCD (VNPT eKYC OCR)</button>
-            <div className="cfm-actions"><button className="btn-secondary-sm" onClick={onClose}>Hủy</button></div>
-          </>
-        )}
-        {step === "ocr_loading" && (
-          <div className="sim-loading"><span className="chat-mic-spin" style={{width:22,height:22,borderWidth:3}}/>Đang gọi VNPT eKYC OCR trích xuất CCCD...</div>
-        )}
-        {step === "error" && (
-          <div className="sim-loading" style={{color:"#DC2626"}}>{errMsg}
-            <div className="cfm-actions"><button className="btn-primary" onClick={()=>setStep("idle")}>Thử lại</button></div>
-          </div>
-        )}
-        {step === "ocr_done" && ocrData && (
-          <>
-            {cardWarning && (
-              <div className="sim-card-warning"><Icon.Alert d={13} color="#B45309"/>Lưu ý: {cardWarning} — vẫn tiếp tục vì đây có thể là báo động giả, bác sĩ tự kiểm tra lại bằng mắt.</div>
-            )}
-            <div className="sim-ocr-result">
-              {ocrData.name && <div><b>Họ tên:</b> {ocrData.name}</div>}
-              {ocrData.id && <div><b>Số CCCD:</b> {ocrData.id}</div>}
-              {ocrData.birth_day && <div><b>Ngày sinh:</b> {ocrData.birth_day}</div>}
-            </div>
-            <div className="cfm-actions">
-              <button className="btn-secondary-sm" onClick={onClose}>Hủy</button>
-              <button className="btn-primary" onClick={runLookup}>Truy xuất liên thông</button>
-            </div>
-          </>
-        )}
-        {step === "loading" && (
-          <div className="sim-loading"><span className="chat-mic-spin" style={{width:22,height:22,borderWidth:3}}/>Kết nối CSDL Quốc gia...</div>
-        )}
-        {step === "success" && (
-          <div className="sim-success">
-            <Icon.ShieldCheck d={28} color="#059669"/>
-            <div>Truy xuất thành công. Đã đồng bộ hồ sơ cũ của bệnh nhân — đang mở hồ sơ <b>NGUYỄN VĂN A</b>, số bệnh án <b>25.019647</b>.</div>
-            <div className="sim-record-list">
-              <button className="sim-record-btn" onClick={()=>openRecord("BN-A")}>
-                <Icon.FileText d={14} color="#1D6FE8"/>Truy cập hồ sơ — NGUYỄN VĂN A (BA 25.019647)
-              </button>
-              <button className="sim-record-btn" onClick={()=>openRecord("BN-B")}>
-                <Icon.FileText d={14} color="#1D6FE8"/>Truy cập hồ sơ — NGUYỄN VĂN B (BA 26.007850)
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ─── Mô phỏng chữ ký sinh trắc học bác sĩ (VNPT eKYC) — TÍNH NĂNG DỰ KIẾN ──
-// CỐ Ý gắn nhãn "Mô phỏng" — KHÔNG phải xác thực sinh trắc học thật. Đây là
-// chức năng liên quan trực tiếp tới TÍNH XÁC THỰC của hồ sơ xuất ra — hiện
-// số liệu "thành công" cụ thể (vd tỉ lệ liveness) mà không gắn nhãn rõ có
-// thể khiến người xem hiểu nhầm đây là cơ chế bảo mật thật đang bảo vệ báo
-// cáo xuất ra, trong khi thực tế bấm "Hủy" vẫn xuất được bình thường qua
-// đường khác — không nên tạo cảm giác an toàn giả.
-function BiometricSignatureModal({ onClose, onComplete }) {
-  const [step, setStep] = useState("idle") // idle | camera_on | scanning | success | error
-  const [result, setResult] = useState(null)
-  const [errMsg, setErrMsg] = useState("")
-  const videoRef = useRef()
-  const canvasRef = useRef()
-  const streamRef = useRef(null)
-
-  const stopCamera = () => {
-    try { streamRef.current?.getTracks().forEach(t => t.stop()) } catch {}
-    streamRef.current = null
-  }
-  useEffect(() => stopCamera, []) // luôn tắt camera khi đóng modal — không để camera chạy ngầm
-
-  const openCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
-      streamRef.current = stream
-      setStep("camera_on")
-      // video element chỉ render SAU khi step đổi -> gán srcObject ở lần
-      // render kế tiếp qua useEffect thay vì ngay tại đây (ref chưa mount).
-    } catch {
-      setErrMsg("Không truy cập được camera. Hãy cho phép quyền camera cho trang web rồi thử lại.")
-      setStep("error")
-    }
-  }
-  useEffect(() => {
-    if (step === "camera_on" && videoRef.current && streamRef.current) {
-      videoRef.current.srcObject = streamRef.current
-    }
-  }, [step])
-
-  const captureAndVerify = () => {
-    const video = videoRef.current, canvas = canvasRef.current
-    if (!video || !canvas) return
-    canvas.width = video.videoWidth || 480
-    canvas.height = video.videoHeight || 360
-    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height)
-    stopCamera()
-    setStep("scanning")
-    canvas.toBlob(blob => {
-      if (!blob) { setErrMsg("Không chụp được ảnh từ camera."); setStep("error"); return }
-      const file = new File([blob], "face_capture.jpg", { type: "image/jpeg" })
-      mpApi.ekycFaceLiveness(file)
-        .then(res => {
-          if (!res.is_real) {
-            setErrMsg(res.liveness_msg || "Không xác định được người thật — thử lại, nhìn thẳng camera và đủ sáng.")
-            setStep("error")
-            return
-          }
-          setResult(res)
-          setStep("success")
-        })
-        .catch(err => { setErrMsg(err.message || "Không xác thực được khuôn mặt"); setStep("error") })
-    }, "image/jpeg", 0.9)
-  }
-
-  return (
-    <div className="cfm-ov" onClick={onClose}>
-      <div className="cfm sim-modal" onClick={e=>e.stopPropagation()}>
-        <div className="cfm-t"><Icon.ShieldCheck d={16}/>Ký duyệt bằng sinh trắc học (VNPT eKYC)</div>
-        <p className="sim-desc">Yêu cầu xác thực Bác sĩ điều trị trước khi ra y lệnh &amp; xuất hồ sơ.</p>
-        <div className={`sim-camera-box${step==="scanning"?" scanning":""}`}>
-          {step === "camera_on" ? (
-            <video ref={videoRef} autoPlay playsInline muted className="sim-camera-video"/>
-          ) : (
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke={step==="success"?"#059669":"#94A3B8"} strokeWidth="1.6"><rect x="2" y="7" width="15" height="10" rx="2"/><path d="M17 10l5-3v10l-5-3"/></svg>
-          )}
-          {step === "scanning" && <div className="sim-scan-line"/>}
-        </div>
-        <canvas ref={canvasRef} style={{display:"none"}}/>
-        {step === "idle" && (
-          <div className="cfm-actions">
-            <button className="btn-secondary-sm" onClick={onClose}>Hủy</button>
-            <button className="btn-primary" onClick={openCamera}>Bắt đầu quét khuôn mặt</button>
-          </div>
-        )}
-        {step === "camera_on" && (
-          <div className="cfm-actions">
-            <button className="btn-secondary-sm" onClick={()=>{stopCamera();onClose()}}>Hủy</button>
-            <button className="btn-primary" onClick={captureAndVerify}>Chụp &amp; Xác thực</button>
-          </div>
-        )}
-        {step === "scanning" && (
-          <div className="sim-loading"><span className="chat-mic-spin" style={{width:22,height:22,borderWidth:3}}/>Đang gọi VNPT eKYC Liveness API...</div>
-        )}
-        {step === "error" && (
-          <div className="sim-loading" style={{color:"#DC2626"}}>{errMsg}
-            <div className="cfm-actions"><button className="btn-primary" onClick={()=>setStep("idle")}>Thử lại</button></div>
-          </div>
-        )}
-        {step === "success" && (
-          <div className="sim-success">
-            <Icon.ShieldCheck d={28} color="#059669"/>
-            <div>Xác thực thành công{result?.demo_fallback ? "" : `. ${result?.liveness_msg}`}. Chữ ký điện tử: <b>BS. Nguyễn Văn X</b>.</div>
-            <button className="btn-primary" onClick={onComplete}>Hoàn tất tải báo cáo</button>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chatMessages, setChatMessages, onOpenHistory, onLogout }) {
+function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chatMessages, setChatMessages, onOpenHistory }) {
   const [tab, setTab] = useState("report")
   useEffect(() => {
     const h = () => setTab("chat")
@@ -3660,8 +3429,6 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
   }, [tab])
   const [viewMode, setViewMode] = useState("clinical")
   const [menuOpen, setMenuOpen] = useState(false)
-  const [cccdModalOpen, setCccdModalOpen] = useState(false)
-  const [ekycModalOpen, setEkycModalOpen] = useState(false)
   const noteKey = "mp_note_" + ((report && report.thong_tin_benh_nhan && report.thong_tin_benh_nhan.so_benh_an) || "x")
   const [docNote, setDocNote] = useState("")
   useEffect(() => { try { setDocNote(sessionStorage.getItem(noteKey) || "") } catch {} }, [noteKey])
@@ -3692,31 +3459,20 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
         if (cancelled) return
         if (err.status === 404) setSavedStatus("chua_luu")
         else {
-          // Turso có thể chưa sẵn sàng, nhưng backend đã có Supabase fallback khi bấm Lưu.
-          // Không khóa nút lưu bằng trạng thái "Lỗi kết nối" nữa.
           setSavedStatus("chua_luu")
-          setSavedMeta({ storage_warning: err.message || "Turso chưa sẵn sàng" })
+          setSavedMeta({ storage_warning: err.message || "Bộ nhớ trình duyệt không khả dụng" })
         }
       })
     return () => { cancelled = true }
   }, [pkey])
   const handleSavePatient = async () => {
     try {
-      const saved = await mpApi.savePatient(report)
+      const saved = await mpApi.savePatient(report, analysis)
       setSavedStatus("da_luu")
-      setSavedMeta({
-        so_lan_cap_nhat: saved?.so_lan_cap_nhat || 1,
-        cap_nhat_luc: saved?.cap_nhat_luc || new Date().toISOString(),
-        storage: saved?.storage || "turso",
-        phan_tich_id: saved?.phan_tich_id,
-      })
-      if (saved?.storage === "supabase_fallback") {
-        mpToast("Turso chưa sẵn sàng nên đã lưu tạm vào Supabase history")
-      } else {
-        mpToast("Đã lưu hồ sơ vào Turso — có thể cập nhật thêm tài liệu cho lần khám sau")
-      }
+      setSavedMeta({ so_lan_cap_nhat: saved.so_lan_cap_nhat, cap_nhat_luc: saved.cap_nhat_luc, storage: "browser" })
+      mpToast("Đã lưu hồ sơ trên trình duyệt này — có thể cập nhật thêm tài liệu cho lần khám sau")
     } catch (err) {
-      mpToast(err.message || "Không lưu được hồ sơ — kiểm tra kết nối", "err")
+      mpToast(err.message || "Không lưu được hồ sơ", "err")
     }
   }
   const [bmList, setBmList] = useState([])
@@ -3834,12 +3590,6 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg>
                 <span className="nav-btn-txt">Lịch sử bệnh án</span>
               </button>
-              <IconTip text="Mô phỏng tra cứu liên thông CCCD (Đề án 06) — tính năng dự kiến" position="top">
-                <button className="nav-hist-btn" onClick={()=>setCccdModalOpen(true)} aria-label="Tra cứu liên thông CCCD">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="12" r="2"/><line x1="14" y1="10" x2="19" y2="10"/><line x1="14" y1="14" x2="18" y2="14"/></svg>
-                  <span className="nav-btn-txt">Tra cứu CCCD</span>
-                </button>
-              </IconTip>
               {(!pkey || pkey === "x") ? (
                 <button className="nav-save-btn err" disabled title="Hồ sơ này chưa có số bệnh án (AI không trích được từ tài liệu) — không thể lưu lâu dài. Bổ sung số bệnh án trong hồ sơ gốc rồi phân tích lại." aria-label="Thiếu số bệnh án, không lưu được">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><line x1="12" y1="11" x2="12" y2="14"/><circle cx="12" cy="17" r="0.5" fill="currentColor"/></svg>
@@ -3859,7 +3609,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
                   </button>
                 )}
                 {savedStatus === "loi_ket_noi" && (
-                  <button className="nav-save-btn primary" onClick={handleSavePatient} title="Turso có thể chưa sẵn sàng; hệ thống sẽ thử lưu Turso trước, rồi fallback Supabase nếu cần." aria-label="Lưu hồ sơ dự phòng">
+                  <button className="nav-save-btn primary" onClick={handleSavePatient} title="Lưu hồ sơ trên trình duyệt này (không gửi lên máy chủ)" aria-label="Lưu hồ sơ">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                     <span className="nav-btn-txt">Lưu dự phòng</span>
                   </button>
@@ -3881,9 +3631,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
                 <svg width="15" height="15" viewBox="0 0 24 24" fill={bmList.length>0?"currentColor":"none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
                 {bmList.length>0 && <span className="nav-bm-badge">{bmList.length}</span>}
               </button>
-              <IconTip text="Mô phỏng ký duyệt sinh trắc học trước khi xuất (VNPT eKYC) — tính năng dự kiến" position="top">
-                <button className="nav-export" onClick={()=>setEkycModalOpen(true)} aria-label="Ký duyệt & xuất báo cáo"><Icon.Print d={14} color="#fff"/><span className="nav-export-txt">Ký duyệt &amp; Xuất báo cáo</span></button>
-              </IconTip>
+              <button className="nav-export" onClick={()=>triggerPrint(report, viewMode, docNote, bmList, analysis)} aria-label="Ký duyệt & xuất báo cáo"><Icon.Print d={14} color="#fff"/><span className="nav-export-txt">Ký duyệt &amp; Xuất báo cáo</span></button>
               <div className="nav-menu-wrap">
                 <button className="nav-burger" onClick={()=>setMenuOpen(o=>!o)} title="Menu" aria-label="Menu">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -3916,7 +3664,6 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
                   </div>
                   <div className="nav-menu-sec">Hồ sơ</div>
                   <button onClick={async()=>{setMenuOpen(false); if(await mpConfirm({title:"Phân tích hồ sơ mới?",message:"Báo cáo đang xem sẽ được đóng lại. Bạn có thể mở lại trong Lịch sử bệnh án.",okText:"Tiếp tục"})) onReset()}}><Icon.Back d={13} color="#475569"/>Hồ sơ mới</button>
-                  <button className="danger" onClick={async()=>{setMenuOpen(false); if(await mpConfirm({title:"Đăng xuất khỏi MedParcours AI?",message:"Bạn sẽ quay lại màn hình đăng nhập.",okText:"Đăng xuất",danger:true})) onLogout()}}><Icon.Close d={13} color="#DC2626"/>Đăng xuất</button>
                 </div>
               </>}
             </div>
@@ -3988,9 +3735,6 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
             onReportUpdated && onReportUpdated(result.report, result.analysis)
           }}/>
       )}
-      {cccdModalOpen && <CccdLookupModal onClose={()=>setCccdModalOpen(false)}/>}
-      {ekycModalOpen && <BiometricSignatureModal onClose={()=>setEkycModalOpen(false)}
-        onComplete={()=>{ setEkycModalOpen(false); triggerPrint(report, viewMode, docNote, bmList, analysis) }}/>}
       {focusMode && (
         <div className="focus-mode-bar">
           <Icon.Note d={14} color="#fff"/>
@@ -4108,7 +3852,7 @@ function SummaryCard({ text }) {
   // xuất hiện tình cờ giữa câu văn AI viết (vd "...phù hợp giai đoạn ngay
   // sau mổ tim.") làm marker giả, nuốt luôn đoạn text từ đó tới dấu ":" kế
   // tiếp — khiến tiêu đề Giai đoạn 3 hiển thị lẫn cả câu cuối của Giai đoạn 2.
-  const re = /GIAI ĐO[AẠ]N (TRƯỚC MỔ|SAU MỔ[^:]*|NGOẠI TRÚ[^:]*|HỒI PHỤC[^:]*):/g
+  const re = /(?:GIAI ĐO[AẠ]N (?:TRƯỚC MỔ|SAU MỔ[^:]*|NGOẠI TRÚ[^:]*|HỒI PHỤC[^:]*)|(?:PRE-OP|POST-OP[^:]*|OUTPATIENT[^:]*|RECOVERY[^:]*) PHASE):/g
   const markers = [...safe.matchAll(re)]
   let blocks = []
   if (markers.length) {
@@ -4874,9 +4618,8 @@ function ClinicalTakeaway({ items, pkey }) {
 // Trạng thái tick vẫn lưu sessionStorage theo bệnh nhân (pkey), giữ đúng hành vi
 // cũ của FollowupChecklist.
 // ─── Loa (TTS) — dùng chung cho Ưu tiên xử lý ─────────────────────────────
-// Gọi /voice/tts; nếu backend trả use_local_tts:true (VNPT chưa sẵn sàng)
+// Text-to-speech uses the browser Web Speech API.
 // HOẶC lỗi mạng bất kỳ, tự động dùng Web Speech API của trình duyệt để đảm
-// bảo tính năng đọc to LUÔN hoạt động, không phụ thuộc hoàn toàn vào VNPT.
 // ─── Góp ý / báo sai (khép vòng phản hồi) ───────────────────────────────────
 // Icon nhỏ cạnh 1 nhận định AI — bác sĩ đánh dấu "sai/chưa chuẩn" kèm ghi
 // chú ngắn. CHỈ ghi nhận vào bảng feedback, KHÔNG tự động sửa gì — cần
@@ -6181,7 +5924,7 @@ function ReportTab({ report: r, analysis }) {
     findings = s.findings; egfr = s.egfr
     safety = checkDrugSafety(r.thuoc_cuoi_ky || [], egfr, s.ctx)
     const creatLab = (r.xet_nghiem_key||r.xet_nghiem_meta||[]).find(l => /creatinin/i.test(l.key))
-    egfrDetail = buildEgfrDetail(creatLab?.rawVal, r.thong_tin_benh_nhan?.tuoi, /nam/i.test(r.thong_tin_benh_nhan?.gioi_tinh||""))
+    egfrDetail = buildEgfrDetail(creatLab?.rawVal, r.thong_tin_benh_nhan?.tuoi, parseSex(r.thong_tin_benh_nhan?.gioi_tinh) === "male")
     // Demo offline (không backend): tính risk_scores bằng bản JS port để
     // RiskScoresCard vẫn hiện được — xem ghi chú đầy đủ tại computeRiskScoresClient().
     // ttr/careGaps KHÔNG port sang JS (cần parse ngày dd/mm/yyyy + so sánh với
@@ -6364,7 +6107,6 @@ function ReportTab({ report: r, analysis }) {
 
       {/* Tóm tắt toàn cảnh */}
       <SummaryCard text={r.tom_tat_toan_canh}/>
-      <LogoBar compact/>
     </div>
   )
 }
@@ -6429,13 +6171,7 @@ function DoctorNote({ value, onChange }){
 }
 // ─── Micro (STT) cho ô chat MedAmi — dùng MediaRecorder gốc trình duyệt ────
 // Khác AudioRecorder (Web Speech API, dùng cho ghi chú/widget note) — nút
-// này thu âm thành file gửi lên /voice/stt (VNPT SmartVoice, có fallback).
-// Tài liệu VNPT khuyến nghị "Wav, PCM 16bit, Mono Channel" cho STT/tóm tắt,
-// nhưng MediaRecorder trình duyệt mặc định chỉ ghi ra webm (không hỗ trợ
-// ghi trực tiếp .wav qua API chuẩn). Chọn định dạng GẦN NHẤT trình duyệt
-// hỗ trợ được (ưu tiên wav nếu có, hiếm — thường chỉ Safari 1 phần) thay
-// vì luôn ép webm mặc định — tăng khả năng VNPT chấp nhận, KHÔNG đảm bảo
-// 100% (đã có fallback an toàn ở cả 2 nơi dùng nếu VNPT từ chối định dạng).
+// Speech-to-text runs in the browser (Web Speech API).
 function pickBestAudioMime() {
   const candidates = ["audio/wav", "audio/wave", "audio/mp4", "audio/webm;codecs=opus", "audio/webm"]
   for (const m of candidates) {
@@ -6476,12 +6212,10 @@ function ChatMicButton({ getCurrentInput, onTextChange }) {
         try {
           const res = await mpApi.speechToText(blob, `ghi_am.${ext}`)
           if (res.success && res.text) {
-            // Kết quả VNPT chính xác hơn nhiều so với ước lượng thời gian
-            // thực của trình duyệt — GHI ĐÈ phần vừa nói bằng bản này.
             const base = baseTextRef.current
             onTextChange(base ? `${base} ${res.text}` : res.text)
           }
-          // Nếu VNPT lỗi: KHÔNG báo lỗi ồn ào nữa — ô input đã có sẵn text
+          // Server STT disabled: keep the live browser transcript as-is.
           // ước lượng thời gian thực từ SpeechRecognition (nếu trình duyệt
           // hỗ trợ), bác sĩ vẫn dùng được, chỉ là kém chính xác hơn 1 chút.
         } catch {
@@ -6496,8 +6230,6 @@ function ChatMicButton({ getCurrentInput, onTextChange }) {
       // Song song: SpeechRecognition của trình duyệt để HIỂN THỊ TRỰC TIẾP
       // chữ đang nói (interimResults=true) — cập nhật ô input NGAY LẬP TỨC
       // thay vì phải đợi tới lúc dừng ghi âm mới thấy chữ (trải nghiệm cũ).
-      // Đây CHỈ để hiển thị tạm thời — kết quả VNPT ở trên mới là bản CHÍNH
-      // THỨC ghi đè lên khi ghi âm kết thúc.
       const Recognition = getSpeechRecognitionCtor()
       if (Recognition) {
         const rec = new Recognition()
@@ -6511,7 +6243,7 @@ function ChatMicButton({ getCurrentInput, onTextChange }) {
           const base = baseTextRef.current
           onTextChange(base ? `${base} ${liveText}` : liveText)
         }
-        rec.onerror = () => {} // im lặng — không phải nguồn chính thức, VNPT vẫn chạy song song
+        rec.onerror = () => {} // silent
         try { rec.start() } catch {}
         recognitionRef.current = rec
       }
@@ -6826,9 +6558,12 @@ function recMeta(data){
     bac_si: data.phau_thuat?.bac_si_phau_thuat || "BS. Nguyễn Văn X", data,
   }
 }
-const HISTORY = [
-  { id:"BN-A", ...recMeta(MOCK_REPORT) },
-  { id:"BN-B", ...recMeta(PATIENT_B) },
+// Main demo case follows the UI language (English version in demoData.en.js).
+const demoReportA = () => getLang() === "en" ? MOCK_REPORT_EN : MOCK_REPORT
+// The second demo case (BN-B) exists only in Vietnamese, so it is listed in VI mode only.
+const demoHistory = () => [
+  { id:"BN-A", ...recMeta(demoReportA()) },
+  ...(getLang() === "en" ? [] : [{ id:"BN-B", ...recMeta(PATIENT_B) }]),
 ]
 
 // ─── Mock "analysis" cho 2 hồ sơ demo (Nguyễn Văn A/B) ─────────────────────
@@ -6859,6 +6594,12 @@ const MOCK_ANALYSIS_BY_SBA = {
 
 // ─── Lời chào chatbot theo ngữ cảnh (mode) ───────────────────────────────────
 function modeGreeting(mode, name){
+  if(getLang()==="en"){
+    const n = name || "this patient"
+    if(mode==="teaching") return `Hello, I am **MedAmi**, your clinical tutor. Let's work through the case of **${n}** step by step. Would you like to start with the history, the examination, or the diagnostic reasoning?`
+    if(mode==="hoi_chan") return `Hello, I am **MedAmi**, the case conference secretary. I have compiled the record of **${n}** and the specialists' opinions. Which part of the minutes should I clarify?`
+    return `Hello Doctor, I am **MedAmi**. I have read the record of **${n}**. What would you like to know about this case?`
+  }
   const n = name || "này"
   if(mode==="teaching") return `Xin chào, tôi là **MedAmi** - gia sư lâm sàng. Chúng ta cùng phân tích ca **${n}** theo từng bước bệnh án nhé. Bạn muốn bắt đầu từ bệnh sử, thăm khám, hay biện luận chẩn đoán?`
   if(mode==="hoi_chan") return `Xin chào, tôi là **MedAmi** - thư ký y khoa của buổi hội chẩn. Tôi đã tổng hợp hồ sơ ca **${n}** và ý kiến các chuyên khoa. Anh/chị cần tôi làm rõ phần nào của biên bản hội chẩn?`
@@ -6873,7 +6614,15 @@ function chatSuggestions(mode){
 // ─── Tiện ích chung ───────────────────────────────────────────────────────────
 function clampN(n,a,b){ return Math.max(a,Math.min(b,Math.round(n))) }
 function riskTone(p){ return p>=80?"green":p>=60?"amber":"red" }
-function matchKw(text, kws){ const t=(text||"").toLowerCase(); return kws.some(k=>t.includes(k)) }
+// Whole-word match (Unicode-aware) so e.g. "van" does not match "advanced".
+const _kwRe = new Map()
+function matchKw(text, kws){
+  const t=(text||"").toLowerCase()
+  return kws.some(k=>{
+    if(!_kwRe.has(k)) _kwRe.set(k, new RegExp(`(?<![\\p{L}\\p{N}])${k.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}(?![\\p{L}\\p{N}])`,"u"))
+    return _kwRe.get(k).test(t)
+  })
+}
 function pickCanhBao(r, kws){ return (r.canh_bao_nguy_co||[]).filter(c=>matchKw(c.mo_ta, kws)) }
 function shortLabel(s){ return ((s||"").split(/[:\-]/)[0]||s||"").trim().slice(0,72) }
 function splitSentences(s){ return (s||"").split(/(?<=[.!?])\s+/).map(x=>x.trim()).filter(x=>x.length>2) }
@@ -6887,7 +6636,7 @@ function splitSentences(s){ return (s||"").split(/(?<=[.!?])\s+/).map(x=>x.trim(
 function splitTomTatTheoGiaiDoan(text) {
   const safe = text || ""
   if (!safe.trim()) return []
-  const re = /GIAI ĐO[AẠ]N (TRƯỚC MỔ|SAU MỔ[^:]*|NGOẠI TRÚ[^:]*|HỒI PHỤC[^:]*):/g
+  const re = /(?:GIAI ĐO[AẠ]N (?:TRƯỚC MỔ|SAU MỔ[^:]*|NGOẠI TRÚ[^:]*|HỒI PHỤC[^:]*)|(?:PRE-OP|POST-OP[^:]*|OUTPATIENT[^:]*|RECOVERY[^:]*) PHASE):/g
   const markers = [...safe.matchAll(re)]
   if (!markers.length) return [{ tieuDe: null, cau: splitSentences(safe) }]
   return markers.map((m, i) => {
@@ -6900,13 +6649,13 @@ function splitTomTatTheoGiaiDoan(text) {
 
 // ─── Engine Hội chẩn ảo (Virtual MDT) ─────────────────────────────────────────
 const SPEC_DEFS = [
-  { khoa:"Tim mạch", relevance:"Rất cao", role:"Đánh giá chức năng tim, van tim và nguy cơ suy tim.", kw:["van","tim","ef","suy tim","nt-probnp","chênh áp","hở van","tăng áp","mạch vành","rung nhĩ"] },
-  { khoa:"Phẫu thuật Tim", relevance:"Rất cao", role:"Đánh giá kết quả mổ, vết mổ, dẫn lưu và biến chứng hậu phẫu.", kw:["mổ","phẫu thuật","sửa van","thay van","vòng van","nội soi","tuần hoàn ngoài cơ thể"] },
-  { khoa:"Hồi sức tích cực", relevance:"Rất cao", role:"Ổn định huyết động, hô hấp và cân bằng nội môi giai đoạn hậu phẫu.", kw:["lactate","toan","máy thở","huyết động","vận mạch","phù phổi","sốc","hồi sức","tưới máu","an thần"] },
-  { khoa:"Truyền nhiễm", relevance:"Cao", role:"Đánh giá nhiễm khuẩn, lựa chọn và xuống thang kháng sinh.", kw:["nhiễm","crp","pct","procalcitonin","viêm","bạch cầu","sepsis","kháng sinh","cấy","sốt"] },
-  { khoa:"Huyết học - Đông máu", relevance:"Cao", role:"Cân bằng nguy cơ chảy máu và huyết khối khi dùng chống đông.", kw:["inr","chống đông","đông máu","tiểu cầu","chảy máu","huyết khối"] },
-  { khoa:"Thận - Tiết niệu", relevance:"Cao", role:"Theo dõi chức năng thận, cân bằng dịch và liều thuốc thải qua thận.", kw:["thận","creatinin","egfr","aki","lọc máu","niệu"] },
-  { khoa:"Dinh dưỡng lâm sàng", relevance:"Trung bình", role:"Đánh giá và hỗ trợ dinh dưỡng để hồi phục và lành thương.", kw:["dinh dưỡng","albumin","suy kiệt","sonde","bmi","nuôi dưỡng"] },
+  { khoa:"Tim mạch", relevance:"Rất cao", role:"Đánh giá chức năng tim, van tim và nguy cơ suy tim.", kw:["van","tim","ef","suy tim","nt-probnp","chênh áp","hở van","tăng áp","mạch vành","rung nhĩ","valve","heart","cardiac","ejection fraction","heart failure","gradient","regurgitation","stenosis","pulmonary hypertension","coronary","atrial fibrillation"] },
+  { khoa:"Phẫu thuật Tim", relevance:"Rất cao", role:"Đánh giá kết quả mổ, vết mổ, dẫn lưu và biến chứng hậu phẫu.", kw:["mổ","phẫu thuật","sửa van","thay van","vòng van","nội soi","tuần hoàn ngoài cơ thể","surgery","surgical","operation","post-op","valve replacement","valve repair","annuloplasty","cardiopulmonary bypass"] },
+  { khoa:"Hồi sức tích cực", relevance:"Rất cao", role:"Ổn định huyết động, hô hấp và cân bằng nội môi giai đoạn hậu phẫu.", kw:["lactate","toan","máy thở","huyết động","vận mạch","phù phổi","sốc","hồi sức","tưới máu","an thần","acidosis","ventilator","hemodynamic","hemodynamics","vasopressor","vasopressors","inotrope","inotropes","pulmonary edema","shock","icu","perfusion","sedation"] },
+  { khoa:"Truyền nhiễm", relevance:"Cao", role:"Đánh giá nhiễm khuẩn, lựa chọn và xuống thang kháng sinh.", kw:["nhiễm","crp","pct","procalcitonin","viêm","bạch cầu","sepsis","kháng sinh","cấy","sốt","infection","inflammation","inflammatory","white cells","white blood cells","antibiotic","antibiotics","culture","fever"] },
+  { khoa:"Huyết học - Đông máu", relevance:"Cao", role:"Cân bằng nguy cơ chảy máu và huyết khối khi dùng chống đông.", kw:["inr","chống đông","đông máu","tiểu cầu","chảy máu","huyết khối","anticoagulation","anticoagulant","coagulation","platelets","bleeding","thrombosis"] },
+  { khoa:"Thận - Tiết niệu", relevance:"Cao", role:"Theo dõi chức năng thận, cân bằng dịch và liều thuốc thải qua thận.", kw:["thận","creatinin","egfr","aki","lọc máu","niệu","renal","kidney","creatinine","dialysis","urine"] },
+  { khoa:"Dinh dưỡng lâm sàng", relevance:"Trung bình", role:"Đánh giá và hỗ trợ dinh dưỡng để hồi phục và lành thương.", kw:["dinh dưỡng","albumin","suy kiệt","sonde","bmi","nuôi dưỡng","nutrition","malnutrition","feeding tube"] },
 ]
 const SPEC_GAP = {
   "Tim mạch":"Siêu âm tim kiểm tra lại sau can thiệp (đánh giá chức năng và mức hở van).",
@@ -7114,170 +6863,6 @@ function deriveTeaching(r){
   }
 }
 
-// ─── Đăng nhập (demo) ─────────────────────────────────────────────────────────
-function LoginPage({ onLogin, onRegister }){
-  const [screen, setScreen] = useState("login")
-  const [fullName, setFullName] = useState("")
-  const [department, setDepartment] = useState("")
-  const SAMPLE_EMAIL = "bacsi@medparcours.com"
-  const SAMPLE_PASSWORD = "un1svengers"
-  const [email, setEmail] = useState(SAMPLE_EMAIL)
-  const [password, setPassword] = useState(SAMPLE_PASSWORD)
-  const [benhVienId, setBenhVienId] = useState(DEFAULT_BENH_VIEN_ID)
-  const [confirmPassword, setConfirmPassword] = useState("")
-  const [showPw, setShowPw] = useState(false)
-  const [err, setErr] = useState("")
-  const [notice, setNotice] = useState("")
-  const [busy, setBusy] = useState(false)
-
-  const switchScreen = (next) => {
-    if(busy) return
-    setScreen(next); setErr(""); setNotice(""); setPassword(""); setConfirmPassword("")
-  }
-
-  const submit = async () => {
-    if(busy) return
-    setErr(""); setNotice("")
-
-    if(screen === "register"){
-      const cleanBenhVienId = benhVienId.trim()
-      if(!fullName.trim()){ setErr("Vui lòng nhập họ và tên bác sĩ."); return }
-      if(!cleanBenhVienId){ setErr("Vui lòng nhập benh_vien_id để gắn tài khoản với bệnh viện."); return }
-      if(!email.trim() || !password){ setErr("Vui lòng nhập email và mật khẩu."); return }
-      if(password.length < 8){ setErr("Mật khẩu cần có ít nhất 8 ký tự."); return }
-      if(password !== confirmPassword){ setErr("Mật khẩu xác nhận chưa khớp."); return }
-      setBusy(true)
-      try {
-        const result = await onRegister({
-          fullName: fullName.trim(),
-          department: department.trim(),
-          benhVienId: cleanBenhVienId,
-          email: email.trim(),
-          password,
-        })
-        setPassword(""); setConfirmPassword(""); setScreen("login")
-        setNotice(result?.message || "Tạo tài khoản thành công. Bạn có thể đăng nhập bằng tài khoản vừa tạo.")
-      } catch(e) {
-        setErr(e?.message || "Không tạo được tài khoản.")
-      } finally {
-        setBusy(false)
-      }
-      return
-    }
-
-    if(!email.trim() || !password){ setErr("Vui lòng nhập email và mật khẩu."); return }
-    setBusy(true)
-    try { await onLogin(email.trim(), password) }
-    catch(e) { setErr(e?.message || "Sai email hoặc mật khẩu.") }
-    finally { setBusy(false) }
-  }
-
-  const FEATURES = [
-    { ic:<Icon.FileText d={16} color="#1D6FE8"/>, t:"Tự động phân tích và tóm tắt diễn biến lâm sàng theo 3 giai đoạn." },
-    { ic:<Icon.Alert d={16} color="#DC2626"/>, t:"Phát hiện và cảnh báo sớm nguy cơ dựa trên hồ sơ bệnh án." },
-    { ic:<Icon.Stethoscope d={16} color="#0E9488"/>, t:"Hỗ trợ hội chẩn đa chuyên khoa (Virtual MDT) và giảng dạy từ Đại học Y Hà Nội (HMU)." },
-    { ic:<Icon.Chat d={16} color="#9333EA"/>, t:"Trợ lý ảo MedAmi hỏi đáp chuyên sâu cho từng hồ sơ cụ thể." },
-  ]
-  const STATS = [
-    { v:"~90%", l:"thời gian được tiết kiệm" },
-    { v:"~90 giây", l:"cho mỗi báo cáo phân tích" },
-    { v:"3 chế độ", l:"Bác sĩ - Hội chẩn - Giảng dạy" },
-    { v:"100%", l:"cảnh báo rủi ro lâm sàng" },
-  ]
-
-  return (
-    <div className="login-wrap">
-      <div className="login-bg1"/><div className="login-bg2"/><div className="login-bg3"/>
-      <div className="login-inner2">
-        <div className="login-grid">
-          <div className="login-col-form">
-            <div className="login-card">
-              <div className="login-logo"><BrandMark size={46} radius={13}/></div>
-              <div className="login-brand">Med<em>Parcours</em> <span>AI</span></div>
-              <div className="auth-tabs" role="tablist" aria-label="Tài khoản MedParcours">
-                <button type="button" className={screen==="login"?"active":""} onClick={()=>switchScreen("login")}>Đăng nhập</button>
-                <button type="button" className={screen==="register"?"active":""} onClick={()=>switchScreen("register")}>Tạo tài khoản</button>
-              </div>
-              <div className="login-sub">
-                {screen === "login"
-                  ? "Đăng nhập bằng tài khoản bác sĩ đã được tạo trên Supabase"
-                  : "Tạo tài khoản bác sĩ mới trên hệ thống MedParcours"}
-              </div>
-
-              {screen === "register" && <>
-                <div className="login-field">
-                  <label>Họ và tên bác sĩ</label>
-                  <input value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="Nguyễn Văn A" autoComplete="name" autoFocus/>
-                </div>
-                <div className="login-field">
-                  <label>Khoa / đơn vị <span className="field-optional">(không bắt buộc)</span></label>
-                  <input value={department} onChange={e=>setDepartment(e.target.value)} placeholder="Khoa Tim mạch" autoComplete="organization-title"/>
-                </div>
-                <div className="login-field">
-                  <label>benh_vien_id <span className="field-optional">(đã điền sẵn)</span></label>
-                  <input value={benhVienId} onChange={e=>setBenhVienId(e.target.value)} placeholder={DEFAULT_BENH_VIEN_ID} autoComplete="off"/>
-                </div>
-              </>}
-
-              <div className="login-field">
-                <label>Email bác sĩ</label>
-                <input type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="bacsi@medparcours.com" autoComplete="email" autoFocus={screen==="login"}/>
-              </div>
-              <div className="login-field">
-                <label>Mật khẩu</label>
-                <div className="pw-wrap">
-                  <input type={showPw?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder={screen==="register"?"Tối thiểu 8 ký tự":"Nhập mật khẩu"} autoComplete={screen==="register"?"new-password":"current-password"} style={{paddingRight:"40px"}}/>
-                  <button type="button" className="pw-eye" onClick={()=>setShowPw(s=>!s)} title={showPw?"Ẩn mật khẩu":"Hiện mật khẩu"} aria-label="Hiện/ẩn mật khẩu">
-                    {showPw
-                      ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                      : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>}
-                  </button>
-                </div>
-              </div>
-
-              {screen === "register" && <div className="login-field">
-                <label>Xác nhận mật khẩu</label>
-                <input type={showPw?"text":"password"} value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Nhập lại mật khẩu" autoComplete="new-password"/>
-              </div>}
-
-              {notice && <div className="login-ok"><Icon.ShieldCheck d={14} color="#047857"/>{notice}</div>}
-              {err && <div className="login-err"><Icon.Alert d={14} color="#B91C1C"/>{err}</div>}
-              <button className="btn-primary login-btn" onClick={submit} disabled={busy}>
-                {busy
-                  ? (screen==="register" ? "Đang tạo tài khoản..." : "Đang đăng nhập...")
-                  : (screen==="register" ? "Tạo tài khoản" : "Đăng nhập")}
-              </button>
-
-              <button type="button" className="auth-text-link" onClick={()=>switchScreen(screen==="login"?"register":"login")} disabled={busy}>
-                {screen === "login" ? "Chưa có tài khoản? Tạo tài khoản mới" : "Đã có tài khoản? Quay lại đăng nhập"}
-              </button>
-
-              <div className="login-hint">
-                <div className="login-hint-row"><span>Tài khoản mẫu</span><b>bacsi@medparcours.com</b></div>
-                <div className="login-hint-row"><span>Mật khẩu mẫu</span><b>un1svengers</b></div>
-                <div className="login-hint-row"><span>benh_vien_id mẫu</span><b>fd070774-17e3-4d74-8f28-f09258b24209</b></div>
-              </div>
-            </div>
-          </div>
-          <div className="login-col-hero">
-            <div className="login-hero-tag">Nền tảng phân tích bệnh án bằng AI</div>
-            <div className="login-team">Team UN1SVENGERS · Vietnamese Student HackAIthon 2026 · Bảng B Challenger · Đề tài 5: Y tế</div>
-            <h1 className="login-hero-title">Đọc hồ sơ nhanh hơn,<br/>quyết định lâm sàng tự tin hơn.</h1>
-            <p className="login-hero-desc">MedParcours AI đọc hồ sơ HIS, tự động tóm tắt, cảnh báo nguy cơ và hỗ trợ hội chẩn cùng giảng dạy lâm sàng cho bác sĩ và sinh viên y khoa.</p>
-            <div className="login-feat">
-              {FEATURES.map((f,i)=>(<div key={i} className="login-feat-row"><span className="login-feat-ic">{f.ic}</span>{f.t}</div>))}
-            </div>
-            <div className="login-stats">
-              {STATS.map((s,i)=>(<div key={i} className="login-stat"><div className="login-stat-v">{s.v}</div><div className="login-stat-l">{s.l}</div></div>))}
-            </div>
-          </div>
-        </div>
-        <div className="login-logos"><LogoBar/></div>
-      </div>
-    </div>
-  )
-}
-
 // ─── Ghi âm tài liệu hỗ trợ (Web Speech API vi-VN, có xử lý quyền + lỗi) ───────
 function AudioRecorder({ value, onChange, onAttach, attachLabel="Đính kèm", attachHint="Ctrl/Cmd + Enter để đính kèm" }){
   const [supported] = useState(() => typeof window!=="undefined" && !!(window.SpeechRecognition||window.webkitSpeechRecognition))
@@ -7454,138 +7039,6 @@ function SpecCard({ y }){
   )
 }
 function stanceClass(s){ return /có/i.test(s)?"yes":/không/i.test(s)?"no":"neu" }
-// ─── Ghi âm & Tóm tắt Hội chẩn (VNPT iSense + Claude fallback thật) ───────
-function ConsultationVoiceSummary() {
-  const [step, setStep] = useState("idle") // idle | recording | uploading | success | error
-  const [seconds, setSeconds] = useState(0)
-  const [result, setResult] = useState(null)
-  const [errMsg, setErrMsg] = useState("")
-  const [copied, setCopied] = useState(false)
-  const mediaRecorderRef = useRef(null)
-  const chunksRef = useRef([])
-  const timerRef = useRef(null)
-  const fileInputRef = useRef()
-
-  const runSummarize = async (file) => {
-    setStep("uploading")
-    try {
-      const res = await mpApi.summarizeConsultationAudio(file)
-      setResult(res)
-      setStep("success")
-    } catch (err) {
-      setErrMsg(err.message || "Không tóm tắt được bản ghi âm")
-      setStep("error")
-    }
-  }
-
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mime = pickBestAudioMime()
-      const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined)
-      chunksRef.current = []
-      mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data) }
-      mr.onstop = () => {
-        stream.getTracks().forEach(t => t.stop())
-        clearInterval(timerRef.current)
-        const blob = new Blob(chunksRef.current, { type: mime || "audio/webm" })
-        const ext = mime.includes("wav") ? "wav" : mime.includes("mp4") ? "mp4" : "webm"
-        runSummarize(new File([blob], `hoi_chan.${ext}`, { type: mime || "audio/webm" }))
-      }
-      mediaRecorderRef.current = mr
-      mr.start()
-      setSeconds(0)
-      timerRef.current = setInterval(() => setSeconds(s => s + 1), 1000)
-      setStep("recording")
-    } catch {
-      mpToast("Không truy cập được micro. Hãy cho phép quyền micro cho trang web, hoặc tải file ghi âm lên.", "err")
-    }
-  }
-  const stopRecording = () => { try { mediaRecorderRef.current?.stop() } catch {} }
-  useEffect(() => () => { try { mediaRecorderRef.current?.stop() } catch {}; clearInterval(timerRef.current) }, [])
-
-  const fmtTime = (s) => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`
-  const copySummary = () => {
-    if (!result) return
-    const s = result.source === "VNPT_AI"
-      ? result.summary_raw
-      : [
-          `Tóm tắt ca bệnh: ${result.summary.tom_tat_ca_benh || ""}`,
-          `Ý kiến hội chẩn:`, ...(result.summary.y_kien_hoi_chan||[]).map(x=>`- ${x}`),
-          `Hướng xử trí:`, ...(result.summary.huong_xu_tri||[]).map(x=>`- ${x}`),
-        ].join("\n")
-    navigator.clipboard?.writeText(s).then(() => { setCopied(true); mpToast("Đã sao chép kết luận"); setTimeout(()=>setCopied(false), 2000) })
-  }
-  const reset = () => { setStep("idle"); setResult(null); setErrMsg("") }
-
-  return (
-    <div className="cvs-card">
-      <div className="cvs-head">
-        <Icon.Mic d={16} color="#1D6FE8"/>
-        <span>Ghi âm &amp; Tóm tắt Hội chẩn (VNPT SmartVoice)</span>
-      </div>
-
-      {step === "idle" && (
-        <div className="cvs-idle-row">
-          <button className="btn-primary" onClick={startRecording}><Icon.Mic d={14} color="#fff"/>Ghi âm hội chẩn</button>
-          <input type="file" accept="audio/*" ref={fileInputRef} style={{display:"none"}}
-            onChange={e=>{ if (e.target.files[0]) runSummarize(e.target.files[0]) }}/>
-          <button className="btn-secondary-sm" onClick={()=>fileInputRef.current.click()}>Tải file ghi âm (.wav/.mp3)</button>
-        </div>
-      )}
-
-      {step === "recording" && (
-        <div className="cvs-recording">
-          <span className="cvs-rec-dot"/>Đang ghi âm... <b>{fmtTime(seconds)}</b>
-          <button className="cvs-stop-btn" onClick={stopRecording}>Dừng &amp; Tóm tắt</button>
-        </div>
-      )}
-
-      {step === "uploading" && (
-        <div className="sim-loading"><span className="chat-mic-spin" style={{width:20,height:20,borderWidth:3}}/>Đang bóc tách âm thanh &amp; tổng hợp ý kiến hội chẩn...</div>
-      )}
-
-      {step === "error" && (
-        <div className="sim-loading" style={{color:"#DC2626"}}>{errMsg}
-          <div className="cfm-actions"><button className="btn-primary" onClick={reset}>Thử lại</button></div>
-        </div>
-      )}
-
-      {step === "success" && result && (
-        <div className="cvs-result">
-          {result.source === "CLAUDE_FALLBACK" && <span className="cvs-fallback-badge">Chế độ dự phòng lâm sàng</span>}
-          <div className="cvs-summary-card">
-            <div className="cvs-summary-head">
-              <span><Icon.ShieldCheck d={14} color="#059669"/>Tóm tắt kết luận hội chẩn</span>
-              <button className="cvs-copy-btn" onClick={copySummary}>{copied ? "Đã sao chép" : "Sao chép vào bệnh án"}</button>
-            </div>
-            {result.source === "VNPT_AI" ? (
-              <p>{result.summary_raw}</p>
-            ) : (
-              <>
-                <p><b>Tóm tắt ca bệnh:</b> {result.summary.tom_tat_ca_benh}</p>
-                {result.summary.y_kien_hoi_chan?.length > 0 && (
-                  <><b>Ý kiến hội chẩn:</b><ul>{result.summary.y_kien_hoi_chan.map((x,i)=><li key={i}>{x}</li>)}</ul></>
-                )}
-                {result.summary.huong_xu_tri?.length > 0 && (
-                  <><b>Hướng xử trí:</b><ul>{result.summary.huong_xu_tri.map((x,i)=><li key={i}>{x}</li>)}</ul></>
-                )}
-              </>
-            )}
-          </div>
-          {result.transcript && (
-            <div className="cvs-transcript-card">
-              <div className="cvs-transcript-head">Biên bản giải băng chi tiết</div>
-              <div className="cvs-transcript-body">{result.transcript}</div>
-            </div>
-          )}
-          <button className="btn-secondary-sm" onClick={reset}>Ghi âm ca khác</button>
-        </div>
-      )}
-    </div>
-  )
-}
-
 function MDTView({ report }){
   const [mdt, setMdt] = useState(() => deriveMDT(report))
   const [shown, setShown] = useState(0)
@@ -7616,8 +7069,6 @@ function MDTView({ report }){
           <p>Hội đồng chuyên gia ảo cùng phân tích và thảo luận ca <b>{report.thong_tin_benh_nhan.ho_ten}</b>: tổng quan nguy cơ, ưu tiên, mời đúng chuyên khoa, thảo luận và ra đồng thuận.</p>
         </div>
       </div>
-
-      <ConsultationVoiceSummary/>
 
       <Step n="1" t="Tổng quan nguy cơ (MDT Risk Dashboard)"/>
       <div className="risk-dash">
@@ -7829,50 +7280,8 @@ function TeachingView({ report }){
 }
 
 // ─── Lịch sử bệnh án (overlay) ────────────────────────────────────────────────
-function HistoryPanel({ onBack, onOpen, onOpenDbPatient, onOpenRemote, currentId }){
-  // Lịch sử phân tích lưu trên Supabase Auth/RLS — sinh ra tự động sau mỗi lần /analyze thành công.
-  const [remoteRows, setRemoteRows] = useState([])
-  const [remoteLoading, setRemoteLoading] = useState(true)
-  const [remoteError, setRemoteError] = useState("")
-  const [openingRemoteId, setOpeningRemoteId] = useState(null)
-  const refreshSupabaseHistory = useCallback(async () => {
-    setRemoteLoading(true); setRemoteError("")
-    try {
-      const res = await callApi("/lich-su")
-      const data = await res.json()
-      if(!res.ok) throw new Error(data?.detail || "Không tải được lịch sử Supabase")
-      setRemoteRows(Array.isArray(data) ? data : [])
-    } catch(e) {
-      setRemoteRows([])
-      setRemoteError(e?.message || "Không tải được lịch sử Supabase")
-    } finally {
-      setRemoteLoading(false)
-    }
-  }, [])
-  useEffect(() => { refreshSupabaseHistory() }, [refreshSupabaseHistory])
-  const openRemote = async (rec) => {
-    if(!onOpenRemote || openingRemoteId) return
-    setOpeningRemoteId(rec.id)
-    try { await onOpenRemote(rec) }
-    catch(e) { setRemoteError(e?.message || "Không mở được bản phân tích Supabase") }
-    finally { setOpeningRemoteId(null) }
-  }
-  const removeRemote = async (e, rec) => {
-    e.stopPropagation()
-    const ok = await mpConfirm({title:"Xóa bản phân tích Supabase?",message:"Bản phân tích sẽ bị xóa khỏi lịch sử Supabase của tài khoản hiện tại.",okText:"Xóa",danger:true})
-    if(!ok) return
-    try {
-      const res = await callApi(`/phan-tich/${rec.id}`, { method:"DELETE" })
-      const data = await res.json()
-      if(!res.ok || !data?.ok) throw new Error(data?.detail || "Không xóa được bản phân tích")
-      setRemoteRows(prev => prev.filter(x => x.id !== rec.id))
-      mpToast("Đã xóa bản phân tích Supabase")
-    } catch(e) {
-      setRemoteError(e?.message || "Không xóa được bản phân tích Supabase")
-    }
-  }
-  // Hồ sơ THẬT đã lưu (Turso) — tải riêng, không chặn hiện demo nếu lỗi
-  // mạng/chưa cấu hình Turso (đúng nguyên tắc không gây gián đoạn).
+function HistoryPanel({ onBack, onOpen, onOpenDbPatient, currentId }){
+  // Records saved in this browser (IndexedDB) — tải riêng, không chặn hiện demo nếu lỗi
   const [dbPatients, setDbPatients] = useState(null) // null = đang tải, [] = rỗng, [...] = có dữ liệu
   const [dbError, setDbError] = useState(null)
   useEffect(() => {
@@ -8078,30 +7487,8 @@ function HistoryPanel({ onBack, onOpen, onOpenDbPatient, onOpenRemote, currentId
         <div className="hist-page-inner">
           <span className="hist-title"><Icon.FileText d={17} color="#1D6FE8"/>Lịch sử bệnh án</span>
           <div className="hist-list">
-            {(remoteLoading || remoteError || remoteRows.length > 0) && (
-              <>
-                <div className="hist-section-lbl"><Icon.FileText d={13} color="#1D6FE8"/>Lịch sử phân tích trên Supabase</div>
-                {remoteLoading && <div className="hist-state"><span className="loading-spin small"/>Đang tải lịch sử Supabase...</div>}
-                {remoteError && <div className="hist-state hist-state-error">{remoteError}</div>}
-                {!remoteLoading && !remoteError && remoteRows.length === 0 && <div className="hist-state">Chưa có bản phân tích Supabase nào.</div>}
-                {remoteRows.map(rec => (
-                  <div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>openRemote(rec)}>
-                    <div className="hist-avatar">{(rec.ma_hien_thi||"HS").charAt(0)}</div>
-                    <div className="hist-info">
-                      <div className="hist-name">Hồ sơ {rec.ma_hien_thi || String(rec.id).slice(0,8)} <span className="hist-meta">{rec.tuoi ? `${rec.tuoi} tuổi` : "Tuổi chưa rõ"}{rec.gioi_tinh ? `, ${rec.gioi_tinh}` : ""}</span></div>
-                      <div className="hist-dx">{expandAbbr(rec.chan_doan_chinh || "Chưa có chẩn đoán chính")}</div>
-                      <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>{fmtDateTime(rec.ngay_phan_tich)} · {rec.giai_doan || "Chưa xác định giai đoạn"} · {rec.so_canh_bao || 0} cảnh báo</div>
-                    </div>
-                    <div className="hist-actions">
-                      {rec.co_the_xoa && <button className="hist-delete" onClick={e=>removeRemote(e, rec)} title="Xóa bản phân tích">×</button>}
-                      <span className="hist-open">{openingRemoteId===rec.id ? "Đang mở..." : "Mở ▶"}</span>
-                    </div>
-                  </div>
-                ))}
-              </>
-            )}
             <div className="hist-section-lbl"><Icon.FileText d={13} color="#1D6FE8"/>Báo cáo - Demo</div>
-            {HISTORY.map(rec=>(
+            {demoHistory().map(rec=>(
               <div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>onOpen(rec)}>
                 <div className="hist-avatar">{rec.ho_ten.charAt(0)}</div>
                 <div className="hist-info">
@@ -8243,6 +7630,11 @@ function HistoryPanel({ onBack, onOpen, onOpenDbPatient, onOpenRemote, currentId
 }
 
 const EXTRA_CSS = `
+.lang-toggle{display:inline-flex;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-right:6px;background:rgba(255,255,255,.9)}
+.lang-toggle button{border:0;background:transparent;padding:6px 9px;font-size:12px;font-weight:700;color:#64748B;cursor:pointer}
+.lang-toggle button.on{background:#1D6FE8;color:#fff}
+body.theme-dark .lang-toggle{background:#1B2536;border-color:var(--border)}
+
 
 .auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:4px;background:#EEF3FA;border-radius:11px;margin:18px 0 0}
 .auth-tabs button{border:none;background:transparent;color:#6B7F99;font-family:inherit;font-size:12.5px;font-weight:700;padding:8px 10px;border-radius:8px;cursor:pointer;transition:all .15s}
@@ -9345,7 +8737,7 @@ body.theme-dark .cw-input-row input{border-color:#2A3A52}
 `
 
 // ─── Toast + Confirm + Copy (UX dùng chung) ──────────────────────────────────
-// ─── FAQ Widget (VNPT Smartbot) — ĐỘC LẬP với MedAmi lâm sàng ─────────────
+// ─── Support widget (product help) — independent from clinical MedAmi ─────
 // Bong bóng chat nổi góc dưới phải, hỏi đáp chung về sản phẩm (KHÔNG phải
 // dữ liệu bệnh nhân — xem quyết định kiến trúc: Smartbot không phù hợp làm
 // lõi suy luận lâm sàng động, chỉ dùng cho FAQ).
@@ -9633,6 +9025,17 @@ function CopyBtn({ text, label="" }){
     : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>}{done ? (label ? "Đã chép" : "") : label}</button>
 }
 
+function LangToggle(){
+  const [lang, setL] = useState(getLang())
+  useEffect(() => onLangChange(setL), [])
+  return (
+    <div className="lang-toggle" role="group" aria-label="Language" data-no-i18n>
+      {["en","vi"].map(l => (
+        <button key={l} className={lang===l?"on":""} onClick={()=>setLang(l)} aria-pressed={lang===l}>{l.toUpperCase()}</button>
+      ))}
+    </div>
+  )
+}
 function ThemeToggle(){
   const [dark, setDark] = useState(false)
   useEffect(() => {
@@ -9648,13 +9051,14 @@ function ThemeToggle(){
     try { sessionStorage.setItem("mp_theme", v ? "dark" : "light") } catch {}
     mpToast(v ? "Đã bật chế độ tối" : "Đã bật chế độ sáng")
   }
-  return (
+  return (<>
+    <LangToggle/>
     <button className="theme-toggle" onClick={toggle} title={dark?"Chuyển chế độ sáng":"Chuyển chế độ tối"} aria-label="Đổi giao diện sáng/tối">
       {dark
         ? <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
         : <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>}
     </button>
-  )
+  </>)
 }
 
 function mpHelp(){ if(typeof window!=="undefined") window.dispatchEvent(new CustomEvent("mp-help")) }
@@ -9693,8 +9097,6 @@ function ShortcutHelp(){
 }
 
 export default function App() {
-  const [session, setSession] = useState(null)
-  const [authReady, setAuthReady] = useState(false)
   const [state, setState] = useState("upload")
   const [report, setReport] = useState(null)
   const [hoSoText, setHoSoText] = useState("")
@@ -9705,7 +9107,6 @@ export default function App() {
   const [uploadError, setUploadError] = useState(null)
   const [chatMessages, setChatMessages] = useState([])
   const [currentId, setCurrentId] = useState(null)
-  const registrationInProgress = useRef(false)
 
   const resetWorkspace = useCallback(() => {
     setState("upload")
@@ -9717,79 +9118,13 @@ export default function App() {
     setUploadError(null)
   }, [])
 
-  const login = async (email, password) => {
-    if(!supabaseConfigured || !supabase) throw new Error("Chưa cấu hình Supabase ở frontend.")
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-    if(error) throw new Error("Sai email hoặc mật khẩu, hoặc tài khoản chưa được xác nhận.")
-    if(!data?.session) throw new Error("Supabase không trả về phiên đăng nhập.")
-    setSession(data.session)
-  }
-
-  const register = async ({ fullName, department, benhVienId, email, password }) => {
-    if(!supabaseConfigured || !supabase) throw new Error("Chưa cấu hình Supabase ở frontend.")
-    const cleanBenhVienId = String(benhVienId || DEFAULT_BENH_VIEN_ID).trim()
-    if(!cleanBenhVienId) throw new Error("Thiếu benh_vien_id nên chưa thể tạo tài khoản bác sĩ.")
-    registrationInProgress.current = true
-    try {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            ho_ten: fullName,
-            khoa: department || null,
-            benh_vien_id: cleanBenhVienId,
-          },
-        },
-      })
-      if(error){
-        const msg = String(error.message || "")
-        if(/already registered|already exists|user already/i.test(msg)) throw new Error("Email này đã được đăng ký. Hãy quay lại đăng nhập.")
-        if(/password/i.test(msg)) throw new Error("Mật khẩu chưa đạt yêu cầu của Supabase.")
-        if(/database error/i.test(msg)) throw new Error("Không tạo được hồ sơ bác sĩ. Hãy kiểm tra trigger handle_new_user trong Supabase.")
-        throw new Error(msg || "Supabase không tạo được tài khoản.")
-      }
-      if(!data?.user) throw new Error("Supabase không trả về tài khoản vừa tạo.")
-      if(data.session) await supabase.auth.signOut()
-      setSession(null)
-      return {
-        message: data.session
-          ? "Tạo tài khoản thành công. Hãy đăng nhập bằng email và mật khẩu vừa đăng ký."
-          : "Tạo tài khoản thành công. Hãy xác nhận email (nếu Supabase yêu cầu), sau đó đăng nhập.",
-      }
-    } finally {
-      registrationInProgress.current = false
-    }
-  }
-
-  const logout = async () => {
-    try { if(supabase) await supabase.auth.signOut() } finally { setSession(null); resetWorkspace() }
-  }
+  useEffect(() => { startI18n() }, [])
 
   useEffect(() => {
-    if(!supabase){ setAuthReady(true); return }
-    let alive = true
-    supabase.auth.getSession()
-      .then(({data}) => { if(alive){ setSession(data?.session || null); setAuthReady(true) } })
-      .catch(() => { if(alive) setAuthReady(true) })
-    const { data: subscription } = supabase.auth.onAuthStateChange((event, nextSession) => {
-      if(!alive) return
-      if(registrationInProgress.current){
-        if(event === "SIGNED_OUT") setSession(null)
-        setAuthReady(true)
-        return
-      }
-      setSession(nextSession)
-      setAuthReady(true)
-    })
-    const expired = () => { setSession(null); resetWorkspace() }
-    window.addEventListener("mp-auth-expired", expired)
-    return () => {
-      alive = false
-      subscription?.subscription?.unsubscribe()
-      window.removeEventListener("mp-auth-expired", expired)
-    }
-  }, [resetWorkspace])
+    const onLimited = (e) => mpToast(`Bản demo công khai đang giới hạn lượt dùng. Thử lại sau ${e.detail?.retryAfter || 60} giây.`, "err")
+    window.addEventListener("mp-rate-limited", onLimited)
+    return () => window.removeEventListener("mp-rate-limited", onLimited)
+  }, [])
 
   useEffect(() => {
     document.title = "MedParcours AI"
@@ -9817,7 +9152,7 @@ export default function App() {
   // chọn đúng hồ sơ ("BN-A" hoặc "BN-B"), mặc định "BN-A" nếu không truyền.
   useEffect(() => {
     const h = (e) => {
-      const rec = e.detail?.id === "BN-B" ? PATIENT_B : MOCK_REPORT
+      const rec = e.detail?.id === "BN-B" ? PATIENT_B : demoReportA()
       setReport(rec); setHoSoText(JSON.stringify(rec)); setAnalysis(null)
       initChat(rec); setCurrentId(e.detail?.id === "BN-B" ? "BN-B" : "BN-A"); setState("report")
     }
@@ -9828,8 +9163,9 @@ export default function App() {
   const handleUpload = async (file) => {
     // Không có file: dùng hồ sơ mẫu (nút "Xem demo")
     if (!file) {
-      setReport(MOCK_REPORT); setHoSoText(JSON.stringify(MOCK_REPORT)); setAnalysis(null)
-      initChat(MOCK_REPORT); setCurrentId("BN-A"); setState("report"); return
+      const demo = demoReportA()
+      setReport(demo); setHoSoText(JSON.stringify(demo)); setAnalysis(null)
+      initChat(demo); setCurrentId("BN-A"); setState("report"); return
     }
     setLastFile(file)
     setLoading(true); setUploadError(null); setLoadingMsg("")
@@ -9904,11 +9240,18 @@ export default function App() {
     }
   }
 
+  // Switching language while the main demo is open swaps it to that language.
+  useEffect(() => onLangChange(() => {
+    if (currentId !== "BN-A") return
+    const demo = demoReportA()
+    setReport(demo); setHoSoText(JSON.stringify(demo)); initChat(demo)
+  }), [currentId, initChat])
+
   const loadRecord = (rec) => {
     setReport(rec.data); setHoSoText(JSON.stringify(rec.data)); setAnalysis(null)
     initChat(rec.data); setCurrentId(rec.id); setUploadError(null); setState("report")
   }
-  // Mở hồ sơ THẬT đã lưu (Turso) — khác loadRecord (demo cố định): dùng đúng
+  // Open a record saved in this browser — unlike loadRecord (fixed demo): uses the
   // analysis backend đã tính sẵn (GET /patient/{id} trả cả report+analysis),
   // không để null, vì có sẵn dữ liệu thật tốt hơn cách demo cũ.
   // "Xem gần đây" ở trang tải hồ sơ — mở lại nhanh vài bệnh nhân vừa xem,
@@ -9947,49 +9290,24 @@ export default function App() {
     }
   }
 
-  const loadStoredRecord = async (rec) => {
-    setLoading(true); setLoadingMsg("Đang mở bản phân tích Supabase...")
-    try {
-      const res = await callApi(`/phan-tich/${rec.id}`)
-      const data = await res.json()
-      if(!res.ok || !data?.report) throw new Error(data?.detail || "Không mở được bản phân tích Supabase")
-      setReport(data.report); setHoSoText(JSON.stringify(data.report)); setAnalysis(data.analysis || null)
-      initChat(data.report); setCurrentId(rec.id); setUploadError(null); setState("report")
-    } catch(e) {
-      mpToast(e?.message || "Không mở được bản phân tích Supabase", "err")
-      throw e
-    } finally {
-      setLoading(false); setLoadingMsg("")
-    }
-  }
-
-  if (!authReady) {
-    return (<><style>{CSS}</style><style>{EXTRA_CSS}</style><div className="auth-loading"><div className="loading-spin"/><div>Đang kiểm tra phiên đăng nhập...</div></div></>)
-  }
-
-  if (!session) {
-    return (<><style>{CSS}</style><style>{EXTRA_CSS}</style><LoginPage onLogin={login} onRegister={register}/><ToastHost/></>)
-  }
-
   return (
     <>
       <style>{CSS}</style>
       <style>{EXTRA_CSS}</style>
       <ErrorBoundary>
-        {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)} onRetry={()=>lastFile && handleUpload(lastFile)} onOpenHistory={()=>setState("history")} onLogout={logout} recentPatients={recentPatients} onOpenRecent={loadDbPatient}/>}
+        {state === "upload" && <UploadPage onUpload={handleUpload} isLoading={loading} loadingMsg={loadingMsg} error={uploadError} onDismissError={()=>setUploadError(null)} onRetry={()=>lastFile && handleUpload(lastFile)} onOpenHistory={()=>setState("history")} recentPatients={recentPatients} onOpenRecent={loadDbPatient}/>}
         {state === "report" && report && (
           <ReportPage report={report} hoSoText={hoSoText} analysis={analysis}
             onReset={()=>{setState("upload");setReport(null);setAnalysis(null);setChatMessages([]);setCurrentId(null)}}
             onReportUpdated={(newReport, newAnalysis)=>{setReport(newReport);setAnalysis(newAnalysis)}}
             chatMessages={chatMessages} setChatMessages={setChatMessages}
-            onOpenHistory={()=>setState("history")} onLogout={logout}/>
+            onOpenHistory={()=>setState("history")}/>
         )}
         {state === "history" && (
           <HistoryPanel
             onBack={()=>setState(report ? "report" : "upload")}
             onOpen={loadRecord}
             onOpenDbPatient={loadDbPatient}
-            onOpenRemote={loadStoredRecord}
             currentId={currentId}
           />
         )}

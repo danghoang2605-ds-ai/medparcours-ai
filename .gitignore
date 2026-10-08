@@ -1,4 +1,4 @@
-# Biến môi trường — TUYỆT ĐỐI không commit API key thật
+# Environment -- NEVER commit real API keys
 .env
 .env.local
 
@@ -10,7 +10,7 @@ __pycache__/
 .venv/
 venv/
 
-# Node (chỉ dùng tạm lúc build Docker frontend, không cần commit)
+# Node (only used during Docker frontend build, not committed)
 node_modules/
 package-lock.json
 bundle.js
@@ -24,3 +24,10 @@ bundle.js
 
 # Logs
 *.log
+
+# Local SQLite created during dev/tests
+*.db
+
+# Frontend build output
+build/
+dist/

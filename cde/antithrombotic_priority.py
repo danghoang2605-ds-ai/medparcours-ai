@@ -93,7 +93,7 @@ def evaluate_antithrombotic_regimen(drugs: list, has_mechanical_valve: bool,
                         f"({', '.join(roles['antiplatelet'])}), không có VKA. Aspirin/clopidogrel "
                         f"KHÔNG phòng được huyết khối van cơ học thay cho VKA."
                     ),
-                    "nguon": "Anh Tấn (Vấn đề 2): 'Aspirin hoặc clopidogrel không phòng được "
+                    "nguon": "Ý kiến chuyên gia lâm sàng: 'Aspirin hoặc clopidogrel không phòng được "
                              "huyết khối van cơ học thay cho VKA'",
                 })
             else:
@@ -117,7 +117,7 @@ def evaluate_antithrombotic_regimen(drugs: list, has_mechanical_valve: bool,
                     f"kháng kết tập tiểu cầu ({', '.join(roles['antiplatelet'])}). Đây là tình huống "
                     f"NGUY CƠ CHẢY MÁU RẤT CAO — không nên kéo dài mặc định, cần ngày đánh giá lại rõ ràng."
                 ),
-                "nguon": "Anh Tấn (Vấn đề 2): 'Điều trị ba thuốc... rất cao, không nên kéo dài mặc định'",
+                "nguon": "Ý kiến chuyên gia lâm sàng: 'Điều trị ba thuốc... rất cao, không nên kéo dài mặc định'",
             })
         else:
             flags["phoi_hop"] = "dual_antithrombotic"
@@ -132,7 +132,7 @@ def evaluate_antithrombotic_regimen(drugs: list, has_mechanical_valve: bool,
                        if has_recent_pci_or_acs else
                        " — KHÔNG thấy PCI/stent/ACS gần đây trong hồ sơ, cần xem lại có còn chỉ định không.")
                 ),
-                "nguon": "Anh Tấn (Vấn đề 2): chỉ định thêm có thời hạn cần ngày đánh giá lại",
+                "nguon": "Ý kiến chuyên gia lâm sàng: chỉ định thêm có thời hạn cần ngày đánh giá lại",
             })
 
     return {

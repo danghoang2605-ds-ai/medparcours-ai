@@ -1,0 +1,174 @@
+[
+ [
+  "^Bệnh\\ nhân\\ van\\ cơ\\ học\\ nhưng\\ đơn\\ thuốc\\ chỉ\\ có\\ DOAC\\ \\((.+?)\\),\\ không\\ có\\ kháng\\ vitamin\\ K\\.\\ DOAC\\ KHÔNG\\ phòng\\ được\\ huyết\\ khối\\ van\\ cơ\\ học\\ —\\ đây\\ là\\ chống\\ chỉ\\ định\\ theo\\ guideline,\\ không\\ phải\\ lựa\\ chọn\\ thay\\ thế\\ hợp\\ lệ\\.$",
+  "Mechanical-valve patient but the prescription only has a DOAC ($1), no vitamin K antagonist. DOACs do NOT prevent mechanical valve thrombosis; this is a guideline contraindication, not a valid alternative."
+ ],
+ [
+  "^Bệnh\\ nhân\\ van\\ cơ\\ học\\ nhưng\\ đơn\\ thuốc\\ chỉ\\ có\\ kháng\\ kết\\ tập\\ tiểu\\ cầu\\ \\((.+?)\\),\\ không\\ có\\ VKA\\.\\ Aspirin/clopidogrel\\ KHÔNG\\ phòng\\ được\\ huyết\\ khối\\ van\\ cơ\\ học\\ thay\\ cho\\ VKA\\.$",
+  "Mechanical-valve patient but the prescription only has an antiplatelet ($1), no VKA. Aspirin/clopidogrel do NOT replace a VKA for preventing mechanical valve thrombosis."
+ ],
+ [
+  "^CRP\\ (.+?)\\ mg/L\\ \\(chưa\\ về\\ dưới\\ 5\\)$",
+  "CRP $1 mg/L (not yet below 5)"
+ ],
+ [
+  "^Chênh\\ lệch\\ R\\-R\\ lớn\\ nhất/nhỏ\\ nhất\\ <\\ (.+?)s\\ \\(mượn\\ ngưỡng\\ PP\\ của\\ nhịp\\ xoang\\ đều\\ theo\\ sách\\ lý\\ thuyết\\ —\\ CHƯA\\ được\\ chuyên\\ gia\\ lâm\\ sàng\\ xác\\ nhận\\ cho\\ mục\\ đích\\ R\\-R\\)$",
+  "Max/min R-R difference < $1s (borrowing the regular sinus rhythm PP threshold from textbook theory; NOT yet validated by a clinical expert for R-R use)"
+ ],
+ [
+  "^Chỉ\\ tìm\\ được\\ (.+?)\\ đường\\ lưới\\ trong\\ dải\\ mép\\ trên\\ \\(cần\\ tối\\ thiểu\\ (.+?)\\)\\ —\\ ảnh\\ có\\ thể\\ bị\\ nghiêng,\\ mờ,\\ hoặc\\ không\\ có\\ lưới\\ rõ\\ ràng\\ ở\\ vùng\\ này\\.$",
+  "Only $1 grid lines found in the top margin (need at least $2); the image may be tilted, blurred, or lack a clear grid in this area."
+ ],
+ [
+  "^Có\\ một\\ khoảng\\ trống\\ liên\\ tục\\ chiếm\\ khoảng\\ (.+?)%\\ chiều\\ rộng\\ ảnh\\ không\\ phát\\ hiện\\ được\\ tín\\ hiệu\\ —\\ ảnh\\ có\\ thể\\ bị\\ mờ,\\ nghiêng,\\ hoặc\\ thiếu\\ nét\\ ở\\ đoạn\\ đó\\.\\ Cần\\ kiểm\\ tra\\ lại\\ ảnh\\ gốc\\.$",
+  "A continuous gap covering about $1% of the image width has no detectable signal; the image may be blurred, tilted or faint there. Check the original image."
+ ],
+ [
+  "^Dải\\ INR\\ ghi\\ nhận:\\ (.+?)\\ đến\\ (.+?)\\ \\(chênh\\ (.+?)\\)$",
+  "Recorded INR range: $1 to $2 (spread $3)"
+ ],
+ [
+  "^Giới\\ tính\\ ghi\\ nhận:\\ (.+?)$",
+  "Recorded sex: $1"
+ ],
+ [
+  "^Hai\\ thuốc\\ khác\\ hoạt\\ chất\\ nhưng\\ cùng\\ nhóm\\ dược\\ lý\\ \\((.+?)\\)\\ —\\ kiểm\\ tra\\ có\\ cần\\ dùng\\ đồng\\ thời\\ hay\\ là\\ sai\\ sót\\ quên\\ ngừng\\ thuốc\\ cũ\\.$",
+  "Two different drugs in the same pharmacological class ($1) - check whether concurrent use is intended or the old drug was not stopped by mistake."
+ ],
+ [
+  "^Huyết\\ áp\\ tâm\\ thu\\ ghi\\ nhận\\ gần\\ nhất:\\ (.+?)\\ mmHg$",
+  "Latest recorded systolic BP: $1 mmHg"
+ ],
+ [
+  "^Huyết\\ áp\\ (.+?)/(.+?),\\ lactate\\ (.+?)\\ mmol/L,\\ nhiệt\\ độ\\ (.+?)\\ độ$",
+  "BP $1/$2, lactate $3 mmol/L, temperature $4 °C"
+ ],
+ [
+  "^Hệ\\ thống\\ hiện\\ chỉ\\ trích\\ xuất\\ được\\ đúng\\ 1\\ chuyển\\ đạo\\ đã\\ chọn\\ \\((.+?)\\)\\.\\ Các\\ nhận\\ định\\ ST\\-T/trục\\ dưới\\ đây\\ được\\ lấy\\ từ\\ báo\\ cáo\\ máy\\ ECG\\ gốc,\\ chưa\\ được\\ AI\\ xác\\ minh\\ độc\\ lập\\ từ\\ đủ\\ 12\\ chuyển\\ đạo\\.$",
+  "The system extracted only the 1 selected lead ($1). The ST-T/axis findings below come from the original ECG machine report and were not independently verified by AI across all 12 leads."
+ ],
+ [
+  "^Kali\\ (.+?)\\ mmol/L\\ \\(trên\\ 5\\.5\\)$",
+  "Potassium $1 mmol/L (above 5.5)"
+ ],
+ [
+  "^Kali\\ (.+?)\\ mmol/L\\ \\(trên\\ 6\\.0\\)$",
+  "Potassium $1 mmol/L (above 6.0)"
+ ],
+ [
+  "^NT\\-proBNP\\ (.+?)\\ pg/mL\\ \\(rất\\ cao\\)\\ kèm\\ chẩn\\ đoán\\ suy\\ tim$",
+  "NT-proBNP $1 pg/mL (very high) with a heart failure diagnosis"
+ ],
+ [
+  "^Na\\ (.+?)\\ mmol/L\\ \\(dưới\\ 125\\)$",
+  "Na $1 mmol/L (below 125)"
+ ],
+ [
+  "^Na\\ (.+?)\\ mmol/L\\ \\(dưới\\ 135\\)$",
+  "Na $1 mmol/L (below 135)"
+ ],
+ [
+  "^Nhịp\\ thở\\ (.+?)\\ lần/phút$",
+  "Respiratory rate $1/min"
+ ],
+ [
+  "^Ra\\ viện\\ (.+?)\\ ngày\\ trước,\\ nhưng\\ xét\\ nghiệm\\ gần\\ nhất\\ trong\\ hồ\\ sơ\\ vẫn\\ từ\\ trước/đúng\\ ngày\\ ra\\ viện\\.$",
+  "Discharged $1 days ago, but the latest labs in the record are still from before/on the discharge date."
+ ],
+ [
+  "^SpO2\\ (.+?)%\\ \\(dưới\\ 92%\\)$",
+  "SpO2 $1% (below 92%)"
+ ],
+ [
+  "^SpO2\\ (.+?)%,\\ nhịp\\ thở\\ (.+?)\\ lần/phút$",
+  "SpO2 $1%, respiratory rate $2/min"
+ ],
+ [
+  "^Sốt\\ (.+?)\\ độ,\\ lactate\\ (.+?)\\ mmol/L,\\ huyết\\ áp\\ tâm\\ thu\\ (.+?)\\ mmHg$",
+  "Fever $1 °C, lactate $2 mmol/L, systolic BP $3 mmHg"
+ ],
+ [
+  "^TTR\\ (.+?)%\\ dưới\\ ngưỡng\\ (.+?)%\\ —\\ chống\\ đông\\ chưa\\ ổn\\ định,\\ cần\\ xem\\ lại\\ liều/tuân\\ thủ\\ điều\\ trị\\.$",
+  "TTR $1% below the $2% threshold; anticoagulation is not stable, review dose/adherence."
+ ],
+ [
+  "^TTR\\ (.+?)%\\ đạt\\ ngưỡng\\ ổn\\ định\\ tham\\ khảo\\ \\((.+?)%\\)\\.$",
+  "TTR $1% meets the reference stability threshold ($2%)."
+ ],
+ [
+  "^Thuốc\\ đang\\ dùng:\\ DOAC\\ \\((.+?)\\)\\.\\ Không\\ chỉ\\ định\\ theo\\ dõi\\ bằng\\ INR/TTR\\.\\ Cần\\ theo\\ dõi:\\ chức\\ năng\\ thận\\ \\(eGFR/CrCl\\)\\ định\\ kỳ\\.$",
+  "Current drug: DOAC ($1). INR/TTR monitoring does not apply. Monitor renal function (eGFR/CrCl) regularly."
+ ],
+ [
+  "^Tuổi\\ (.+?)$",
+  "Age $1"
+ ],
+ [
+  "^Tuổi\\ (.+?)\\ \\(dưới\\ 65\\)$",
+  "Age $1 (under 65)"
+ ],
+ [
+  "^Van\\ cơ\\ học\\ cần\\ theo\\ dõi\\ INR\\ định\\ kỳ;\\ hồ\\ sơ\\ hiện\\ chỉ\\ có\\ (.+?)\\ lần\\ đo,\\ cần\\ tối\\ thiểu\\ 3\\ lần\\ để\\ ước\\ tính\\ độ\\ ổn\\ định\\.$",
+  "Mechanical valves need regular INR monitoring; the record has only $1 measurements, at least 3 are needed to estimate stability."
+ ],
+ [
+  "^Van\\ nguy\\ cơ\\ thấp\\ \\(On\\-X/ATS/Medtronic\\ Open\\ Pivot/St\\ Jude\\),\\ (.+?),\\ có\\ yếu\\ tố\\ nguy\\ cơ$",
+  "Low-risk valve (On-X/ATS/Medtronic Open Pivot/St Jude), $1, with risk factors"
+ ],
+ [
+  "^Van\\ nguy\\ cơ\\ thấp,\\ (.+?),\\ không\\ yếu\\ tố\\ nguy\\ cơ\\ —\\ ESC/EACTS\\ CHỈ\\ ghi\\ 1\\ điểm\\ mục\\ tiêu\\ \\(2\\.5\\),\\ KHÔNG\\ ghi\\ khoảng\\ dao\\ động\\.\\ Hệ\\ thống\\ KHÔNG\\ tự\\ suy\\ diễn\\ khoảng\\ —\\ cần\\ chuyên\\ gia\\ lâm\\ sàng\\ xác\\ nhận\\ khoảng\\ dao\\ động\\ hợp\\ lý\\ trước\\ khi\\ tính\\ TTR\\.$",
+  "Low-risk valve, $1, no risk factors. ESC/EACTS gives only a single target (2.5), not a range. The system does NOT infer a range; a clinical expert must confirm an acceptable range before TTR is computed."
+ ],
+ [
+  "^Van\\ nguy\\ cơ\\ thấp,\\ (.+?),\\ không\\ yếu\\ tố\\ nguy\\ cơ\\ —\\ ESC/EACTS\\ CHỈ\\ ghi\\ 1\\ điểm\\ mục\\ tiêu\\ \\(3\\.0\\),\\ KHÔNG\\ ghi\\ khoảng\\ dao\\ động\\.\\ Hệ\\ thống\\ KHÔNG\\ tự\\ suy\\ diễn\\ khoảng\\ —\\ cần\\ chuyên\\ gia\\ lâm\\ sàng\\ xác\\ nhận\\ khoảng\\ dao\\ động\\ hợp\\ lý\\ trước\\ khi\\ tính\\ TTR\\.$",
+  "Low-risk valve, $1, no risk factors. ESC/EACTS gives only a single target (3.0), not a range. The system does NOT infer a range; a clinical expert must confirm an acceptable range before TTR is computed."
+ ],
+ [
+  "^Van\\ nguy\\ cơ\\ trung\\ bình\\ \\(CarboMedics/Sorin\\ BiCarbon\\),\\ (.+?),\\ có\\ yếu\\ tố\\ nguy\\ cơ$",
+  "Medium-risk valve (CarboMedics/Sorin BiCarbon), $1, with risk factors"
+ ],
+ [
+  "^Van\\ nguy\\ cơ\\ trung\\ bình,\\ (.+?),\\ không\\ yếu\\ tố\\ nguy\\ cơ\\ —\\ ESC/EACTS\\ CHỈ\\ ghi\\ 1\\ điểm\\ mục\\ tiêu\\ \\(3\\.0\\),\\ KHÔNG\\ ghi\\ khoảng\\ dao\\ động\\.\\ Hệ\\ thống\\ KHÔNG\\ tự\\ suy\\ diễn\\ khoảng\\ —\\ cần\\ chuyên\\ gia\\ lâm\\ sàng\\ xác\\ nhận\\ khoảng\\ dao\\ động\\ hợp\\ lý\\ trước\\ khi\\ tính\\ TTR\\.$",
+  "Medium-risk valve, $1, no risk factors. ESC/EACTS gives only a single target (3.0), not a range. The system does NOT infer a range; a clinical expert must confirm an acceptable range before TTR is computed."
+ ],
+ [
+  "^Van\\ nguy\\ cơ\\ trung\\ bình,\\ (.+?),\\ không\\ yếu\\ tố\\ nguy\\ cơ\\ —\\ ESC/EACTS\\ CHỈ\\ ghi\\ 1\\ điểm\\ mục\\ tiêu\\ \\(3\\.5\\),\\ KHÔNG\\ ghi\\ khoảng\\ dao\\ động\\.\\ Hệ\\ thống\\ KHÔNG\\ tự\\ suy\\ diễn\\ khoảng\\ —\\ cần\\ chuyên\\ gia\\ lâm\\ sàng\\ xác\\ nhận\\ khoảng\\ dao\\ động\\ hợp\\ lý\\ trước\\ khi\\ tính\\ TTR\\.$",
+  "Medium-risk valve, $1, no risk factors. ESC/EACTS gives only a single target (3.5), not a range. The system does NOT infer a range; a clinical expert must confirm an acceptable range before TTR is computed."
+ ],
+ [
+  "^eGFR\\ (.+?)\\ mL/phút/1\\.73m2$",
+  "eGFR $1 mL/min/1.73m2"
+ ],
+ [
+  "^eGFR\\ (.+?)\\ mL/phút/1\\.73m2\\ \\(CKD\\-EPI\\ 2021\\)$",
+  "eGFR $1 mL/min/1.73m2 (CKD-EPI 2021)"
+ ],
+ [
+  "^eGFR\\ (.+?)\\ mL/phút/1\\.73m2\\ \\(dưới\\ 30\\)$",
+  "eGFR $1 mL/min/1.73m2 (below 30)"
+ ],
+ [
+  "^eGFR\\ (.+?)\\ mL/phút/1\\.73m2,\\ creatinin\\ (.+?)\\ µmol/L$",
+  "eGFR $1 mL/min/1.73m2, creatinine $2 µmol/L"
+ ],
+ [
+  "^(.+?)x(.+?)\\ \\(ước\\ lượng\\ chia\\ đều\\ theo\\ tỉ\\ lệ\\)$",
+  "$1x$2 (estimated even split)"
+ ],
+ [
+  "^Đang\\ phối\\ hợp\\ VKA\\ \\((.+?)\\)\\ với\\ kháng\\ kết\\ tập\\ tiểu\\ cầu\\ \\((.+?)\\)\\.\\ Cần\\ chỉ\\ định\\ rõ\\ ràng\\ \\(ví\\ dụ\\ PCI/stent/ACS\\ gần\\ đây\\)$",
+  "VKA ($1) combined with an antiplatelet ($2). A clear indication is required (e.g. recent PCI/stent/ACS)"
+ ],
+ [
+  "^Đang\\ phối\\ hợp\\ VKA\\ \\((.+?)\\)\\ với\\ (.+?)\\ thuốc\\ kháng\\ kết\\ tập\\ tiểu\\ cầu\\ \\((.+?)\\)\\.\\ Đây\\ là\\ tình\\ huống\\ NGUY\\ CƠ\\ CHẢY\\ MÁU\\ RẤT\\ CAO\\ —\\ không\\ nên\\ kéo\\ dài\\ mặc\\ định,\\ cần\\ ngày\\ đánh\\ giá\\ lại\\ rõ\\ ràng\\.$",
+  "VKA ($1) combined with $2 antiplatelet drugs ($3). This is a VERY HIGH BLEEDING RISK situation; do not continue by default, set a clear review date."
+ ],
+ [
+  "^Ảnh\\ có\\ chiều\\ cao\\ thấp\\ \\((.+?)px\\)\\ —\\ dải\\ đo\\ lưới\\ ở\\ mép\\ trên\\ chỉ\\ (.+?)px,\\ không\\ đủ\\ để\\ trung\\ bình\\ hóa\\ nhiễu\\ ảnh\\.\\ Tỉ\\ lệ\\ px/mm\\ và\\ nhịp\\ tim\\ suy\\ ra\\ có\\ thể\\ kém\\ chính\\ xác\\ hơn\\ ảnh\\ đầy\\ đủ\\ 12\\ chuyển\\ đạo,\\ cần\\ đối\\ chiếu\\ cẩn\\ thận\\ với\\ số\\ máy\\ đo\\ gốc\\.$",
+  "Low image height ($1px): the grid band at the top margin is only $2px, not enough to average out noise. px/mm and heart rate may be less accurate than a full 12-lead image; compare carefully with the machine readout."
+ ],
+ [
+  "^KHÔNG\\ dò\\ được\\ ranh\\ giới\\ rõ\\ ràng\\ giữa\\ các\\ ô\\ chuyển\\ đạo\\ \\(ảnh\\ không\\ có\\ khoảng\\ trắng\\ phân\\ cách\\ thật,\\ thường\\ gặp\\ ở\\ ảnh\\ scan/chụp\\ giấy\\ in\\ liên\\ tục\\)\\ —\\ hệ\\ thống\\ CHIA\\ ĐỀU\\ theo\\ tỉ\\ lệ,\\ giả\\ định\\ bố\\ cục\\ (.+?)\\ cột\\ x\\ (.+?)\\ hàng\\.\\ Ranh\\ giới\\ mỗi\\ ô\\ có\\ thể\\ lệch\\ vài\\ mm\\ so\\ với\\ ảnh\\ gốc\\.\\ BẮT\\ BUỘC\\ bác\\ sĩ\\ đối\\ chiếu\\ từng\\ ô\\ với\\ ảnh\\ gốc\\ trước\\ khi\\ dùng\\ số\\ liệu,\\ và\\ có\\ thể\\ cần\\ sửa\\ lại\\ tên\\ chuyển\\ đạo\\ nếu\\ bố\\ cục\\ thật\\ khác\\ giả\\ định\\ này\\.$",
+  "No clear boundaries between lead cells were detected (no real white separators, common in scans/photos of continuous printouts); the system split the image evenly, assuming a $1 columns x $2 rows layout. Each cell boundary may be off by a few mm. The physician MUST check each cell against the original before using the values, and may need to correct lead names if the real layout differs."
+ ]
+]

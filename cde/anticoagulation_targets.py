@@ -180,12 +180,12 @@ def get_mechanical_valve_target(text: str, ef_percent=None) -> dict:
                 esc_result = ({"target_min": None, "target_max": None, "target_mid": 3.0, "chi_la_diem_don": True,
                                 "ghi_chu": f"Van nguy cơ thấp, {pos_label}, không yếu tố nguy cơ — ESC/EACTS CHỈ ghi 1 điểm "
                                            f"mục tiêu (3.0), KHÔNG ghi khoảng dao động. Hệ thống KHÔNG tự suy diễn khoảng — "
-                                           f"cần Tấn/Ngân xác nhận khoảng dao động hợp lý trước khi tính TTR."}
+                                           f"cần chuyên gia lâm sàng xác nhận khoảng dao động hợp lý trước khi tính TTR."}
                               if is_mitral else
                               {"target_min": None, "target_max": None, "target_mid": 2.5, "chi_la_diem_don": True,
                                 "ghi_chu": f"Van nguy cơ thấp, {pos_label}, không yếu tố nguy cơ — ESC/EACTS CHỈ ghi 1 điểm "
                                            f"mục tiêu (2.5), KHÔNG ghi khoảng dao động. Hệ thống KHÔNG tự suy diễn khoảng — "
-                                           f"cần Tấn/Ngân xác nhận khoảng dao động hợp lý trước khi tính TTR."})
+                                           f"cần chuyên gia lâm sàng xác nhận khoảng dao động hợp lý trước khi tính TTR."})
         else:  # medium
             if has_risk_factor:
                 esc_result = ({"target_min": 3.5, "target_max": 4.5, "target_mid": 4.0,
@@ -197,12 +197,12 @@ def get_mechanical_valve_target(text: str, ef_percent=None) -> dict:
                 esc_result = ({"target_min": None, "target_max": None, "target_mid": 3.5, "chi_la_diem_don": True,
                                 "ghi_chu": f"Van nguy cơ trung bình, {pos_label}, không yếu tố nguy cơ — ESC/EACTS CHỈ ghi 1 "
                                            f"điểm mục tiêu (3.5), KHÔNG ghi khoảng dao động. Hệ thống KHÔNG tự suy diễn "
-                                           f"khoảng — cần Tấn/Ngân xác nhận khoảng dao động hợp lý trước khi tính TTR."}
+                                           f"khoảng — cần chuyên gia lâm sàng xác nhận khoảng dao động hợp lý trước khi tính TTR."}
                               if is_mitral else
                               {"target_min": None, "target_max": None, "target_mid": 3.0, "chi_la_diem_don": True,
                                 "ghi_chu": f"Van nguy cơ trung bình, {pos_label}, không yếu tố nguy cơ — ESC/EACTS CHỈ ghi 1 "
                                            f"điểm mục tiêu (3.0), KHÔNG ghi khoảng dao động. Hệ thống KHÔNG tự suy diễn "
-                                           f"khoảng — cần Tấn/Ngân xác nhận khoảng dao động hợp lý trước khi tính TTR."})
+                                           f"khoảng — cần chuyên gia lâm sàng xác nhận khoảng dao động hợp lý trước khi tính TTR."})
 
     # ── AHA/ACC: đơn giản hơn, có ngoại lệ On-X sau 3 tháng ─────────────────
     ahaacc_result = None

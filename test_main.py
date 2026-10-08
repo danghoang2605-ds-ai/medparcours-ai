@@ -355,13 +355,8 @@ def test_idempotent_three_runs(client, mock_anthropic):
         assert resp.json()["success"] is True
 
 
-# ─── 11. "Động cơ kép" VNPT — fallback Claude khi VNPT lỗi/chưa cấu hình ──
-# Môi trường test KHÔNG có VNPT_TOKEN_ID/KEY/ACCESS_TOKEN -> VNPTClient()
-# luôn raise VNPTAPIError ngay khi khởi tạo -> luôn rơi về Claude. Test này
-# xác nhận đúng hành vi "AN TOÀN" đó, và lỗi VNPT không lộ ra response.
-def test_chat_roi_ve_claude_khi_vnpt_chua_cau_hinh(client, mock_anthropic, monkeypatch):
-    for k in ("VNPT_TOKEN_ID", "VNPT_TOKEN_KEY", "VNPT_ACCESS_TOKEN"):
-        monkeypatch.delenv(k, raising=False)
+# ─── 11. Claude-only pipeline (no third-party OCR/voice providers) ────────
+def test_clinical_chat_uses_claude(client, mock_anthropic):
     resp = client.post("/chat", json={
         "question": "Bệnh nhân có dùng thuốc chống đông không?",
         "ho_so_text": "Hồ sơ test: bệnh nhân dùng Acenocoumarol.",
@@ -369,245 +364,63 @@ def test_chat_roi_ve_claude_khi_vnpt_chua_cau_hinh(client, mock_anthropic, monke
     })
     assert resp.status_code == 200
     data = resp.json()
+    assert data["provider"] == "claude"
     assert "answer" in data
-    assert "loi" not in data and "error" not in data  # không lộ lỗi VNPT ra response
 
 
-def test_analyze_anh_roi_ve_claude_vision_khi_vnpt_chua_cau_hinh(client, mock_anthropic, monkeypatch):
-    """Upload ảnh (PNG) qua /analyze — VNPT chưa cấu hình nên phải tự rơi về
-    Claude Vision (call_claude_with_image), KHÔNG trả lỗi 500 ra frontend."""
-    for k in ("VNPT_TOKEN_ID", "VNPT_TOKEN_KEY", "VNPT_ACCESS_TOKEN"):
-        monkeypatch.delenv(k, raising=False)
-    # Ảnh PNG 1x1 hợp lệ tối thiểu (đủ để qua bước decode ảnh của thư viện)
+def test_image_upload_goes_straight_to_claude_vision(client, mock_anthropic):
     png_1x1 = base64.b64decode(_valid_png_b64())
-    resp = client.post("/analyze", files={
-        "file": ("scan.png", io.BytesIO(png_1x1), "image/png")
+    resp = client.post("/analyze", files={"file": ("scan.png", io.BytesIO(png_1x1), "image/png")})
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+
+# ─── 12. Product-support assistant (Claude, no patient data) ──────────────
+def test_system_chat_uses_claude_support_prompt(client, mock_anthropic):
+    resp = client.post("/chat", json={
+        "question": "Làm sao để xuất báo cáo?",
+        "assistant_type": "system",
+        "ho_so_text": "",
+        "chat_history": [],
     })
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is True  # dùng mock_anthropic Claude Vision path, không sập
+    assert resp.json()["provider"] == "claude-support"
+    system = mock_anthropic[-1]["system"]
+    system_text = system[0]["text"] if isinstance(system, list) else system
+    assert system_text.startswith(main.SUPPORT_SYSTEM)  # no patient record leaks into support chat
+    assert "HỒ SƠ BỆNH NHÂN" not in system_text
 
 
-# ─── 12. FAQ Bot & SmartVoice — luồng fallback an toàn ────────────────────
-def test_faq_bot_fallback_khi_thieu_bot_id(client, monkeypatch):
-    """Chưa có VNPT_FAQ_BOT_ID -> phải trả đúng câu bảo trì, KHÔNG lỗi 500."""
-    monkeypatch.delenv("VNPT_FAQ_BOT_ID", raising=False)
+def test_faq_bot_answers_via_claude(client, mock_anthropic):
     resp = client.post("/faq-bot", json={"question": "MedParcours là gì?"})
     assert resp.status_code == 200
+    assert resp.json()["provider"] == "claude-support"
+
+
+def test_faq_bot_degrades_gracefully_when_claude_fails(client):
+    with patch("main._chat_via_claude", side_effect=RuntimeError("boom")):
+        resp = client.post("/faq-bot", json={"question": "MedParcours là gì?"})
+    assert resp.status_code == 200
+    assert resp.json()["provider"] == "fallback"
     assert "bảo trì" in resp.json()["text"]
 
 
-def test_faq_bot_thanh_cong_khi_co_du_cau_hinh(client, monkeypatch):
-    """Mock requests.post trả đúng cấu trúc card_data thật (theo docx) -> lấy
-    đúng text từ card loại 'text'."""
-    monkeypatch.setenv("VNPT_FAQ_TOKEN_ID", "tid")
-    monkeypatch.setenv("VNPT_FAQ_TOKEN_KEY", "tkey")
-    monkeypatch.setenv("VNPT_FAQ_ACCESS_TOKEN", "tok")
-    monkeypatch.setenv("VNPT_FAQ_BOT_ID", "bot-abc-123")
-    fake_resp = MagicMock()
-    fake_resp.raise_for_status = lambda: None
-    fake_resp.json.return_value = {
-        "object": {"sb": {"card_data": [
-            {"type": "text", "text": "MedParcours là trợ lý AI hỗ trợ đọc hồ sơ bệnh án."}
-        ]}}
-    }
-    with patch("main.requests.post") as mock_post:
-        mock_ctx = MagicMock()
-        mock_ctx.__enter__ = MagicMock(return_value=fake_resp)
-        mock_ctx.__exit__ = MagicMock(return_value=False)
-        fake_resp.status_code = 200
-        fake_resp.iter_lines.return_value = [
-            'data:{"object":{"sb":{"card_data":[{"type":"text","text":"MedParcours là trợ lý AI hỗ trợ đọc hồ sơ bệnh án."}]}}}'
-        ]
-        mock_post.return_value = mock_ctx
-        resp = client.post("/faq-bot", json={"question": "MedParcours là gì?"})
-    assert resp.status_code == 200
-    assert "trợ lý AI" in resp.json()["text"]
+def test_faq_bot_rejects_empty_question(client):
+    assert client.post("/faq-bot", json={"question": "   "}).status_code == 400
 
 
-def test_voice_tts_fallback_dung_local_tts(client):
-    """SmartVoice TTS chưa triển khai -> luôn trả use_local_tts=true."""
-    resp = client.post("/voice/tts", json={"text": "Cảnh báo điện cực tuột"})
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is False
-    assert data["use_local_tts"] is True
+# ─── 13. Removed integrations stay removed ────────────────────────────────
+@pytest.mark.parametrize("path", [
+    "/voice/tts", "/voice/stt", "/ekyc/ocr-cccd", "/ekyc/face-compare",
+    "/ekyc/face-liveness", "/consultation/summarize-audio",
+])
+def test_removed_endpoints_return_404(client, path):
+    assert client.post(path).status_code == 404
 
 
-def test_voice_stt_fallback_error_code(client):
-    """SmartVoice STT chưa triển khai -> đúng error_code STT_FALLBACK, không sập."""
-    resp = client.post("/voice/stt", files={
-        "file": ("ghi_am.wav", io.BytesIO(b"fake-audio-bytes"), "audio/wav")
-    })
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is False
-    assert data["error_code"] == "STT_FALLBACK"
-    assert data["text"] == ""
-
-
-# ─── eKYC (OCR CCCD + face liveness) ──────────────────────────────────────
-def test_ekyc_ocr_cccd_thanh_cong(client, monkeypatch):
-    monkeypatch.setenv("VNPT_TOKEN_ID", "tid")
-    monkeypatch.setenv("VNPT_TOKEN_KEY", "tkey")
-    monkeypatch.setenv("VNPT_ACCESS_TOKEN", "tok")
-    with patch("vnpt_client.VNPTClient.ocr_id_card", return_value={"id": "001099012345", "name": "NGUYEN VAN A"}):
-        resp = client.post("/ekyc/ocr-cccd", files={"file_front": ("cccd.jpg", _valid_png_b64_bytes(), "image/jpeg")})
-    assert resp.status_code == 200
-    assert resp.json()["data"]["name"] == "NGUYEN VAN A"
-
-
-def test_ekyc_ocr_cccd_loi_tra_502_khong_bia_du_lieu(client):
-    """Khác TTS/STT — lỗi eKYC KHÔNG được âm thầm fallback giả thành công,
-    phải báo lỗi rõ ràng cho bác sĩ."""
-    with patch("vnpt_client.VNPTClient.ocr_id_card", side_effect=RuntimeError("VNPT timeout")):
-        resp = client.post("/ekyc/ocr-cccd", files={"file_front": ("cccd.jpg", _valid_png_b64_bytes(), "image/jpeg")})
-    assert resp.status_code == 502
-
-
-def test_ekyc_face_liveness_thanh_cong(client, monkeypatch):
-    monkeypatch.setenv("VNPT_TOKEN_ID", "tid")
-    monkeypatch.setenv("VNPT_TOKEN_KEY", "tkey")
-    monkeypatch.setenv("VNPT_ACCESS_TOKEN", "tok")
-    with patch("vnpt_client.VNPTClient.face_liveness", return_value={"liveness": "success", "liveness_msg": "Người thật", "is_real": True}):
-        resp = client.post("/ekyc/face-liveness", files={"file": ("face.jpg", _valid_png_b64_bytes(), "image/jpeg")})
-    assert resp.status_code == 200
-    assert resp.json()["is_real"] is True
-
-
-def test_ekyc_face_liveness_loi_vnpt_tra_ve_demo_fallback(client):
-    """Quyết định TẠM THỜI cho demo: nếu API thật lỗi (400/timeout...),
-    KHÔNG chặn — tự báo thành công kèm cờ demo_fallback=True để frontend
-    biết rõ đây không phải xác thực thật."""
-    with patch("vnpt_client.VNPTClient.face_liveness", side_effect=RuntimeError("VNPT timeout")):
-        resp = client.post("/ekyc/face-liveness", files={"file": ("face.jpg", _valid_png_b64_bytes(), "image/jpeg")})
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is True
-    assert data["demo_fallback"] is True
-    assert data["is_real"] is True
-
-
-# ─── Tóm tắt hội chẩn bằng giọng nói (VNPT + Claude fallback) ─────────────
-def test_consultation_summarize_vnpt_thanh_cong(client, monkeypatch):
-    monkeypatch.setenv("VNPT_TOKEN_ID", "tid")
-    monkeypatch.setenv("VNPT_TOKEN_KEY", "tkey")
-    monkeypatch.setenv("VNPT_ACCESS_TOKEN", "tok")
-    with patch("vnpt_client.VNPTClient.summarize_meeting_audio", return_value="Tóm tắt: bệnh nhân ổn định."):
-        resp = client.post("/consultation/summarize-audio", files={"file": ("meeting.wav", _valid_png_b64_bytes(), "audio/wav")})
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["source"] == "VNPT_AI"
-    assert "ổn định" in data["summary_raw"]
-
-
-def test_consultation_summarize_fallback_claude_tu_transcript_that(client, monkeypatch):
-    """LUẬT FALLBACK THÉP: khi VNPT lỗi, phải chuyển ĐÚNG transcript thật
-    (từ STT) sang Claude tóm tắt — không được bịa nội dung không liên quan
-    cuộc họp thật."""
-    monkeypatch.setenv("VNPT_TOKEN_ID", "tid")
-    monkeypatch.setenv("VNPT_TOKEN_KEY", "tkey")
-    monkeypatch.setenv("VNPT_ACCESS_TOKEN", "tok")
-    fake_claude_json = json.dumps({
-        "tom_tat_ca_benh": "Bệnh nhân sau mổ thay van, ổn định",
-        "y_kien_hoi_chan": ["Khoa Tim mạch đề nghị tiếp tục theo dõi INR"],
-        "huong_xu_tri": ["Tái khám sau 1 tuần"],
-    }, ensure_ascii=False)
-    with patch("vnpt_client.VNPTClient.summarize_meeting_audio", side_effect=RuntimeError("VNPT lỗi")), \
-         patch("vnpt_client.VNPTClient.speech_to_text", return_value="bệnh nhân sau mổ thay van ổn định cần theo dõi INR") as mock_stt, \
-         patch("main.call_claude", return_value=fake_claude_json):
-        resp = client.post("/consultation/summarize-audio", files={"file": ("meeting.wav", _valid_png_b64_bytes(), "audio/wav")})
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["source"] == "CLAUDE_FALLBACK"
-    assert data["transcript"] == "bệnh nhân sau mổ thay van ổn định cần theo dõi INR"
-    assert data["summary"]["tom_tat_ca_benh"] == "Bệnh nhân sau mổ thay van, ổn định"
-    mock_stt.assert_called_once()
-
-
-def test_consultation_summarize_ca_2_buoc_deu_loi_tra_502(client, monkeypatch):
-    """Nếu CẢ VNPT lẫn STT dự phòng đều lỗi -> báo lỗi rõ ràng, TUYỆT ĐỐI
-    không bịa nội dung tóm tắt giả."""
-    monkeypatch.setenv("VNPT_TOKEN_ID", "tid")
-    monkeypatch.setenv("VNPT_TOKEN_KEY", "tkey")
-    monkeypatch.setenv("VNPT_ACCESS_TOKEN", "tok")
-    with patch("vnpt_client.VNPTClient.summarize_meeting_audio", side_effect=RuntimeError("VNPT lỗi")), \
-         patch("vnpt_client.VNPTClient.speech_to_text", side_effect=RuntimeError("STT cũng lỗi")):
-        resp = client.post("/consultation/summarize-audio", files={"file": ("meeting.wav", _valid_png_b64_bytes(), "audio/wav")})
-    assert resp.status_code == 502
-
-
-def test_ekyc_ocr_khong_bi_chan_khi_the_khong_that_chi_canh_bao(client, monkeypatch):
-    """Bug thật đã sửa: card_liveness báo SAI (false positive) trên ảnh
-    thật hợp lệ khi test thực tế -> đổi từ chặn cứng sang CHỈ cảnh báo,
-    OCR vẫn chạy tiếp bình thường."""
-    monkeypatch.setenv("VNPT_TOKEN_ID", "tid")
-    monkeypatch.setenv("VNPT_TOKEN_KEY", "tkey")
-    monkeypatch.setenv("VNPT_ACCESS_TOKEN", "tok")
-    with patch("vnpt_client.VNPTClient.card_liveness", return_value={"is_real": False, "liveness_msg": "Nghi ngờ ảnh chụp lại"}), \
-         patch("vnpt_client.VNPTClient.ocr_id_card", return_value={"id": "001099012345", "name": "NGUYEN VAN A"}):
-        resp = client.post("/ekyc/ocr-cccd", files={"file_front": ("cccd.jpg", _valid_png_b64_bytes(), "image/jpeg")})
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["data"]["name"] == "NGUYEN VAN A"
-    assert data["card_warning"] == "Nghi ngờ ảnh chụp lại"
-
-
-def test_ekyc_ocr_van_chay_khi_card_liveness_loi_ky_thuat(client, monkeypatch):
-    """Nếu chính API card_liveness lỗi kỹ thuật (mất mạng) -> KHÔNG chặn
-    bác sĩ hợp lệ, vẫn cho OCR tiếp tục."""
-    monkeypatch.setenv("VNPT_TOKEN_ID", "tid")
-    monkeypatch.setenv("VNPT_TOKEN_KEY", "tkey")
-    monkeypatch.setenv("VNPT_ACCESS_TOKEN", "tok")
-    with patch("vnpt_client.VNPTClient.card_liveness", side_effect=RuntimeError("mat mang")), \
-         patch("vnpt_client.VNPTClient.ocr_id_card", return_value={"id": "001099012345", "name": "NGUYEN VAN A"}):
-        resp = client.post("/ekyc/ocr-cccd", files={"file_front": ("cccd.jpg", _valid_png_b64_bytes(), "image/jpeg")})
-    assert resp.status_code == 200
-
-
-def test_ekyc_face_compare_khop_thanh_cong(client, monkeypatch):
-    monkeypatch.setenv("VNPT_TOKEN_ID", "tid")
-    monkeypatch.setenv("VNPT_TOKEN_KEY", "tkey")
-    monkeypatch.setenv("VNPT_ACCESS_TOKEN", "tok")
-    with patch("vnpt_client.VNPTClient.face_compare", return_value={"msg": "MATCH", "is_match": True}):
-        resp = client.post("/ekyc/face-compare", files={
-            "file_cccd": ("cccd.jpg", _valid_png_b64_bytes(), "image/jpeg"),
-            "file_face": ("face.jpg", _valid_png_b64_bytes(), "image/jpeg"),
-        })
-    assert resp.status_code == 200
-    assert resp.json()["is_match"] is True
-
-
-def test_ekyc_face_compare_loi_tra_502(client):
-    with patch("vnpt_client.VNPTClient.face_compare", side_effect=RuntimeError("VNPT loi")):
-        resp = client.post("/ekyc/face-compare", files={
-            "file_cccd": ("cccd.jpg", _valid_png_b64_bytes(), "image/jpeg"),
-            "file_face": ("face.jpg", _valid_png_b64_bytes(), "image/jpeg"),
-        })
-    assert resp.status_code == 502
-
-
-def test_pdf_scan_fallback_qua_smartreader_thanh_cong(monkeypatch):
-    """PDF không có text layer (bản scan) -> trước đây báo lỗi ngay, giờ
-    thử SmartReader OCR trước khi bỏ cuộc. Test hàm dùng chung cho luồng
-    cập nhật hồ sơ (_extract_report_step1_from_upload)."""
-    monkeypatch.setenv("VNPT_TOKEN_ID", "tid")
-    monkeypatch.setenv("VNPT_TOKEN_KEY", "tkey")
-    monkeypatch.setenv("VNPT_ACCESS_TOKEN", "tok")
+def test_scanned_pdf_without_text_layer_raises_clear_error(monkeypatch):
     import main as main_module
-    monkeypatch.setattr(main_module, "extract_text_from_pdf", lambda path: {"text": "", "pages": 1, "method": "text", "ocr_pages": []})
-    with patch("vnpt_client.VNPTClient.extract_clinical_table", return_value="Nội dung OCR từ SmartReader") as mock_ocr, \
-         patch("main.call_claude", return_value='{"chan_doan_chinh": "test"}'):
-        result = main_module._extract_report_step1_from_upload("benh_an_scan.pdf", b"fake-pdf-bytes")
-    mock_ocr.assert_called_once()
-    assert result["chan_doan_chinh"] == "test"
-
-
-def test_pdf_scan_fallback_smartreader_cung_loi_bao_loi_ro(monkeypatch):
-    """Nếu SmartReader cũng lỗi (chưa cấu hình/API lỗi), phải báo lỗi rõ
-    ràng cho bác sĩ, không để lộ traceback thô."""
-    import main as main_module
-    monkeypatch.setattr(main_module, "extract_text_from_pdf", lambda path: {"text": "", "pages": 1, "method": "text", "ocr_pages": []})
-    with patch("vnpt_client.VNPTClient.extract_clinical_table", side_effect=RuntimeError("VNPT lỗi")):
-        with pytest.raises(ValueError, match="bản scan"):
-            main_module._extract_report_step1_from_upload("benh_an_scan.pdf", b"fake-pdf-bytes")
+    monkeypatch.setattr(main_module, "extract_text_from_pdf",
+                        lambda path: {"text": "", "pages": 1, "method": "text", "ocr_pages": []})
+    with pytest.raises(ValueError, match="bản scan"):
+        main_module._extract_report_step1_from_upload("benh_an_scan.pdf", b"fake-pdf-bytes")

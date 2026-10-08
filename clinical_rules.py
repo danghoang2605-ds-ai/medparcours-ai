@@ -169,6 +169,23 @@ FAVORABLE_RULES = [
 
 
 # ─── HÀM TÍNH eGFR (CKD-EPI 2021, không yếu tố chủng tộc) ──────────────────────
+def parse_sex(value) -> Optional[str]:
+    """Normalize a recorded sex to "male" / "female" / None.
+
+    Accepts Vietnamese and English ("Nam", "Nữ", "nam giới", "Male", "F"...).
+    Checks female first so "female" is never read as containing "male".
+    """
+    t = _strip_accents(str(value or "")).strip().lower()
+    if not t:
+        return None
+    words = set(t.replace("/", " ").replace("-", " ").split())
+    if words & {"nu", "female", "f", "woman"}:
+        return "female"
+    if words & {"nam", "male", "m", "man"}:
+        return "male"
+    return None
+
+
 def compute_egfr(creatinine_umol: Optional[float], age: Optional[int], sex_male: bool) -> Optional[int]:
     if not creatinine_umol or not age:
         return None
@@ -405,11 +422,15 @@ def build_trend_facts(report: dict) -> dict:
 # (xem ca mẫu: "ĐTĐ II", "HHoC", "ĐTN", "RLĐM" là viết tắt, không phải Có/Không
 # rạch ròi như form REDCap). Tấn/Ngân rà soát và bổ sung thêm khi gặp ca mới.
 CV_KEYWORDS = {
-    "suy_tim": ["suy tim", "EF giam", "phan suat tong mau giam", "rlcn tam thu"],
-    "tang_huyet_ap": ["tang huyet ap", "THA", "cao huyet ap"],
-    "dtd": ["dai thao duong", "ĐTĐ", "dtd type", "dtd ii", "dtd i", "hba1c"],
+    "suy_tim": ["suy tim", "EF giam", "phan suat tong mau giam", "rlcn tam thu",
+                "heart failure", "reduced ef", "hfref", "lv dysfunction", "systolic dysfunction"],
+    "tang_huyet_ap": ["tang huyet ap", "THA", "cao huyet ap",
+                      "hypertension", "htn", "high blood pressure"],
+    "dtd": ["dai thao duong", "ĐTĐ", "dtd type", "dtd ii", "dtd i", "hba1c",
+            "diabetes", "t2dm", "t1dm"],
     "dot_quy_tia_huyet_khoi": [
-        "dot quy", "tai bien mach mau nao", "nhoi mau nao", "tia ",
+        "dot quy", "tai bien mach mau nao", "nhoi mau nao", "tia",
+        "stroke", "cerebrovascular accident", "cva", "transient ischemic attack",
         "thieu mau nao cuc bo",
         # LƯU Ý: ĐÃ BỎ "thuyen tac"/"huyet khoi" — 2 từ này quá rộng, thường
         # xuất hiện trong câu CẢNH BÁO NGUY CƠ DỰ PHÒNG (vd "nguy cơ huyết
@@ -430,14 +451,19 @@ CV_KEYWORDS = {
         "benh mach vanh", "dat stent", "stent dmv", "stent mach vanh",
         "can thiep mach vanh", "dat gia do mach vanh", "bac cau mach vanh",
         "cabg", "pci",
+        "myocardial infarction", "peripheral artery disease", "carotid stenosis",
+        "atherosclerosis", "coronary artery disease", "cad", "coronary stent",
+        "coronary bypass",
     ],
 }
 
 # Từ khóa riêng cho HAS-BLED (một số trùng CV_KEYWORDS, tách để rõ nghĩa)
 HB_KEYWORDS = {
-    "benh_gan": ["xo gan", "viem gan", "suy gan", "benh gan man"],
+    "benh_gan": ["xo gan", "viem gan", "suy gan", "benh gan man",
+                 "cirrhosis", "hepatitis", "liver failure", "chronic liver disease"],
     "tien_su_chay_mau": [
         "xuat huyet", "tien su chay mau", "loet da day xuat huyet",
+        "hemorrhage", "haemorrhage", "history of bleeding", "gi bleed", "bleeding ulcer",
         # LƯU Ý: ĐÃ BỎ "chay mau" đơn lẻ — quá rộng, thường khớp nhầm câu
         # CẢNH BÁO NGUY CƠ DỰ PHÒNG (vd "nguy cơ chảy máu" khi INR cao ở
         # bệnh nhân van cơ học), không phải tiền sử chảy máu THẬT đã xảy ra.
@@ -445,16 +471,25 @@ HB_KEYWORDS = {
         # CV_KEYWORDS["dot_quy_tia_huyet_khoi"]. Nếu cần bắt rộng hơn, ghép
         # với cụm "tiền sử" đứng trước, để Tấn/Ngân quyết định cụm cụ thể.
     ],
-    "thuoc_tang_chay_mau": ["nsaid", "aspirin", "khang ket tap tieu cau", "ibuprofen", "diclofenac"],
-    "ruou": ["nghien ruou", "uong ruou nhieu", "lam dung ruou", "ruou bia"],
+    "thuoc_tang_chay_mau": ["nsaid", "aspirin", "khang ket tap tieu cau", "ibuprofen", "diclofenac",
+                            "antiplatelet", "clopidogrel"],
+    "ruou": ["nghien ruou", "uong ruou nhieu", "lam dung ruou", "ruou bia",
+             "alcohol abuse", "alcoholism", "heavy drinking"],
 }
+
+
+def _kw_pattern(kw: str) -> "re.Pattern":
+    """Match a keyword only as a whole word/phrase. Plain substring search
+    caused false positives, e.g. the hypertension abbreviation "tha" matched
+    "thay van" (valve replacement) and English words like "that"."""
+    return re.compile(r"(?<![a-z0-9])" + re.escape(_strip_accents(kw).strip()) + r"(?![a-z0-9])")
 
 
 def _text_has_any(haystack_stripped: str, keywords: list) -> bool:
     """Khớp keyword thô, KHÔNG xét phủ định. Dùng cho trường hợp phủ định
     không có ý nghĩa (vd dò tên thuốc trong danh sách thuốc — không ai viết
     "không dùng metformin" trong danh sách thuốc đang dùng)."""
-    return any(_strip_accents(kw) in haystack_stripped for kw in keywords)
+    return any(_kw_pattern(kw).search(haystack_stripped) for kw in keywords)
 
 
 # Cụm phủ định tiếng Việt thường gặp trong bệnh án khi mô tả KHÔNG có bệnh/
@@ -463,6 +498,8 @@ def _text_has_any(haystack_stripped: str, keywords: list) -> bool:
 NEGATION_PHRASES = [
     "khong ghi nhan", "khong co", "khong bi", "chua tung", "chua co",
     "khong phat hien", "phu nhan", "loai tru", "khong phai",
+    "no history of", "no known", "denies", "denied", "negative for", "without",
+    "ruled out", "no evidence of", "not ",
     # "khong phai" bổ sung sau khi Disease Classifier (cde/engine.py) phát
     # hiện qua test: câu "đã sửa van. Không phải van cơ học." vẫn bị tính là
     # CÓ van cơ học, vì cụm phủ định cũ không bắt được dạng "không phải X".
@@ -485,17 +522,10 @@ def _text_has_any_positive(haystack_stripped: str, keywords: list) -> bool:
     hiện phổ biến trong bệnh án ("không ghi nhận đái tháo đường").
     """
     for kw in keywords:
-        kw_stripped = _strip_accents(kw)
-        start = 0
-        while True:
-            idx = haystack_stripped.find(kw_stripped, start)
-            if idx == -1:
-                break
-            window_start = max(0, idx - NEGATION_WINDOW_CHARS)
-            window = haystack_stripped[window_start:idx]
+        for m in _kw_pattern(kw).finditer(haystack_stripped):
+            window = haystack_stripped[max(0, m.start() - NEGATION_WINDOW_CHARS):m.start()]
             if not any(neg in window for neg in NEGATION_PHRASES):
-                return True  # tìm được 1 lần khớp KHÔNG bị phủ định -> đủ để tính "có"
-            start = idx + len(kw_stripped)  # khớp này bị phủ định, tìm lần khớp tiếp theo
+                return True  # one non-negated match is enough
     return False
 
 
@@ -516,7 +546,8 @@ def _is_mechanical_valve(report: dict) -> bool:
     txt = _gather_text(report)
     pt = _strip_accents((report.get("phau_thuat", {}) or {}).get("phuong_phap", "") or "")
     combined = txt + " " + pt
-    markers = ["van co hoc", "on-x", "on x", "st jude", "thay van"]
+    markers = ["van co hoc", "on-x", "on x", "st jude", "thay van",
+               "mechanical valve", "mechanical aortic", "mechanical mitral"]
     return any(m in combined for m in markers)
 
 
@@ -527,8 +558,7 @@ def compute_cha2ds2_vasc(report: dict) -> dict:
     """
     info = report.get("thong_tin_benh_nhan", {}) or {}
     tuoi = info.get("tuoi")
-    gioi_tinh_nu = "nam" not in _strip_accents(info.get("gioi_tinh", "") or "") and \
-                   "nu" in _strip_accents(info.get("gioi_tinh", "") or "")
+    gioi_tinh_nu = parse_sex(info.get("gioi_tinh")) == "female"
     txt = _gather_text(report)
 
     items = []

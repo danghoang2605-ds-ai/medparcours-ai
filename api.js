@@ -1,62 +1,26 @@
-import { supabase } from "./supabaseClient"
+import { getLang } from "./i18n"
+
+// Backend base URL. Single source of truth for the whole frontend.
+// Override at runtime with window.MEDIFLOW_API_URL (set in index.html / env.js),
+// e.g. "http://localhost:8000" for local development or Docker.
+const DEFAULT_API_URL = "https://danghoang2605-mediflow-ai.hf.space"
 
 export const API_URL =
-  (typeof window !== "undefined" && window.MEDIFLOW_API_URL) ||
-  import.meta.env?.VITE_MEDIFLOW_API_URL ||
-  "http://localhost:8000"
+  (typeof window !== "undefined" && window.MEDIFLOW_API_URL) || DEFAULT_API_URL
 
+// The backend is public and stateless: no login, no tokens.
 export async function callApi(path, options = {}) {
-  if (!supabase) {
-    throw new Error("Chưa cấu hình SUPABASE_URL hoặc SUPABASE_ANON_KEY ở frontend.")
-  }
-
-  const { data, error } = await supabase.auth.getSession()
-  if (error) throw error
-
-  const session = data?.session
-  if (!session?.access_token) {
-    const authError = new Error("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.")
-    authError.code = "AUTH_REQUIRED"
-    throw authError
-  }
-
   const headers = new Headers(options.headers || {})
-  headers.set("Authorization", `Bearer ${session.access_token}`)
-
-  // Không tự đặt Content-Type cho FormData vì trình duyệt phải tự thêm boundary.
+  headers.set("X-Lang", getLang())  // the assistant answers in the UI language
+  // Never set Content-Type for FormData; the browser adds the multipart boundary.
   if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json")
   }
-
   const response = await fetch(`${API_URL}${path}`, { ...options, headers })
-
-  if (response.status === 401) {
-    await supabase.auth.signOut()
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("mp-auth-expired"))
-    }
+  if (response.status === 429 && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("mp-rate-limited", {
+      detail: { retryAfter: Number(response.headers.get("Retry-After")) || 60 },
+    }))
   }
-
   return response
-}
-
-export async function callJson(path, { method = "GET", body, ...options } = {}) {
-  const response = await callApi(path, {
-    method,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    ...options,
-  })
-
-  let data = null
-  try {
-    data = await response.json()
-  } catch {
-    // Giữ null để báo lỗi có ý nghĩa phía dưới.
-  }
-
-  if (!response.ok) {
-    throw new Error(data?.detail || data?.error || `API ${response.status}`)
-  }
-
-  return data
 }

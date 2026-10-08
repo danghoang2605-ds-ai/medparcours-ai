@@ -788,7 +788,7 @@ def digitize_12_lead_sheet(image_bgr: np.ndarray) -> dict:
                 # Tấn/Ngân xác nhận thuật toán/ngưỡng trước khi tính bất kỳ số
                 # nào ở đây (xem quy tắc an toàn lâm sàng của dự án).
                 "st_offset_mm": None,
-                "ghi_chu_st": "Chưa triển khai — cần Tấn/Ngân xác nhận thuật toán đo trước khi tính.",
+                "ghi_chu_st": "Chưa triển khai — cần chuyên gia lâm sàng xác nhận thuật toán đo trước khi tính.",
             },
         })
 
@@ -1138,7 +1138,7 @@ def compute_heart_rate(rr_intervals_px: list, px_per_mm: Optional[float],
         "nhip_deu_theo_nguong_sach": nhip_deu_theo_nguong_sach,
         "nguong_ap_dung": f"Chênh lệch R-R lớn nhất/nhỏ nhất < {RR_IRREGULAR_THRESHOLD_S}s "
                            f"(mượn ngưỡng PP của nhịp xoang đều theo sách lý thuyết — "
-                           f"CHƯA xác nhận bởi Tấn/Ngân cho mục đích R-R)",
+                           f"CHƯA được chuyên gia lâm sàng xác nhận cho mục đích R-R)",
         "uoc_luong": True,  # LUÔN True - calibration từ lưới ảnh luôn là ước lượng
         "warning": None,
     }

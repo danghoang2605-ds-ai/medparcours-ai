@@ -1,157 +1,185 @@
-# MedParcours AI
+<p align="center">
+  <img src="logos/mediflow-icon.svg" width="80" alt="MedParcours AI logo">
+</p>
 
-Clinical decision-support system that turns thick paper or PDF medical records into structured reports with risk alerts and contextual Q&A in ~30 seconds.
+<h1 align="center">MedParcours AI</h1>
 
-Built for Vietnamese physicians working in district and provincial hospitals, where doctors process large volumes of raw records in very short consultation windows, risking missed drug interactions, incorrect anticoagulation thresholds, or abnormal lab trends.
+<p align="center">
+  Clinical decision support that turns a long medical record into a structured report, risk alerts and record-aware Q&A in about a minute.<br>
+  No sign-up. Patient records never leave your browser.
+</p>
 
----
+<p align="center">
+  <a href="https://danghoang2605-ds-ai.github.io/medparcours-ai/"><b>Try the live app</b></a> &bull;
+  <a href="https://danghoang2605-mediflow-ai.hf.space/docs">API docs</a> &bull;
+  <a href="#run-locally">Run locally</a> &bull;
+  <a href="#architecture">Architecture</a>
+</p>
 
-## How it works
+<p align="center">
+  <a href="https://github.com/danghoang2605-ds-ai/medparcours-ai/actions/workflows/tests.yml"><img src="https://github.com/danghoang2605-ds-ai/medparcours-ai/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
+  <a href="https://github.com/danghoang2605-ds-ai/medparcours-ai/actions/workflows/deploy-pages.yml"><img src="https://github.com/danghoang2605-ds-ai/medparcours-ai/actions/workflows/deploy-pages.yml/badge.svg" alt="Deploy"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+</p>
 
-MedParcours AI combines two layers with deliberately separated responsibilities:
-
-| Layer | Role | Code |
-|---|---|---|
-| **LLM (Claude)** | Reads free-text records (PDF, images, scans), extracts structured data, writes clinical narratives | `main.py` (`REPORT_SYSTEM`) |
-| **CDE v2 (Rule Engine)** | Computes eGFR (CKD-EPI 2021), CHA2DS2-VASc, HAS-BLED, INR targets per ESC/EACTS 2021 and AHA/ACC 2020, TTR | `cde/`, pure Python, fully deterministic |
-
-The LLM reads and understands natural language. Every medical calculation runs through deterministic Python code that can be tested, audited, and produces identical results on the same input. This is a deliberate architecture choice for clinical reliability.
-
-### Clinical language standards
-
-- All terminology localized to Vietnamese medical conventions (international drug names and lab symbols like CRP, NT-proBNP, INR kept as-is)
-- Cautious, objective phrasing: prefers "noted" and "may indicate" over absolute claims
-- Primary diagnosis preserved verbatim from the source record to avoid misinterpretation
-
----
-
-## Doctor workflow
-
-1. **Intake** -- Upload records (PDF, DOCX, XLSX, PPTX, or image scan). The system builds a three-phase treatment timeline (Pre-op, Post-op Inpatient, Outpatient).
-2. **Analysis** -- AI extracts labs, plots trend charts against clinical milestones. CDE v2 flags drug interactions and anticoagulation targets, and identifies "guideline gaps" where data is insufficient for a specific recommendation.
-3. **Q&A** -- MedAmi chatbot answers in the context of the currently open record. Switches context automatically when a new record is opened.
-4. **Export** -- Doctor reviews results, can generate a plain-language patient report, and sign off before publishing.
+> **Not a medical device.** MedParcours AI is a decision-support and documentation aid. Every output must be reviewed by a qualified clinician. Do not upload real patient data to the public demo.
 
 ---
+
+## Try it in 30 seconds
+
+1. Open **https://danghoang2605-ds-ai.github.io/medparcours-ai/**
+2. The app opens in **English**; switch to **VI** in the top bar at any time.
+3. Click **View demo: sample patient record** to explore a full report on a synthetic patient (no upload needed), or drop in your own PDF / DOCX / XLSX / PPTX / photo.
+4. From the report menu, export the **Patient summary**: a plain-language, printable page with home medications, next steps and warning signs.
+
+The backend runs on a free Hugging Face Space, so the first request after idle time can take 30 to 60 seconds. The public demo is rate-limited per IP.
+
+## The problem
+
+Doctors in district and provincial hospitals read long paper or PDF records in very short consultation windows. Critical details get buried across pages: drug interactions, wrong anticoagulation targets, lab values that drift over weeks. MedParcours AI reads the whole record, organizes it, and surfaces what needs attention.
+
+## What it does
+
+- **Record intake**: PDF (text extracted in the browser), Word, Excel, PowerPoint, and photos or scans via Claude Vision.
+- **Three-phase timeline**: pre-op, post-op inpatient, outpatient follow-up, with lab trend charts against clinical milestones.
+- **Deterministic risk engine**: eGFR (CKD-EPI 2021), CHA2DS2-VASc, HAS-BLED, INR targets by valve type and position (ESC/EACTS 2021, AHA/ACC 2020), time in therapeutic range, drug interactions and guideline gaps.
+- **MedAmi chat**: answers grounded in the open record, in the UI language.
+- **Virtual MDT and teaching modes**: multi-specialty case review and Socratic case questions.
+- **Longitudinal records**: save a record, then add follow-up documents; the server merges them and re-runs the rule engine on the combined history.
+- **ECG digitization**: waveform and heart-rate extraction from ECG paper images.
+- **Exports**: full report, one-page handoff, plain-language patient summary, labs as CSV, all in the selected language.
+- **Bilingual**: English by default, Vietnamese one click away. The demo case, exports and the assistant follow the selected language.
+
+## Architecture
+
+```
+ Browser (React, GitHub Pages)                    Backend (FastAPI, stateless)
+ ┌──────────────────────────────┐   HTTPS/JSON   ┌─────────────────────────────────┐
+ │ pdf.js text extraction       │ ─────────────▶ │ /analyze, /analyze_text          │
+ │ UI (VI / EN)                 │                │   1. Claude: record -> JSON      │
+ │ IndexedDB: saved records,    │                │   2. CDE v2: deterministic math  │
+ │   merge history, chat        │ ◀───────────── │   3. Claude: narrative wording   │
+ │                              │                │ /records/merge (+ -file)         │
+ │ Web Speech API (voice)       │                │ /chat (X-Lang), /ecg             │
+ └──────────────────────────────┘                │ per-IP rate limit, no database   │
+                                                 └─────────────────────────────────┘
+```
+
+| Decision | Why |
+|---|---|
+| **LLM for language, code for math** | Claude reads free text and writes narratives. Every clinical number comes from plain, unit-tested Python in [`cde/`](cde/) that gives the same result for the same input. |
+| **No accounts, no server storage** | Patient records are stored only in the user's browser (IndexedDB, [`localStore.js`](localStore.js)). The backend keeps nothing between requests, which removes a whole class of privacy and security risk and makes the app instantly usable. |
+| **Stateless merge** | To add a follow-up document, the browser sends the record it already holds; the server extracts, merges ([`report_merge.py`](report_merge.py)) and re-evaluates, then returns the result. |
+| **Abuse protection without login** | A per-IP sliding-window limit on every AI endpoint returns `429` with `Retry-After`. |
+| **Translation that cannot break logic** | The UI was written in Vietnamese. [`i18n.js`](i18n.js) swaps rendered text for English using [`i18n/en.json`](i18n/en.json) (about 1,300 strings) and [`i18n/patterns.json`](i18n/patterns.json) (templated rule-engine messages) instead of rewriting components, so no string comparison in the app logic changes. A node is never half-translated: if any Vietnamese would remain, the original is kept. A CI test fails if the rule engine gains a message without an English translation. |
+| **Bilingual clinical rules** | Risk-score keyword detection matches whole words in Vietnamese and English, with negation in both ("không ghi nhận", "no history of", "denies"). Sex parsing accepts "Nam/Nữ" and "Male/Female". |
+| **Graceful degradation** | If browser storage is unavailable, analysis still works. Voice falls back to the browser's speech APIs. |
 
 ## Tech stack
 
-| Layer | Technology |
+| Component | Technology |
 |---|---|
-| Frontend | React (single `App.jsx`), esbuild |
-| Backend | FastAPI, Uvicorn |
-| AI extraction & chat | Claude (Anthropic API), Prompt Caching |
-| Clinical rule engine | Pure Python, fully deterministic (`cde/`) |
-| Storage & auth | Supabase (auth + fallback), Turso/libSQL (primary patient DB) |
-| Deployment | Docker, GitHub Pages |
+| Frontend | React 19, esbuild ([`App.jsx`](App.jsx), [`scripts/build.mjs`](scripts/build.mjs)) |
+| Backend | FastAPI + Uvicorn ([`main.py`](main.py)) |
+| AI | [Claude](https://docs.anthropic.com/) via the Anthropic API, with prompt caching |
+| Clinical rules | Pure Python ([`cde/`](cde/), [`clinical_rules.py`](clinical_rules.py)) |
+| ECG | OpenCV + NumPy/SciPy ([`ecg_engine.py`](ecg_engine.py)) |
+| Browser storage | IndexedDB |
+| Hosting | GitHub Pages (frontend), Hugging Face Spaces (backend), Docker |
 
 ---
 
-## Quick start
+## Run locally
+
+**Requirements:** Python 3.11+, Node 20+, an [Anthropic API key](https://console.anthropic.com/).
 
 ```bash
 git clone https://github.com/danghoang2605-ds-ai/medparcours-ai.git
 cd medparcours-ai
-cp .env.example .env   # fill in ANTHROPIC_API_KEY (required), Supabase keys (optional)
+cp .env.example .env            # set ANTHROPIC_API_KEY
 
-# Backend
+# Backend -> http://localhost:8000 (docs at /docs)
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 
-# Frontend (separate terminal)
+# Frontend -> http://localhost:5173 (separate terminal)
 npm install
 npm run dev
 ```
 
-Or with Docker:
+**Docker** (backend on :8000, frontend on :8080):
 
 ```bash
+cp .env.example .env
 docker-compose up --build
 ```
 
-The system degrades gracefully: if Supabase is not configured, analysis still works (no login or record saving). If Turso is unavailable, storage falls back to Supabase.
+| Variable | Default | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | required | Extraction, narratives, chat |
+| `RATE_LIMIT_REQUESTS` | `30` | AI requests allowed per IP per window (`0` disables) |
+| `RATE_LIMIT_WINDOW_S` | `600` | Window length in seconds |
 
----
+The frontend talks to the hosted API by default; `npm run dev` and Docker point it at `localhost:8000`. For the Pages build, set the `MEDIFLOW_API_URL` repository variable to use another backend.
 
 ## Testing
 
 ```bash
-pip install -r requirements-dev.txt
-pytest -v
+pip install -r requirements-dev.txt && pytest -q     # backend: rule engine, endpoints, merge, rate limit, i18n coverage
+npm install && npm test                              # frontend: IndexedDB storage layer, translation layer
 ```
 
-The test suite runs fully offline (Claude API and all external services are mocked). No `.env` configuration needed for tests. Coverage includes the clinical rule engine, all API endpoints (including error and fallback branches), and patient CRUD operations.
+Everything runs offline: the Claude API is mocked and IndexedDB is simulated with `fake-indexeddb`. CI runs both suites and a production build on every push ([`tests.yml`](.github/workflows/tests.yml)).
 
-Design principle: storage and auth are auxiliary features and must never block the core analysis pipeline. If the database connection fails, the system shows empty history while the doctor can still analyze new records normally.
+## API
 
----
+| Endpoint | Purpose |
+|---|---|
+| `POST /analyze` | Analyze an uploaded file (PDF, DOCX, XLSX, PPTX, PNG, JPG) |
+| `POST /analyze_text` | Analyze text already extracted in the browser |
+| `POST /records/merge`, `POST /records/merge-file` | Merge a new document into a record the client sends |
+| `POST /chat` | Record-aware Q&A (`assistant_type: clinical`) or product help (`system`); language from `X-Lang` |
+| `GET /ecg/synthetic`, `POST /ecg` | ECG digitization |
+| `GET /health` | Health check (not rate-limited) |
+
+Full schema: https://danghoang2605-mediflow-ai.hf.space/docs
 
 ## Project structure
 
 ```
-App.jsx                     # Full frontend (single-file React + esbuild)
-main.py                     # FastAPI: endpoints, extraction pipeline, fallbacks
-database.py                 # Patient storage (Turso/libSQL)
-db.py                       # Supabase REST fallback storage
-auth.py                     # Supabase Auth (Bearer token verification)
-clinical_rules.py           # Base clinical rules
-ecg_engine.py               # ECG image digitization (signal extraction, R-peak detection)
-document_extract.py         # Text extraction from PDF, DOCX, XLSX, PPTX
-conftest.py                 # Shared pytest fixtures (auth override)
-cde/                        # Deterministic clinical decision engine
-    engine.py                   # Main entry point (evaluate_v2)
-    disease_classifier.py       # Disease profile detection and grouping
-    icd_groups.py               # Ten ICD-10 circulatory system groups
-    anticoagulation_targets.py  # INR targets by valve type (ESC/AHA guidelines)
-    indicators.py               # CHA2DS2-VASc, HAS-BLED, TTR
-    universal_indicators.py     # eGFR (CKD-EPI 2021), BMI, renal/hepatic flags
-    test_*.py                   # Unit tests for each module
-docker_setup/               # Dockerfiles for backend and frontend
-test_*.py                   # Integration tests (endpoint-level)
+.
+├── App.jsx                  # Frontend (single-file React app)
+├── api.js                   # Backend URL + fetch helper (sends X-Lang)
+├── localStore.js            # IndexedDB record store (browser only)
+├── i18n.js, i18n/           # EN/VI translation layer (dictionary + patterns)
+├── demoData.en.js           # English synthetic demo case
+├── main.py                  # FastAPI app: endpoints, extraction pipeline, rate limit
+├── report_merge.py          # Pure merge logic for follow-up documents
+├── cde/                     # Deterministic clinical decision engine (+ unit tests)
+├── clinical_rules.py        # Base clinical rules
+├── ecg_engine.py            # ECG image digitization
+├── document_extract.py      # DOCX / XLSX / PPTX text extraction
+├── scripts/build.mjs        # Frontend build + dev server
+├── tests/                   # Frontend unit tests
+├── docker_setup/            # Dockerfiles
+└── test_*.py, conftest.py   # Backend tests
 ```
 
----
+## Limitations and roadmap
 
-## ECG digitization
-
-The ECG module (`ecg_engine.py`) extracts signal waveforms from ECG paper images using OpenCV. Current capabilities:
-
-- Grid detection and removal (pink/red ECG paper)
-- Signal tracing via Viterbi/dynamic-programming path optimization
-- 4x upscale preprocessing for low-resolution scans
-- Calibration (px/mm from grid spacing)
-- R-peak detection and heart rate estimation
-- 12-lead sheet slicing (automatic layout detection)
-- Safety rules: suppresses ST-T and axis findings when fewer than 12 leads are available
-
-This is a **visualization aid**, not a diagnostic tool. All outputs require physician confirmation.
-
----
-
-## Clinical decision engine (CDE v2)
-
-The `cde/` module is the deterministic counterpart to the LLM. It computes:
-
-- **Anticoagulation targets**: INR ranges by mechanical valve type and position, per ESC/EACTS 2021 and AHA/ACC 2020 guidelines
-- **Risk scores**: CHA2DS2-VASc, HAS-BLED
-- **Time in therapeutic range (TTR)**: Rosendaal linear interpolation
-- **Renal function**: eGFR via CKD-EPI 2021 (race-free equation)
-- **Disease classification**: Maps diagnoses to ICD-10 circulatory groups, detects atrial fibrillation, heart failure, valve disease profiles
-- **Drug interaction flags**: Deterministic checks against the extracted medication list
-
-Every calculation has unit tests. No LLM is involved in any computation.
-
----
-
-## Architecture decisions
-
-- **Hybrid AI**: LLM for language understanding, deterministic code for medical math. This is intentional -- an LLM should not be the sole authority on a clinical number.
-- **Graceful degradation**: Every external dependency (database, OCR, voice) has a fallback. The core analysis pipeline never crashes due to an auxiliary service failure.
-- **Single-file frontend**: `App.jsx` is large (~10K lines) but intentionally monolithic for deployment simplicity on GitHub Pages with esbuild. No build framework dependency.
-- **Test isolation**: All tests mock external APIs. CI needs no secrets, no network, no database.
-
----
+- Uploaded records are summarized in Vietnamese even when the UI is in English (the extraction prompt is Vietnamese-first). The rule engine is already bilingual, so English extraction is the next step.
+- The second demo case is Vietnamese-only and is shown in VI mode only.
+- Saved records live in one browser; there is a full-export function in the storage layer but no import UI yet.
+- Rate limiting is in-memory, which fits a single-instance deployment. Multiple instances would need a shared store such as Redis.
+- `App.jsx` is a large single file; splitting it into feature modules is planned.
 
 ## License
 
-MIT
+[MIT](LICENSE)
+
+## Changelog (highlights)
+
+- **Risk-score fix**: the hypertension abbreviation "THA" used to match inside "thay van" (valve replacement), adding a false CHA2DS2-VASc point to valve patients. Keywords now match whole words only.
+- **Sex parsing fix**: "Male" was previously read as female (the check looked for the Vietnamese "nam"), affecting eGFR and risk scores for English records.
+- **No login, stateless backend**: records live in the browser; per-IP rate limiting protects the public demo.

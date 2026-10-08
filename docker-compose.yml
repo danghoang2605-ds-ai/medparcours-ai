@@ -1,12 +1,9 @@
-# MedParcours AI — chạy 1 lệnh: docker-compose up --build
+# MedParcours AI -- run with: docker-compose up --build
 #
-# Chỉ gồm backend + frontend, KHÔNG có service "db" — phù hợp demo/Vòng 2
-# (xem medparcours_roadmap_v2.md mục 3.4 "Kiến trúc 2 giai đoạn"). Giai đoạn
-# thương mại hóa thật (on-premise, có Postgres) sẽ thêm service riêng sau,
-# không phải bây giờ.
+# Backend (FastAPI) + Frontend (React, esbuild + nginx).
+# Stateless backend: no database. Records are stored in the browser.
 #
-# Yêu cầu trước khi chạy: tạo file .env (copy từ .env.example) với
-# ANTHROPIC_API_KEY thật.
+# Requires: .env file with at least ANTHROPIC_API_KEY (see .env.example).
 
 services:
   backend:
@@ -28,9 +25,6 @@ services:
     build:
       context: .
       dockerfile: docker_setup/Dockerfile.frontend
-      args:
-        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
-        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
     ports:
       - "8080:80"
     depends_on:

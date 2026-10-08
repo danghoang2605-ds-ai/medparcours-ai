@@ -2,26 +2,18 @@ FROM node:20-slim AS build
 
 WORKDIR /app
 
-RUN npm install esbuild@0.27.7 react@19.2.6 react-dom@19.2.6 @supabase/supabase-js
+RUN npm install esbuild@0.27.7 react@19.2.6 react-dom@19.2.6
 
 COPY . .
 
-# Copy mount.jsx ra cùng cấp với App.jsx
+# Place mount.jsx next to App.jsx (entry point)
 COPY docker_setup/mount.jsx ./mount.jsx
-
-ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_ANON_KEY
-
-RUN test -n "$VITE_SUPABASE_URL" || (echo "Missing VITE_SUPABASE_URL" && exit 1)
-RUN test -n "$VITE_SUPABASE_ANON_KEY" || (echo "Missing VITE_SUPABASE_ANON_KEY" && exit 1)
 
 RUN npx esbuild ./mount.jsx \
     --bundle \
     --loader:.jsx=jsx \
     --jsx=automatic \
     --format=esm \
-    --define:import.meta.env.VITE_SUPABASE_URL=\"${VITE_SUPABASE_URL}\" \
-    --define:import.meta.env.VITE_SUPABASE_ANON_KEY=\"${VITE_SUPABASE_ANON_KEY}\" \
     --outfile=/app/mount.js \
     --minify
 
