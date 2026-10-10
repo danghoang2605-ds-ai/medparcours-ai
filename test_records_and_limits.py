@@ -124,3 +124,32 @@ def test_chat_defaults_to_vietnamese(client, mock_anthropic):
     body = {"question": "INR?", "ho_so_text": "INR 2.5", "chat_history": []}
     client.post("/chat", json=body)
     assert "tiếng Việt" in _last_system_text(mock_anthropic)
+
+
+# ─── Report extraction follows the selected language ───────────────────────
+def test_report_extraction_in_english_when_ui_is_english(client, mock_anthropic):
+    resp = client.post("/analyze_text", json={"ho_so_text": "x" * 500}, headers={"X-Lang": "en"})
+    assert resp.status_code == 200
+    assert "OUTPUT LANGUAGE: ENGLISH" in _last_system_text(mock_anthropic[:1])
+
+
+def test_report_extraction_in_vietnamese_by_default(client, mock_anthropic):
+    client.post("/analyze_text", json={"ho_so_text": "x" * 500})
+    assert all("OUTPUT LANGUAGE: ENGLISH" not in _last_system_text([c]) for c in mock_anthropic)
+
+
+def test_language_does_not_leak_between_requests(client, mock_anthropic):
+    client.post("/analyze_text", json={"ho_so_text": "x" * 500}, headers={"X-Lang": "en"})
+    mock_anthropic.clear()
+    client.post("/analyze_text", json={"ho_so_text": "x" * 500})
+    assert all("OUTPUT LANGUAGE: ENGLISH" not in _last_system_text([c]) for c in mock_anthropic)
+
+
+def test_spoofed_forwarded_for_does_not_bypass_limit(client, monkeypatch, mock_anthropic):
+    monkeypatch.setattr(main, "RATE_LIMIT_REQUESTS", 1)
+    main._rate_buckets.clear()
+    body = {"question": "hi", "assistant_type": "system", "ho_so_text": "", "chat_history": []}
+    # Same real client (last hop) with different fake first entries.
+    assert client.post("/chat", json=body, headers={"x-forwarded-for": "1.1.1.1, 9.9.9.9"}).status_code == 200
+    assert client.post("/chat", json=body, headers={"x-forwarded-for": "2.2.2.2, 9.9.9.9"}).status_code == 429
+    main._rate_buckets.clear()

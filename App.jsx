@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, Component } from "react"
 import { callApi } from "./api"
 import { localStore } from "./localStore"
-import { getLang, setLang, onLangChange, startI18n, translateDocument } from "./i18n"
+import { cloud, cloudStatus, getSyncKey, setSyncKey } from "./cloudSync"
+import { getLang, setLang, onLangChange, startI18n, translateDocument, translate } from "./i18n"
 import { MOCK_REPORT_EN } from "./demoData.en"
 
 // ─── Lớp gọi Backend (Hugging Face Spaces) ───────────────────────────────────
@@ -31,6 +32,43 @@ async function mpFetchJSON(path, body, ms=45000, method="POST"){
     return await res.json()
   } finally { clearTimeout(timer) }
 }
+// Background cloud copy (no-op when the server has no cloud storage configured).
+const _pushTimers = {}
+let _cloudWarned = false
+function pushToCloud(soBenhAn, delay = 0) {
+  clearTimeout(_pushTimers[soBenhAn])
+  _pushTimers[soBenhAn] = setTimeout(async () => {
+    try {
+      const rec = await localStore.raw(soBenhAn)
+      if (rec) await cloud.put(rec)
+    } catch (e) {
+      if (!_cloudWarned) { _cloudWarned = true; mpToast("Đã lưu trên trình duyệt này; đồng bộ đám mây tạm thời không khả dụng.", "err") }
+    }
+  }, delay)
+}
+// Two-way sync: upload local records the cloud lacks or has older, download the reverse.
+async function syncAllToCloud() {
+  const st = await cloudStatus()
+  if (!st.enabled) return { enabled: false }
+  const local = (await localStore.list()).patients
+  const remote = ((await cloud.list()) || {}).records || []
+  const remoteById = new Map(remote.map(r => [r.so_benh_an, r]))
+  let up = 0, down = 0
+  for (const p of local) {
+    const r = remoteById.get(p.so_benh_an)
+    if (!r || String(p.cap_nhat_luc) > String(r.cap_nhat_luc)) { await cloud.put(await localStore.raw(p.so_benh_an)); up++ }
+  }
+  const localById = new Map(local.map(p => [p.so_benh_an, p]))
+  for (const r of remote) {
+    const l = localById.get(r.so_benh_an)
+    if (!l || String(r.cap_nhat_luc) > String(l.cap_nhat_luc)) {
+      const got = await cloud.get(r.so_benh_an)
+      if (got && got.record) { await localStore.importRecord(got.record); down++ }
+    }
+  }
+  return { enabled: true, up, down }
+}
+
 const mpApi = {
   // Timeout dài (300s): đủ cho hồ sơ dày / SmartReader OCR / Claude tạo JSON.
   analyzeText: (ho_so_text, pages=0) => mpFetchJSON("/analyze_text", { ho_so_text, pages }, 300000),
@@ -50,12 +88,69 @@ const mpApi = {
   },
   // mdt/teaching: đã bỏ (xem ghi chú trong MDTView/TeachingView) — endpoint
   // /mdt và /teaching (phẳng) chưa từng được ghép vào main.py.
-  // ─── Patient records: stored in this browser only (see localStore.js) ───
-  savePatient: (report, analysis) => localStore.save(report, analysis),
-  getPatient: (soBenhAn) => localStore.get(soBenhAn),
-  listPatients: () => localStore.list(),
-  deletePatient: (soBenhAn) => localStore.remove(soBenhAn),
-  renamePatient: (soBenhAn, tenMoi) => localStore.rename(soBenhAn, tenMoi),
+  // ─── Patient records: browser first (localStore.js), optional cloud copy ──
+  savePatient: async (report, analysis) => {
+    // If this record already exists in the cloud (saved from another device), pull it
+    // instead of creating a fresh local copy that would overwrite its history on upload.
+    const id = String(report?.thong_tin_benh_nhan?.so_benh_an || "").trim()
+    if (id) {
+      let remote = null
+      try { remote = await cloud.get(id) } catch {}
+      if (remote && remote.record) {
+        let hasLocal = true
+        try { await localStore.get(id) } catch { hasLocal = false }
+        if (!hasLocal) await localStore.importRecord(remote.record)
+        throw Object.assign(new Error(getLang()==="en"
+          ? `Record ${id} is already saved (synced from another device). Open it from Record history and use "Update record" to add documents.`
+          : `Hồ sơ ${id} đã được lưu (đồng bộ từ thiết bị khác). Mở từ Lịch sử bệnh án và dùng "Cập nhật hồ sơ" để thêm tài liệu.`), { status: 409 })
+      }
+    }
+    const res = await localStore.save(report, analysis)
+    pushToCloud(res.so_benh_an)
+    return res
+  },
+  getPatient: async (soBenhAn) => {
+    let local = null
+    try { local = await localStore.get(soBenhAn) } catch (e) { if (e.status !== 404) throw e }
+    // Prefer the cloud copy when it is newer (edited on another device) or missing locally.
+    try {
+      const remote = await cloud.get(soBenhAn)
+      const rec = remote && remote.record
+      if (rec && (!local || String(rec.cap_nhat_luc) > String(local.cap_nhat_luc))) {
+        await localStore.importRecord(rec)
+        return { success: true, storage: "cloud", ...rec }
+      }
+    } catch (e) { if (!local) throw e }
+    if (!local) throw Object.assign(new Error(`Không có hồ sơ đã lưu với số ${soBenhAn}.`), { status: 404 })
+    return local
+  },
+  listPatients: async () => {
+    const local = await localStore.list()
+    try {
+      const remote = await cloud.list()
+      if (!remote || !remote.records) return local
+      const byId = new Map(local.patients.map(p => [p.so_benh_an, p]))
+      for (const r of remote.records) {
+        const mine = byId.get(r.so_benh_an)
+        if (!mine) byId.set(r.so_benh_an, { ...r, ho_ten_goc: r.ho_ten, cloud_only: true, in_cloud: true })
+        else byId.set(r.so_benh_an, { ...mine, in_cloud: true })
+      }
+      const patients = [...byId.values()].sort((a, b) => String(b.cap_nhat_luc).localeCompare(String(a.cap_nhat_luc)))
+      return { ...local, patients, cloud: true }
+    } catch (e) {
+      return { ...local, cloud_error: e.message }
+    }
+  },
+  deletePatient: async (soBenhAn) => {
+    try { await localStore.remove(soBenhAn) } catch (e) { if (e.status !== 404) throw e }
+    await cloud.remove(soBenhAn).catch(() => {})
+    return { success: true, so_benh_an: soBenhAn }
+  },
+  renamePatient: async (soBenhAn, tenMoi) => {
+    const res = await localStore.rename(soBenhAn, tenMoi)
+    pushToCloud(soBenhAn)
+    return res
+  },
   // ─── Product-support assistant (independent from clinical MedAmi) ─────
   askFaqBot: async (question, senderId="user_test") => {
     const data = await mpFetchJSON("/chat", {
@@ -70,8 +165,13 @@ const mpApi = {
   },
   sendFeedback: async () => ({ success: true }),
   getPatientHistory: (soBenhAn, limit=5) => localStore.history(soBenhAn, limit),
-  saveChatMessage: (soBenhAn, role, content) => localStore.addChat(soBenhAn, role, content),
+  saveChatMessage: async (soBenhAn, role, content) => {
+    const res = await localStore.addChat(soBenhAn, role, content)
+    pushToCloud(soBenhAn, 3000)
+    return res
+  },
   getChatHistory: (soBenhAn, limit=100) => localStore.chat(soBenhAn, limit),
+  syncAllToCloud: () => syncAllToCloud(),
   // Voice runs entirely in the browser (Web Speech API); no server round-trip.
   textToSpeech: async () => ({ success: false, use_local_tts: true }),
   speechToText: async () => ({ success: false, text: "", error_code: "STT_FALLBACK" }),
@@ -82,7 +182,9 @@ const mpApi = {
     const merged = await mpFetchJSON("/records/merge",
       { existing_report: rec.report, ho_so_text: hoSoText, pages }, 300000)
     if (!merged.success) return merged
-    return localStore.applyMerge(soBenhAn, merged, nguonTaiLieu)
+    const out = await localStore.applyMerge(soBenhAn, merged, nguonTaiLieu)
+    pushToCloud(soBenhAn)
+    return out
   },
   updatePatientFile: async (soBenhAn, file, nguonTaiLieu) => {
     const rec = await localStore.get(soBenhAn)
@@ -101,7 +203,9 @@ const mpApi = {
         throw err
       }
       if (!data?.success) return data
-      return localStore.applyMerge(soBenhAn, data, nguonTaiLieu || file.name)
+      const out = await localStore.applyMerge(soBenhAn, data, nguonTaiLieu || file.name)
+      pushToCloud(soBenhAn)
+      return out
     } finally { clearTimeout(timer) }
   },
 }
@@ -1131,6 +1235,9 @@ function Svg({ d = 20, children, style, color }) {
   )
 }
 const Icon = {
+  Trash:      p => <Svg {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></Svg>,
+  Cloud:      p => <Svg {...p}><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></Svg>,
+  Plus:       p => <Svg {...p}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></Svg>,
   Pencil:     p => <Svg {...p}><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></Svg>,
   Note:       p => <Svg {...p}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z"/><polyline points="14 3 14 9 20 9"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></Svg>,
   Cross:      p => <Svg {...p}><rect x="3" y="3" width="18" height="18" rx="3"/><line x1="12" y1="7" x2="12" y2="17"/><line x1="7" y1="12" x2="17" y2="12"/></Svg>,
@@ -2190,7 +2297,7 @@ function useSpeechToText(onTranscript) {
       }
     } catch { setErr("Không truy cập được micro. Hãy cho phép quyền micro cho trang web rồi thử lại."); return }
     const r = new SR()
-    r.lang = "vi-VN"; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1
+    r.lang = getLang()==="en" ? "en-US" : "vi-VN"; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1
     finalRef.current = currentValue ? (currentValue.replace(/\s+$/, "") + " ") : ""
     r.onresult = (e) => {
       let interim = ""
@@ -2223,7 +2330,7 @@ function reportToText(r){
   const p = r.thong_tin_benh_nhan || {}
   const en = getLang() === "en"
   const H = en
-    ? { t:"CLINICAL REPORT - MedParcours AI", p:"Patient", age:"y/o", rec:"Record no.", adm:"Admitted", dis:"Discharged", dx:"PRIMARY DIAGNOSIS:", sum:"OVERALL SUMMARY:", tk:"KEY TAKEAWAYS:", ps:"PROBLEM STATUS:", pr:"PRIORITY ACTIONS:", med:"MEDICATIONS:", foot:"(Generated by MedParcours AI. Requires physician review before clinical use.)" }
+    ? { t:"CLINICAL REPORT - MedParcours AI", p:"Patient", age:"y/o", rec:"MRN", adm:"Admitted", dis:"Discharged", dx:"PRIMARY DIAGNOSIS:", sum:"OVERALL SUMMARY:", tk:"KEY TAKEAWAYS:", ps:"PROBLEM STATUS:", pr:"PRIORITY ACTIONS:", med:"MEDICATIONS:", foot:"(Generated by MedParcours AI. Requires physician review before clinical use.)" }
     : { t:H.t, p:"Bệnh nhân", age:"tuổi", rec:"Số bệnh án", adm:"Vào viện", dis:"Ra viện", dx:H.dx, sum:H.sum, tk:H.tk, ps:H.ps, pr:H.pr, med:H.med, foot:H.foot }
   const L = []
   L.push(H.t)
@@ -2270,7 +2377,7 @@ function triggerHandoff(r, docNote, bookmarks) {
   const L = en ? {
     phases:["","Pre-op","Post-op inpatient","Outpatient follow-up"], phase:"Phase", noAlert:"No alerts requiring immediate action.",
     noMeds:"No maintenance medications.", maint:" (maintenance)", followUp:"Per follow-up orders.", bm:"Items bookmarked by the doctor",
-    note:"Doctor's notes", head:"MedParcours AI - One-page handoff", recNo:"Record no.", age:"y/o", adm:"Admitted", dis:"Discharged",
+    note:"Doctor's notes", head:"MedParcours AI - One-page handoff", recNo:"MRN", age:"y/o", adm:"Admitted", dis:"Discharged",
     printed:"Printed", confirm:"Requires physician confirmation", dx:"Diagnosis & status", alerts:"Alerts to monitor",
     meds:"Current medications", drug:"Drug", dose:"Dose", how:"How to take", todo:"To do at the next visit",
     footer:"Generated by MedParcours AI. Requires physician review before clinical use.", title:"Handoff summary", locale:"en-US", lang:"en",
@@ -2372,7 +2479,115 @@ function triggerPatientSummary(r) {
   win.document.close()
 }
 
+// English labels for the printed report (the HTML is assembled from Vietnamese
+// templates; clinical content itself comes from the report in the chosen language).
+const PRINT_EN_PAIRS = [
+  ["<title>Báo cáo lâm sàng", "<title>Clinical report"], ["<title>Biên bản hội chẩn đa chuyên khoa", "<title>Case conference minutes"],
+  ["<title>Tài liệu học tập ca lâm sàng", "<title>Clinical case study"], ["<title>Bản bàn giao đầy đủ", "<title>Full handoff"],
+  ["Báo cáo tạo tự động bởi MedParcours AI v1.2. Cần bác sĩ xem xét trước khi dùng cho mục đích lâm sàng.", "Generated by MedParcours AI. Requires physician review before clinical use."],
+  ["MedParcours AI: Bản bàn giao đầy đủ (Lâm sàng, Hội chẩn, Giảng dạy)", "MedParcours AI: Full handoff (clinical, case conference, teaching)"],
+  ["MedParcours AI: Tài liệu học tập ca lâm sàng (giảng dạy)", "MedParcours AI: Clinical case study (teaching)"],
+  ["MedParcours AI: Biên bản hội chẩn đa chuyên khoa (AI)", "MedParcours AI: Multidisciplinary case conference minutes (AI)"],
+  ["MedParcours AI: Báo cáo lâm sàng tự động", "MedParcours AI: Clinical report"],
+  ["Hỗ trợ quyết định, không tự kê đơn/chỉnh liều. Cần bác sĩ xác nhận.", "Decision support only; does not prescribe or adjust doses. Requires physician confirmation."],
+  ["PHẦN B - BIÊN BẢN HỘI CHẨN ĐA CHUYÊN KHOA", "PART B - MULTIDISCIPLINARY CASE CONFERENCE"],
+  ["PHẦN A - BÁO CÁO LÂM SÀNG", "PART A - CLINICAL REPORT"],
+  ["PHẦN C - TÀI LIỆU GIẢNG DẠY", "PART C - TEACHING MATERIAL"],
+  ["I. Tổng quan nguy cơ (MDT Risk Dashboard)", "I. Risk overview"],
+  ["XI. Thang điểm nguy cơ (chống đông)", "XI. Risk scores (anticoagulation)"],
+  ["Không có cảnh báo cần xử trí ngay.", "No alerts requiring immediate action."],
+  ["V. Kết luận hội chẩn (đồng thuận)", "V. Conference conclusion (consensus)"],
+  ["XIII. Khoảng trống theo guideline", "XIII. Guideline gaps"],
+  ["VIII. Phân tầng ưu tiên lâm sàng", "VIII. Clinical priorities"],
+  ["XIV. Câu hỏi vấn đáp (Socratic)", "XIV. Socratic questions"],
+  ["IX. Kiểm tra an toàn đơn thuốc", "IX. Medication safety check"],
+  ["IV. Nhận định theo chuyên khoa", "IV. Assessment by specialty"],
+  ["mL/phút/1.73m2 (CKD-EPI 2021).", "mL/min/1.73m² (CKD-EPI 2021)."],
+  ["Chức năng thận: eGFR", "Renal function: eGFR"],
+  ["XII. Tiên lượng - Dự phòng", "XII. Prognosis & prevention"],
+  ["Xác nhận bác sĩ phụ trách", "Attending physician"],
+  ["Mục đánh dấu cần theo dõi", "Bookmarked items"],
+  ["III. Chuyên khoa được mời", "III. Specialties invited"],
+  ["VIII. Chẩn đoán phân biệt", "VIII. Differential diagnosis"],
+  ["X. Cận lâm sàng đề nghị", "X. Recommended tests"],
+  ["XIII. Red flags cần nhớ", "XIII. Red flags"],
+  ["VI. Tóm tắt hội chứng", "VI. Syndrome summary"],
+  ["VII. Chẩn đoán sơ bộ", "VII. Working diagnosis"],
+  ["II. Ưu tiên lâm sàng", "II. Clinical priorities"],
+  ["Phù hợp khuyến cáo:", "Guideline-aligned:"],
+  ["Cần bác sĩ xác nhận", "Requires physician confirmation"],
+  ["II. Lý do vào viện", "II. Reason for admission"],
+  ["Dữ liệu còn thiếu:", "Missing data:"],
+  ["Ghi chú của bác sĩ", "Physician's notes"],
+  ["V. Khám lâm sàng", "V. Physical examination"],
+  ["Chẩn đoán chính:", "Primary diagnosis:"],
+  ["V. Siêu âm tim (", "V. Echocardiography ("],
+  ["Lý do nhập viện:", "Reason for admission:"],
+  ["Phẫu thuật viên:", "Surgeon:"],
+  ["Kết luận chính:", "Key conclusion:"],
+  ["III. Xét nghiệm", "III. Labs"],
+  ["lần trong đích", "in range, target"],
+  ["II. Phẫu thuật", "II. Surgery"],
+  ["Ký tên bác sĩ", "Physician signature"],
+  ["IV. Diễn biến", "IV. Clinical course"],
+  ["Gợi ý đáp án:", "Suggested answer:"],
+  ["IX. Biện luận", "IX. Clinical reasoning"],
+  ["I. Hành chính", "I. Patient details"],
+  ["VII. Cảnh báo", "VII. Alerts"],
+  ["- Độ tin cậy", "- Confidence"],
+  ["XI. Điều trị", "XI. Treatment"],
+  ["III. Bệnh sử", "III. History of present illness"],
+  ["I. Chẩn đoán", "I. Diagnosis"],
+  ["IV. Tiền sử", "IV. Past history"],
+  ["ƯU TIÊN CAO", "HIGH PRIORITY"],
+  ["(gần nhất)", "(latest)"],
+  ["X. Tóm tắt", "X. Summary"],
+  ["VI. Thuốc", "VI. Medications"],
+  ["— Nguồn:", "— Source:"],
+  ["Căn cứ:", "Basis:"],
+  ["Tiền sử:", "Past history:"],
+  ["Đề xuất:", "Recommendation:"],
+  [" lượt)", " studies)"],
+  ["<th>Ngày</th>", "<th>Date</th>"],
+  ["<th style=\"width:80pt\">Ngày</th>", "<th style=\"width:80pt\">Date</th>"],
+  ["<th style=\"width:70pt\">Loại</th>", "<th style=\"width:70pt\">Type</th>"],
+  ["<th>Mô tả</th>", "<th>Description</th>"],
+  ["<th>Phương pháp</th>", "<th>Procedure</th>"],
+  ["<th>Kết quả</th>", "<th>Result</th>"],
+  ["<th>Chỉ số</th>", "<th>Test</th>"],
+  ["<th>BT</th>", "<th>Reference</th>"],
+  ["<th>Đánh giá</th>", "<th>Flag</th>"],
+  ["<th>Chênh áp</th>", "<th>Gradient</th>"],
+  ["<th>Kết luận</th>", "<th>Conclusion</th>"],
+  ["<th>Tên thuốc</th>", "<th>Medication</th>"],
+  ["<th>Liều</th>", "<th>Dose</th>"],
+  ["<th>Cách dùng</th>", "<th>Directions</th>"],
+  ["<th>Vấn đề</th>", "<th>Problem</th>"],
+  ["<th>Mức độ</th>", "<th>Level</th>"],
+  ["<th>Chuyên khoa</th>", "<th>Specialty</th>"],
+  ["<th>Liên quan</th>", "<th>Relevance</th>"],
+  ["<th>Vai trò</th>", "<th>Role</th>"],
+  ["<th>Cặp thuốc</th>", "<th>Drug pair</th>"],
+  ["<th>Hậu quả</th>", "<th>Consequence</th>"],
+  ["<th>Mức</th>", "<th>Level</th>"],
+  ["<td>Cao</td>", "<td>High</td>"],
+  ["<td>Thấp</td>", "<td>Low</td>"],
+  ["<td>BT</td>", "<td>Normal</td>"],
+  ["<td>Cảnh báo</td>", "<td>Alert</td>"],
+  ["<td>Bất thường</td>", "<td>Abnormal</td>"],
+  ["[Trung bình]", "[Moderate]"],
+  ["[Theo dõi]", "[Monitor]"],
+  [" điểm</div>", " points</div>"],
+  [">Ưu tiên ", ">Priority "],
+  [">Câu ", ">Question "],
+]
+function localizePrintHtml(html) {
+  let out = html
+  for (const [vi, en] of PRINT_EN_PAIRS) out = out.split(vi).join(en)
+  return out
+}
 function triggerPrint(r, mode, docNote, bookmarks, analysis) {
+  const EN = getLang() === "en"
   const p = r.thong_tin_benh_nhan
   const PRINT_META = {
     clinical:{ title:"Báo cáo lâm sàng", label:"MedParcours AI: Báo cáo lâm sàng tự động" },
@@ -2463,16 +2678,17 @@ ${careGapsPrintBlock}
   else if(mode==="teaching") bodyHtml = teachingPrintBody(r)
   else if(mode==="full") bodyHtml = sectionSep("PHẦN A - BÁO CÁO LÂM SÀNG") + clinicalBody + sectionSep("PHẦN B - BIÊN BẢN HỘI CHẨN ĐA CHUYÊN KHOA") + mdtPrintBody(r) + sectionSep("PHẦN C - TÀI LIỆU GIẢNG DẠY") + teachingPrintBody(r)
   const win = window.open("", "_blank", "width=900,height=700")
-  win.document.write(`<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><title>${meta.title}: ${p.ho_ten}</title>
+  const html = `<!DOCTYPE html><html lang="${EN?"en":"vi"}"><head><meta charset="UTF-8"><title>${meta.title}: ${p.ho_ten}</title>
 <style>body{font-family:'Times New Roman',serif;color:#000;font-size:11pt;line-height:1.55;background:#fff;margin:0}.page{padding:18mm 16mm;max-width:210mm;margin:0 auto}h1{font-size:13pt;text-transform:uppercase;margin:0 0 2pt}h2{font-size:10pt;font-weight:700;text-transform:uppercase;border-bottom:1.5px solid #000;padding-bottom:3pt;margin:14pt 0 7pt}.hdr{border-bottom:2.5px solid #000;padding-bottom:10pt;margin-bottom:8pt;display:flex;justify-content:space-between}.hdr-r{text-align:right;font-size:9pt;color:#444}.sub{font-size:9pt;color:#444;margin:2pt 0}.row{display:flex;gap:6pt;font-size:10pt;margin:3pt 0}.lbl{color:#555;min-width:110pt}table{width:100%;border-collapse:collapse;font-size:10pt;margin:6pt 0 12pt}th{background:#eee;font-weight:700;text-align:left;padding:4pt 7pt;border:1px solid #aaa;font-size:9pt;text-transform:uppercase}td{padding:4pt 7pt;border:1px solid #ccc;vertical-align:top}tr:nth-child(even) td{background:#f9f9f9}.alert{border:1.5px solid #000;border-left:4px solid #000;padding:6pt 10pt;margin:5pt 0}.al{font-size:9pt;font-weight:700;text-transform:uppercase;margin-bottom:2pt}.as{font-size:9pt;color:#555}.footer{border-top:1px solid #999;margin-top:20pt;padding-top:7pt;font-size:8pt;color:#666;display:flex;justify-content:space-between}.stamp{border:1.5px solid #999;width:100pt;height:60pt;display:inline-block;margin-top:8pt;text-align:center;font-size:8pt;padding:5pt;color:#999}.tomtat-giaidoan-t{font-size:10pt;font-weight:700;text-decoration:underline;margin:10pt 0 3pt}.tomtat-giaidoan-ul{margin:0 0 4pt 16pt;padding:0}.tomtat-giaidoan-ul li{margin:2pt 0;font-size:10.5pt;line-height:1.5}@media print{@page{size:A4;margin:18mm 16mm}}</style>
 </head><body><div class="page">
-<div class="hdr"><div><div style="font-size:9pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:4pt">${meta.label}</div><h1>${p.ho_ten}</h1><div class="sub">Số bệnh án: ${p.so_benh_an} | ${p.tuoi} tuổi, ${p.gioi_tinh} | ${p.dia_chi}</div><div class="sub">Ngày sinh: ${p.ngay_sinh} | Vào viện: ${p.ngay_vao_vien} | Ra viện: ${p.ngay_ra_vien}</div></div><div class="hdr-r">In ngày: ${new Date().toLocaleDateString("vi-VN")}<br>MedParcours AI v1.2<br><span style="color:#c00;font-weight:700">Cần bác sĩ xác nhận</span></div></div>
+<div class="hdr"><div><div style="font-size:9pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:4pt">${meta.label}</div><h1>${p.ho_ten}</h1><div class="sub">${EN?"MRN":"Số bệnh án"}: ${p.so_benh_an} | ${p.tuoi} ${EN?"y/o":"tuổi"}, ${p.gioi_tinh} | ${p.dia_chi}</div><div class="sub">${EN?"Date of birth":"Ngày sinh"}: ${p.ngay_sinh} | ${EN?"Admitted":"Vào viện"}: ${p.ngay_vao_vien} | ${EN?"Discharged":"Ra viện"}: ${p.ngay_ra_vien}</div></div><div class="hdr-r">${EN?"Printed":"In ngày"}: ${new Date().toLocaleDateString(EN?"en-US":"vi-VN")}<br>MedParcours AI<br><span style="color:#c00;font-weight:700">${EN?"Requires physician confirmation":"Cần bác sĩ xác nhận"}</span></div></div>
 ${bodyHtml}
 <div style="display:flex;justify-content:space-between;margin-top:24pt"><div><div class="stamp">Xác nhận bác sĩ phụ trách</div></div><div><div class="stamp">Ký tên bác sĩ</div></div></div>
 ${bookmarks && bookmarks.length ? `<h2>Mục đánh dấu cần theo dõi</h2><ul>${bookmarks.map(b=>`<li>${(b.label||"").replace(/&/g,"&amp;").replace(/</g,"&lt;")}${b.sub?` - ${b.sub.replace(/&/g,"&amp;").replace(/</g,"&lt;")}`:""}</li>`).join("")}</ul>` : ""}
         ${docNote && docNote.trim() ? `<h2>Ghi chú của bác sĩ</h2><div class="alert"><div class="as" style="white-space:pre-wrap">${docNote.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</div></div>` : ""}
 <div class="footer"><span>Báo cáo tạo tự động bởi MedParcours AI v1.2. Cần bác sĩ xem xét trước khi dùng cho mục đích lâm sàng.</span><span>MedParcours AI</span></div>
-</div><script>window.onload=function(){window.print()}<\/script></body></html>`)
+</div><script>window.onload=function(){window.print()}<\/script></body></html>`
+  win.document.write(EN ? localizePrintHtml(html) : html)
   win.document.close()
   translateDocument(win.document)
 }
@@ -2530,7 +2746,7 @@ function SourceModal({ source, onClose }) {
           <div className="modal-highlight">"{source}"</div>
           <div className="modal-footer">
             <Icon.FileText d={12} color="#7A96C8" />
-            Trích xuất từ hồ sơ bệnh nhân PDF gốc. Nội dung được tô sáng tương ứng trong tài liệu.
+            Trích dẫn từ dữ liệu đã trích xuất trong hồ sơ và quy tắc lâm sàng tương ứng.
           </div>
         </div>
       </div>
@@ -3048,11 +3264,14 @@ const FILE_KINDS = {
 const kindOf = (name) => FILE_KINDS[(name.split(".").pop() || "").toLowerCase()] || { tag:"FILE", color:"#64748B", bg:"#F1F5F9" }
 const fmtSize = (b) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(0)} KB` : `${(b/1048576).toFixed(1)} MB`
 const fmtDateTime = (iso) => {
-  try {
-    const d = new Date(iso)
-    const pad = n => String(n).padStart(2,"0")
-    return `${pad(d.getHours())}:${pad(d.getMinutes())} ${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`
-  } catch { return iso || "" }
+  const d = new Date(iso)
+  if (!iso || isNaN(d)) return iso || ""
+  if (getLang() === "en") {
+    // e.g. "Oct 9, 2026, 2:05 PM"
+    return d.toLocaleString("en-US", { month:"short", day:"numeric", year:"numeric", hour:"numeric", minute:"2-digit" })
+  }
+  const pad = n => String(n).padStart(2,"0")
+  return `${pad(d.getHours())}:${pad(d.getMinutes())} ${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`
 }
 
 // Đếm số trang PDF phía client (heuristic, không cần thư viện)
@@ -3148,7 +3367,7 @@ function UploadPage({ onUpload, isLoading, loadingMsg, error, onDismissError, on
           <h1 className="hero-h1">Hồ sơ bệnh nhân<br /><em>phân tích trong 90 giây.</em></h1>
           <p className="hero-desc">Bác sĩ upload PDF xuất từ HIS. AI đọc toàn bộ hồ sơ, tổng hợp báo cáo có cấu trúc, phát hiện cảnh báo nguy cơ và sẵn sàng trả lời mọi câu hỏi lâm sàng.</p>
           <div className="feat-list">
-            {[[<Icon.FileText d={14}/>,"Tự động phân tích và tóm tắt diễn biến lâm sàng theo 3 giai đoạn."],[<Icon.Alert d={14}/>,"Phát hiện và cảnh báo sớm nguy cơ dựa trên hồ sơ bệnh án."],[<Icon.Stethoscope d={14}/>,"Hỗ trợ hội chẩn đa chuyên khoa (Virtual MDT) và giảng dạy từ Đại học Y Hà Nội (HMU)."],[<Icon.Chat d={14}/>,"Trợ lý ảo MedAmi hỏi đáp chuyên sâu cho từng hồ sơ cụ thể."]].map(([ic,text],i)=>(
+            {[[<Icon.FileText d={14}/>,"Tự động phân tích và tóm tắt diễn biến lâm sàng theo 3 giai đoạn."],[<Icon.Alert d={14}/>,"Phát hiện và cảnh báo sớm nguy cơ dựa trên hồ sơ bệnh án."],[<Icon.Stethoscope d={14}/>,"Hỗ trợ hội chẩn đa chuyên khoa (Virtual MDT) và giảng dạy lâm sàng."],[<Icon.Chat d={14}/>,"Trợ lý ảo MedAmi hỏi đáp chuyên sâu cho từng hồ sơ cụ thể."]].map(([ic,text],i)=>(
               <div key={i} className="feat-item"><span className="feat-icon" style={{color:"#1D6FE8"}}>{ic}</span>{text}</div>
             ))}
           </div>
@@ -4685,7 +4904,9 @@ function SpeakerButton({ text, color = "#64748B" }) {
     if (!window.speechSynthesis) return
     window.speechSynthesis.cancel()
     const u = new SpeechSynthesisUtterance(text)
-    u.lang = "vi-VN"
+    u.lang = getLang()==="en" ? "en-US" : "vi-VN"
+    // English: the browser's default English voice is fine. Vietnamese needs a vi voice.
+    if (getLang() === "en") { window.speechSynthesis.speak(u); return }
     if (_viVoiceCache === null) _viVoiceCache = await getVietnameseVoice()
     if (_viVoiceCache) {
       u.voice = _viVoiceCache
@@ -5571,7 +5792,7 @@ function CoStat({ m }) {
         {last && <circle cx={last[0]} cy={last[1]} r="2.6" fill={col}/>}
       </svg>
       <div className="co-stat-foot">
-        <span className="co-stat-norm">BT {m.normal}</span>
+        <span className="co-stat-norm">{getLang()==="en" ? `Ref ${m.normal}` : `BT ${m.normal}`}</span>
         {dateLabel && <span className="co-stat-date">{dateLabel}</span>}
       </div>
     </div>
@@ -6233,7 +6454,7 @@ function ChatMicButton({ getCurrentInput, onTextChange }) {
       const Recognition = getSpeechRecognitionCtor()
       if (Recognition) {
         const rec = new Recognition()
-        rec.lang = "vi-VN"
+        rec.lang = getLang()==="en" ? "en-US" : "vi-VN"
         rec.continuous = true
         rec.interimResults = true
         rec.onresult = (e) => {
@@ -6376,7 +6597,7 @@ function ChatTab({ report, hoSoText, messages, setMessages, mode }) {
       </div>
       <div className="chat-suggestions">
         {chatSuggestions(chatMode).map(s=>(
-          <button key={s} className="sug-chip" onClick={()=>send(s)} disabled={loading}>{s}</button>
+          <button key={s} className="sug-chip" onClick={()=>send(getLang()==="en" ? (translate(s) || s) : s)} disabled={loading}>{s}</button>
         ))}
       </div>
       {attachedFile && (
@@ -6891,7 +7112,7 @@ function AudioRecorder({ value, onChange, onAttach, attachLabel="Đính kèm", a
       }
     } catch { setErr("Không truy cập được micro. Hãy cho phép quyền micro cho trang web rồi thử lại."); return }
     const r = new SR()
-    r.lang="vi-VN"; r.continuous=true; r.interimResults=true; r.maxAlternatives=1
+    r.lang=getLang()==="en"?"en-US":"vi-VN"; r.continuous=true; r.interimResults=true; r.maxAlternatives=1
     finalRef.current = value ? (value.replace(/\s+$/,"") + " ") : ""
     r.onresult = (e) => {
       let interim = ""
@@ -7284,13 +7505,40 @@ function HistoryPanel({ onBack, onOpen, onOpenDbPatient, currentId }){
   // Records saved in this browser (IndexedDB) — tải riêng, không chặn hiện demo nếu lỗi
   const [dbPatients, setDbPatients] = useState(null) // null = đang tải, [] = rỗng, [...] = có dữ liệu
   const [dbError, setDbError] = useState(null)
+  const [cloudOn, setCloudOn] = useState(null)       // null = checking, true/false
+  const [syncKey, setSyncKeyState] = useState(() => getSyncKey())
+  const [syncing, setSyncing] = useState(false)
+  const [keyDraft, setKeyDraft] = useState(null)     // null = not editing
+  const [showKey, setShowKey] = useState(false)
+  const reload = useCallback(async ({ sync = false } = {}) => {
+    try {
+      if (sync) {
+        setSyncing(true)
+        try { await mpApi.syncAllToCloud() } catch (e) { mpToast(e.message || "Không đồng bộ được", "err") }
+        setSyncing(false)
+      }
+      const r = await mpApi.listPatients()
+      setDbPatients(r.patients || []); setDbError(null)
+    } catch (err) { setDbPatients([]); setDbError(err.message) }
+  }, [])
   useEffect(() => {
     let cancelled = false
-    mpApi.listPatients()
-      .then(r => { if (!cancelled) setDbPatients(r.patients || []) })
-      .catch(err => { if (!cancelled) { setDbPatients([]); setDbError(err.message) } })
+    cloudStatus().then(st => { if (!cancelled) { setCloudOn(!!st.enabled); reload({ sync: !!st.enabled }) } })
+    reload()
     return () => { cancelled = true }
-  }, [])
+  }, [reload])
+  const copyKey = async () => {
+    try { await navigator.clipboard.writeText(syncKey); mpToast("Đã sao chép khóa đồng bộ") }
+    catch { mpToast("Trình duyệt không cho phép tự sao chép", "err") }
+  }
+  const applyKey = async () => {
+    try {
+      const k = setSyncKey(keyDraft)
+      setSyncKeyState(k); setKeyDraft(null)
+      mpToast("Đã chuyển sang khóa đồng bộ mới")
+      reload({ sync: true })
+    } catch { mpToast("Khóa đồng bộ không hợp lệ", "err") }
+  }
   // handleDelete gọi mpConfirm() — trước đây là bug đã sửa: HistoryPanel là
   // overlay modal riêng với z-index CAO HƠN cả hộp thoại xác nhận (.cfm-ov),
   // nên hộp xác nhận xóa bị che khuất phía sau, nhìn như "chìm mất". Chuyển
@@ -7303,9 +7551,11 @@ function HistoryPanel({ onBack, onOpen, onOpenDbPatient, currentId }){
   const handleDelete = async (e, p) => {
     e.stopPropagation()
     const ok = await mpConfirm({
-      title: "Xóa hồ sơ đã lưu?",
-      message: `Xóa vĩnh viễn hồ sơ của ${p.ho_ten || "bệnh nhân này"} (BA ${p.so_benh_an})? Toàn bộ dữ liệu đã gộp qua ${p.so_lan_cap_nhat} lần cập nhật sẽ mất, không khôi phục được.`,
-      okText: "Xóa vĩnh viễn",
+      title: getLang()==="en" ? "Delete this saved record?" : "Xóa hồ sơ đã lưu?",
+      message: getLang()==="en"
+        ? `Permanently delete ${p.ho_ten || "this patient"} (MRN ${p.so_benh_an})? All data merged across ${p.so_lan_cap_nhat} update(s) will be lost${p.in_cloud ? ", including the cloud copy" : ""}.`
+        : `Xóa vĩnh viễn hồ sơ của ${p.ho_ten || "bệnh nhân này"} (BA ${p.so_benh_an})? Toàn bộ dữ liệu đã gộp qua ${p.so_lan_cap_nhat} lần cập nhật sẽ mất${p.in_cloud ? ", kể cả bản trên đám mây" : ""}, không khôi phục được.`,
+      okText: getLang()==="en" ? "Delete permanently" : "Xóa vĩnh viễn",
       danger: true,
     })
     if (!ok) return
@@ -7322,9 +7572,9 @@ function HistoryPanel({ onBack, onOpen, onOpenDbPatient, currentId }){
       }
     }, 5000)
     pendingDeleteTimers.current[p.so_benh_an] = timer
-    mpToast(`Đã xóa hồ sơ ${p.ho_ten || ""}`, "ok", {
+    mpToast(getLang()==="en" ? `Deleted ${p.ho_ten || "record"}` : `Đã xóa hồ sơ ${p.ho_ten || ""}`, "ok", {
       duration: 5200,
-      actionLabel: "Hoàn tác",
+      actionLabel: getLang()==="en" ? "Undo" : "Hoàn tác",
       onAction: () => {
         clearTimeout(pendingDeleteTimers.current[p.so_benh_an])
         delete pendingDeleteTimers.current[p.so_benh_an]
@@ -7445,9 +7695,9 @@ function HistoryPanel({ onBack, onOpen, onOpenDbPatient, currentId }){
     const ids = [...selectedIds]
     if (ids.length === 0) return
     const ok = await mpConfirm({
-      title: `Xóa vĩnh viễn ${ids.length} hồ sơ đã chọn?`,
-      message: `Toàn bộ dữ liệu của ${ids.length} hồ sơ sẽ mất, không khôi phục được. Bạn chắc chắn muốn xóa?`,
-      okText: "Xóa vĩnh viễn",
+      title: getLang()==="en" ? `Permanently delete ${ids.length} selected record(s)?` : `Xóa vĩnh viễn ${ids.length} hồ sơ đã chọn?`,
+      message: getLang()==="en" ? `All data for ${ids.length} record(s) will be lost and can't be recovered.` : `Toàn bộ dữ liệu của ${ids.length} hồ sơ sẽ mất, không khôi phục được. Bạn chắc chắn muốn xóa?`,
+      okText: getLang()==="en" ? "Delete permanently" : "Xóa vĩnh viễn",
       danger: true,
     })
     if (!ok) return
@@ -7464,15 +7714,19 @@ function HistoryPanel({ onBack, onOpen, onOpenDbPatient, currentId }){
     } catch {}
     setSelectedIds(new Set())
     setBulkDeleting(false)
-    mpToast(failed > 0 ? `Đã xóa ${ids.length - failed}/${ids.length} hồ sơ (${failed} lỗi)` : `Đã xóa ${ids.length} hồ sơ`, failed > 0 ? "err" : "ok")
+    mpToast(getLang()==="en"
+      ? (failed > 0 ? `Deleted ${ids.length - failed} of ${ids.length} (${failed} failed)` : `Deleted ${ids.length} record(s)`)
+      : (failed > 0 ? `Đã xóa ${ids.length - failed}/${ids.length} hồ sơ (${failed} lỗi)` : `Đã xóa ${ids.length} hồ sơ`), failed > 0 ? "err" : "ok")
   }
+  const savedCount = dbPatients ? dbPatients.length : 0
+  const initials = (name) => (name || "?").replace(/\(.*?\)/g, "").trim().split(/\s+/).slice(0, 2).map(w => w.charAt(0)).join("").toUpperCase() || "?"
   return (
-    <div className="hist-page">
+    <div className="hp">
       <header className="report-nav">
         <div className="report-nav-inner">
           <div className="nav-row1">
             <div className="nav-left">
-              <button className="ecg-back" onClick={onBack} title="Quay lại"><Icon.Back d={16} color="#1D6FE8"/></button>
+              <button className="hp-back" onClick={onBack} title="Quay lại" aria-label="Quay lại"><Icon.Back d={16} color="currentColor"/></button>
               <div className="logo">
                 <BrandMark size={30} radius={9}/>
                 <span className="logo-text" style={{fontSize:14}}>Med<em>Parcours</em></span>
@@ -7483,163 +7737,274 @@ function HistoryPanel({ onBack, onOpen, onOpenDbPatient, currentId }){
           </div>
         </div>
       </header>
-      <div className="hist-page-body">
-        <div className="hist-page-inner">
-          <span className="hist-title"><Icon.FileText d={17} color="#1D6FE8"/>Lịch sử bệnh án</span>
-          <div className="hist-list">
-            <div className="hist-section-lbl"><Icon.FileText d={13} color="#1D6FE8"/>Báo cáo - Demo</div>
-            {demoHistory().map(rec=>(
-              <div key={rec.id} className={`hist-item${rec.id===currentId?" cur":""}`} onClick={()=>onOpen(rec)}>
-                <div className="hist-avatar">{rec.ho_ten.charAt(0)}</div>
-                <div className="hist-info">
-                  <div className="hist-name">{rec.ho_ten} <span className="hist-meta">{rec.tuoi} tuổi, {rec.gioi_tinh} · BA {rec.so_benh_an}</span></div>
-                  <div className="hist-dx">{expandAbbr(rec.chan_doan)}</div>
-                  <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Vào viện {rec.ngay_vao_vien} · {rec.bac_si}</div>
+
+      <main className="hp-main">
+        <div className="hp-head">
+          <div>
+            <h1 className="hp-title">Lịch sử bệnh án</h1>
+            <p className="hp-sub">{cloudOn ? "Hồ sơ được lưu trên trình duyệt này và đồng bộ lên kho lưu trữ riêng của bạn." : "Hồ sơ được lưu ngay trên trình duyệt này, không gửi lên máy chủ."}</p>
+          </div>
+          <button className="hp-btn hp-btn-primary" onClick={onBack}><Icon.Plus d={14} color="currentColor"/>Phân tích hồ sơ mới</button>
+        </div>
+
+        {cloudOn && (
+          <section className="hp-card hp-cloud">
+            <div className="hp-cloud-ic"><Icon.Cloud d={18} color="#1D6FE8"/></div>
+            <div className="hp-cloud-body">
+              <div className="hp-cloud-t">Đồng bộ đám mây <span className="hp-pill hp-pill-ok">{syncing ? "Đang đồng bộ..." : "Đang bật"}</span></div>
+              <div className="hp-cloud-d">Dán khóa này trên thiết bị khác để mở cùng các hồ sơ. Giữ bí mật như mật khẩu.</div>
+              {keyDraft === null ? (
+                <div className="hp-key-row">
+                  <code className="hp-key" data-no-i18n>{showKey ? syncKey : syncKey.slice(0, 6) + "••••••••••••" + syncKey.slice(-4)}</code>
+                  <button className="hp-btn hp-btn-ghost" onClick={()=>setShowKey(v=>!v)}>{showKey ? "Ẩn" : "Hiện"}</button>
+                  <button className="hp-btn hp-btn-ghost" onClick={copyKey}>Sao chép</button>
+                  <button className="hp-btn hp-btn-ghost" onClick={()=>setKeyDraft("")}>Dùng khóa khác</button>
+                  <button className="hp-btn hp-btn-ghost" onClick={()=>reload({ sync: true })} disabled={syncing}>Đồng bộ ngay</button>
                 </div>
-                <span className="hist-open">Mở ▶</span>
+              ) : (
+                <div className="hp-key-row">
+                  <input className="hp-input" value={keyDraft} onChange={e=>setKeyDraft(e.target.value)} placeholder="Dán khóa đồng bộ từ thiết bị khác" autoFocus/>
+                  <button className="hp-btn hp-btn-primary" onClick={applyKey} disabled={!keyDraft.trim()}>Áp dụng</button>
+                  <button className="hp-btn hp-btn-ghost" onClick={()=>setKeyDraft(null)}>Hủy</button>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        <section className="hp-section">
+          <div className="hp-section-h">
+            <h2>Hồ sơ đã lưu {dbPatients && <span className="hp-count">{savedCount}</span>}</h2>
+          </div>
+
+          {dbPatients && dbPatients.length > 0 && (
+            <div className="hp-toolbar">
+              <div className="hp-search">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} placeholder="Tìm theo tên bệnh nhân hoặc số bệnh án..."/>
+                {searchQuery && <button className="hp-search-x" onClick={()=>setSearchQuery("")} title="Xóa" aria-label="Xóa"><Icon.Close d={11} color="currentColor"/></button>}
               </div>
-            ))}
-            {dbPatients && dbPatients.length > 0 && (
-              <>
-                <div className="hist-section-lbl"><Icon.FileText d={13} color="#059669"/>Hồ sơ đã lưu</div>
-                <div className="rpt-search hist-search">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#7A96C8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                  <input value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} placeholder="Tìm theo tên bệnh nhân hoặc số bệnh án..."/>
-                  {searchQuery && <button className="rpt-search-x" onClick={()=>setSearchQuery("")} title="Xóa"><Icon.Close d={11} color="#7A96C8"/></button>}
-                </div>
-                <div className="hist-toolbar">
-                  <label className="hist-select-all">
-                    <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll}/>
-                    Chọn tất cả
-                  </label>
-                  {selectedIds.size > 0 && (
-                    <button className="hist-bulk-del-btn" onClick={handleBulkDelete} disabled={bulkDeleting}>
-                      {bulkDeleting ? <span className="hist-del-spin"/> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>}
-                      Xóa {selectedIds.size} mục đã chọn
-                    </button>
+              {diseaseGroups.length > 0 && (
+                <select className="hp-select" value={diseaseFilterOpt} onChange={e=>setDiseaseFilterOpt(e.target.value)} title="Lọc theo loại bệnh">
+                  <option value="all">Mọi loại bệnh</option>
+                  {diseaseGroups.map(g => <option key={g} value={g}>{g}</option>)}
+                </select>
+              )}
+              <select className="hp-select" value={filterOpt} onChange={e=>setFilterOpt(e.target.value)} title="Lọc">
+                <option value="all">Tất cả</option>
+                <option value="7d">7 ngày qua</option>
+                <option value="30d">30 ngày qua</option>
+                <option value="updated">Đã cập nhật ≥2 lần</option>
+              </select>
+              <select className="hp-select" value={sortOpt} onChange={e=>setSortOpt(e.target.value)} title="Sắp xếp">
+                <option value="newest">Mới nhất</option>
+                <option value="oldest">Cũ nhất</option>
+                <option value="name">Tên A-Z</option>
+              </select>
+            </div>
+          )}
+
+          {dbPatients && dbPatients.length > 0 && (
+            <div className="hp-bulk">
+              <label className="hp-check-all">
+                <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll}/>
+                Chọn tất cả
+              </label>
+              {selectedIds.size > 0 && (
+                <button className="hp-btn hp-btn-danger" onClick={handleBulkDelete} disabled={bulkDeleting}>
+                  {bulkDeleting ? <span className="hist-del-spin"/> : <Icon.Trash d={13} color="currentColor"/>}
+                  {`Xóa ${selectedIds.size} mục đã chọn`}
+                </button>
+              )}
+            </div>
+          )}
+
+          {dbPatients === null && (<div className="hp-list"><SkeletonHistCard/><SkeletonHistCard/></div>)}
+
+          {dbPatients && dbPatients.length === 0 && (
+            <div className="hp-empty">
+              <div className="hp-empty-ic"><Icon.FileText d={26} color="#94A3B8"/></div>
+              <div className="hp-empty-t">Chưa có hồ sơ nào được lưu</div>
+              <div className="hp-empty-d">Phân tích một hồ sơ rồi bấm "Lưu" để theo dõi bệnh nhân qua các lần khám.</div>
+              <button className="hp-btn hp-btn-primary" onClick={onBack}>Phân tích hồ sơ mới</button>
+            </div>
+          )}
+
+          {dbPatients && dbPatients.length > 0 && visiblePatients.length === 0 && (
+            <div className="hp-empty hp-empty-sm">Không có hồ sơ nào khớp bộ lọc hiện tại.</div>
+          )}
+
+          <div className="hp-list">
+            {visiblePatients.map(p => {
+              const isEditing = editingId === p.so_benh_an
+              const groups = (p.nhom_benh || "").split(",").map(x => x.trim()).filter(Boolean)
+              return (
+                <div key={p.so_benh_an} className={`hp-row${currentId===("db-"+p.so_benh_an)?" cur":""}${selectedIds.has(p.so_benh_an)?" sel":""}`} onClick={isEditing ? undefined : ()=>onOpenDbPatient(p.so_benh_an)}>
+                  {!isEditing && (
+                    <input type="checkbox" className="hp-row-check" checked={selectedIds.has(p.so_benh_an)}
+                      onClick={e=>e.stopPropagation()} onChange={()=>toggleSelectOne(p.so_benh_an)} aria-label="Chọn hồ sơ"/>
                   )}
-                  <div className="hist-toolbar-spacer"/>
-                  {diseaseGroups.length > 0 && (
-                    <select className="hist-dd" value={diseaseFilterOpt} onChange={e=>setDiseaseFilterOpt(e.target.value)} title="Lọc theo loại bệnh">
-                      <option value="all">Mọi loại bệnh</option>
-                      {diseaseGroups.map(g => <option key={g} value={g}>{g}</option>)}
-                    </select>
-                  )}
-                  <select className="hist-dd" value={filterOpt} onChange={e=>setFilterOpt(e.target.value)} title="Lọc">
-                    <option value="all">Tất cả</option>
-                    <option value="7d">7 ngày qua</option>
-                    <option value="30d">30 ngày qua</option>
-                    <option value="updated">Đã cập nhật ≥2 lần</option>
-                  </select>
-                  <select className="hist-dd" value={sortOpt} onChange={e=>setSortOpt(e.target.value)} title="Sắp xếp">
-                    <option value="newest">Mới nhất</option>
-                    <option value="oldest">Cũ nhất</option>
-                    <option value="name">Tên A-Z</option>
-                  </select>
-                </div>
-                {visiblePatients.length === 0 && (
-                  <div className="hist-empty-state">
-                    <Icon.FileText d={28} color="#CBD5E1"/>
-                    <div>Không có hồ sơ nào khớp bộ lọc hiện tại.</div>
-                  </div>
-                )}
-                {visiblePatients.map(p=>{
-                  const isEditing = editingId === p.so_benh_an
-                  return (
-                  <div key={p.so_benh_an} className={`hist-item${currentId===("db-"+p.so_benh_an)?" cur":""}`} onClick={isEditing ? undefined : ()=>onOpenDbPatient(p.so_benh_an)}>
-                    {!isEditing && (
-                      <input type="checkbox" className="hist-row-check" checked={selectedIds.has(p.so_benh_an)}
-                        onClick={e=>e.stopPropagation()} onChange={()=>toggleSelectOne(p.so_benh_an)} aria-label="Chọn hồ sơ"/>
-                    )}
-                    <div className="hist-avatar" style={{background:"linear-gradient(135deg,#D1FAE5,#A7F3D0)",color:"#059669"}}>{(p.ho_ten||"?").charAt(0)}</div>
-                    <div className="hist-info">
-                      {isEditing ? (
-                        <div className="hist-rename-row" onClick={e=>e.stopPropagation()}>
-                          <input
-                            className="hist-rename-input"
-                            value={editValue}
-                            autoFocus
-                            placeholder="Tên hiển thị (để trống = dùng tên gốc)"
-                            onChange={e=>setEditValue(e.target.value)}
-                            onKeyDown={e=>{
-                              if (e.key === "Enter") saveEdit(e, p)
-                              if (e.key === "Escape") cancelEdit(e)
-                            }}
-                          />
-                          <button className="hist-rename-save" onClick={(e)=>saveEdit(e, p)} disabled={savingRename} title="Lưu tên" aria-label="Lưu tên">
-                            {savingRename ? <span className="hist-del-spin"/> : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
-                          </button>
-                          <button className="hist-rename-cancel" onClick={cancelEdit} disabled={savingRename} title="Hủy" aria-label="Hủy">
-                            <Icon.Close d={13}/>
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="hist-name">
-                          {pinnedIds.has(p.so_benh_an) && <Icon.Pin d={12} color="#D97706" style={{marginRight:4,verticalAlign:"-1px"}}/>}
-                          {p.ho_ten || "(chưa rõ tên)"} <span className="hist-meta">BA {p.so_benh_an}</span>
-                        </div>
-                      )}
-                      <div className="hist-dx">Đã cập nhật {p.so_lan_cap_nhat} lần</div>
-                      <div className="hist-foot"><Icon.Clock d={11} color="#94a3b8"/>Cập nhật gần nhất: {fmtDateTime(p.cap_nhat_luc)}</div>
-                    </div>
-                    {!isEditing && <span className="hist-open">Mở ▶</span>}
-                    {!isEditing && (
-                      <div className="hist-actions">
-                        <IconTip text={pinnedIds.has(p.so_benh_an) ? "Bỏ ghim" : "Ghim ưu tiên lên đầu"} position="top">
-                          <button className={`hist-pin-btn${pinnedIds.has(p.so_benh_an) ? " pinned" : ""}`} onClick={(e)=>togglePin(p.so_benh_an, e)} aria-label="Ghim ưu tiên">
-                            <Icon.Pin d={14}/>
-                          </button>
-                        </IconTip>
-                        <IconTip text="Đổi tên hồ sơ" position="top">
-                          <button className="hist-edit-btn" onClick={(e)=>startEdit(e, p)} aria-label="Đổi tên hồ sơ">
-                            <Icon.Pencil d={14}/>
-                          </button>
-                        </IconTip>
-                        <IconTip text="Xóa hồ sơ" position="top">
-                          <button className="hist-del-btn" onClick={(e)=>handleDelete(e, p)} aria-label="Xóa hồ sơ">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
-                          </button>
-                        </IconTip>
+                  <div className="hp-avatar">{initials(p.ho_ten)}</div>
+                  <div className="hp-row-main">
+                    {isEditing ? (
+                      <div className="hist-rename-row" onClick={e=>e.stopPropagation()}>
+                        <input className="hp-input" value={editValue} autoFocus placeholder="Tên hiển thị (để trống = dùng tên gốc)"
+                          onChange={e=>setEditValue(e.target.value)}
+                          onKeyDown={e=>{ if (e.key === "Enter") saveEdit(e, p); if (e.key === "Escape") cancelEdit(e) }}/>
+                        <button className="hp-btn hp-btn-primary" onClick={(e)=>saveEdit(e, p)} disabled={savingRename}>Lưu</button>
+                        <button className="hp-btn hp-btn-ghost" onClick={cancelEdit} disabled={savingRename}>Hủy</button>
+                      </div>
+                    ) : (
+                      <div className="hp-row-name">
+                        {pinnedIds.has(p.so_benh_an) && <Icon.Pin d={12} color="#D97706"/>}
+                        <span>{p.ho_ten || "(chưa rõ tên)"}</span>
+                        <span className="hp-chip" data-no-i18n>{getLang()==="en" ? "MRN" : "BA"} {p.so_benh_an}</span>
+                        {p.cloud_only && <span className="hp-chip hp-chip-cloud">Trên đám mây</span>}
                       </div>
                     )}
+                    {groups.length > 0 && <div className="hp-tags">{groups.slice(0,3).map(g => <span key={g} className="hp-tag">{g}</span>)}</div>}
+                    <div className="hp-row-meta">
+                      <Icon.Clock d={11} color="currentColor"/>
+                      <span>{`Cập nhật gần nhất: ${fmtDateTime(p.cap_nhat_luc)}`}</span>
+                      <span className="hp-dot">·</span>
+                      <span>{`Đã cập nhật ${p.so_lan_cap_nhat} lần`}</span>
+                    </div>
                   </div>
-                )})}
-              </>
-            )}
-            {dbPatients === null && (
-              <>
-                <SkeletonHistCard/>
-                <SkeletonHistCard/>
-                <SkeletonHistCard/>
-              </>
-            )}
-            {dbPatients !== null && !dbError && dbPatients.length === 0 && (
-              <div className="hist-empty-state">
-                <Icon.FileText d={30} color="#CBD5E1"/>
-                <div>Chưa có hồ sơ nào được lưu.<br/>Phân tích 1 hồ sơ rồi bấm "Lưu" để bắt đầu theo dõi lâu dài.</div>
-              </div>
-            )}
-            {dbError && (
-              <div className="hist-loading-hint">Chưa kết nối được hệ thống lưu trữ lâu dài — chỉ hiện được hồ sơ mẫu.</div>
-            )}
+                  {!isEditing && (
+                    <div className="hp-row-actions" onClick={e=>e.stopPropagation()}>
+                      <IconTip text={pinnedIds.has(p.so_benh_an) ? "Bỏ ghim" : "Ghim ưu tiên lên đầu"} position="top">
+                        <button className={`hp-icon${pinnedIds.has(p.so_benh_an) ? " on" : ""}`} onClick={(e)=>togglePin(p.so_benh_an, e)} aria-label="Ghim ưu tiên"><Icon.Pin d={14}/></button>
+                      </IconTip>
+                      <IconTip text="Đổi tên hồ sơ" position="top">
+                        <button className="hp-icon" onClick={(e)=>startEdit(e, p)} aria-label="Đổi tên hồ sơ"><Icon.Pencil d={14}/></button>
+                      </IconTip>
+                      <IconTip text="Xóa hồ sơ" position="top">
+                        <button className="hp-icon hp-icon-danger" onClick={(e)=>handleDelete(e, p)} aria-label="Xóa hồ sơ"><Icon.Trash d={14} color="currentColor"/></button>
+                      </IconTip>
+                      <button className="hp-btn hp-btn-soft" onClick={()=>onOpenDbPatient(p.so_benh_an)}>Mở</button>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
-        </div>
-      </div>
+          {dbError && <div className="hp-note">Không đọc được bộ nhớ trình duyệt. Bạn vẫn có thể xem hồ sơ mẫu bên dưới.</div>}
+        </section>
+
+        <section className="hp-section">
+          <div className="hp-section-h"><h2>Hồ sơ mẫu</h2><span className="hp-section-hint">Dữ liệu tổng hợp, không phải bệnh nhân thật</span></div>
+          <div className="hp-list">
+            {demoHistory().map(rec => (
+              <div key={rec.id} className={`hp-row hp-row-demo${rec.id===currentId?" cur":""}`} onClick={()=>onOpen(rec)}>
+                <div className="hp-avatar hp-avatar-demo">{initials(rec.ho_ten)}</div>
+                <div className="hp-row-main">
+                  <div className="hp-row-name">
+                    <span>{rec.ho_ten}</span>
+                    <span className="hp-chip" data-no-i18n>{getLang()==="en" ? `${rec.tuoi} y/o · ${rec.gioi_tinh}` : `${rec.tuoi} tuổi · ${rec.gioi_tinh}`}</span>
+                    <span className="hp-chip" data-no-i18n>{getLang()==="en" ? "MRN" : "BA"} {rec.so_benh_an}</span>
+                  </div>
+                  <div className="hp-row-dx">{expandAbbr(rec.chan_doan)}</div>
+                  <div className="hp-row-meta"><Icon.Clock d={11} color="currentColor"/><span>{`Vào viện ${rec.ngay_vao_vien}`}</span></div>
+                </div>
+                <div className="hp-row-actions"><button className="hp-btn hp-btn-soft" onClick={(e)=>{ e.stopPropagation(); onOpen(rec) }}>Mở</button></div>
+              </div>
+            ))}
+          </div>
+        </section>
+      </main>
     </div>
   )
 }
 
 const EXTRA_CSS = `
+
+/* ─── Record history page ─── */
+.hp{min-height:100vh;background:var(--bg,#F4F7FB)}
+.hp-main{max-width:1120px;margin:0 auto;padding:28px 24px 64px}
+.hp-back{width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;border-radius:10px;border:1px solid #E2E8F0;background:#fff;color:#1D6FE8;cursor:pointer;transition:all .15s}
+.hp-back:hover{background:#EFF6FF;border-color:#BFDBFE}
+.hp-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.hp-title{font-size:26px;font-weight:800;color:#0F172A;margin:0;letter-spacing:-.01em}
+.hp-sub{margin:6px 0 0;color:#64748B;font-size:14px}
+.hp-btn{display:inline-flex;align-items:center;gap:6px;border-radius:10px;font:inherit;font-size:13px;font-weight:600;padding:8px 14px;border:1px solid transparent;cursor:pointer;white-space:nowrap;transition:all .15s}
+.hp-btn:disabled{opacity:.55;cursor:not-allowed}
+.hp-btn-primary{background:#1D6FE8;color:#fff}
+.hp-btn-primary:hover:not(:disabled){background:#1559C2}
+.hp-btn-ghost{background:#fff;border-color:#E2E8F0;color:#334155}
+.hp-btn-ghost:hover:not(:disabled){border-color:#BFDBFE;color:#1D6FE8}
+.hp-btn-soft{background:#EFF6FF;color:#1D6FE8}
+.hp-btn-soft:hover{background:#DBEAFE}
+.hp-btn-danger{background:#FEF2F2;color:#DC2626;border-color:#FECACA}
+.hp-card{background:#fff;border:1px solid #E2E8F0;border-radius:16px;padding:18px 20px}
+.hp-cloud{display:flex;gap:14px;align-items:flex-start;margin-bottom:24px}
+.hp-cloud-ic{width:38px;height:38px;border-radius:11px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.hp-cloud-body{flex:1;min-width:0}
+.hp-cloud-t{font-weight:700;color:#0F172A;display:flex;align-items:center;gap:8px}
+.hp-cloud-d{color:#64748B;font-size:13px;margin-top:3px}
+.hp-pill{font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px}
+.hp-pill-ok{background:#ECFDF5;color:#059669}
+.hp-key-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.hp-key{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;background:#F1F5F9;border-radius:8px;padding:7px 10px;color:#334155}
+.hp-input{flex:1;min-width:220px;border:1px solid #CBD5E1;border-radius:10px;padding:8px 12px;font:inherit;font-size:13px;background:#fff;color:#0F172A}
+.hp-input:focus{outline:2px solid #BFDBFE;border-color:#1D6FE8}
+.hp-section{margin-top:8px;margin-bottom:28px}
+.hp-section-h{display:flex;align-items:baseline;gap:10px;margin-bottom:12px}
+.hp-section-h h2{font-size:15px;font-weight:700;color:#0F172A;margin:0;display:flex;align-items:center;gap:8px}
+.hp-section-hint{font-size:12.5px;color:#94A3B8}
+.hp-count{font-size:12px;font-weight:700;background:#E2E8F0;color:#475569;border-radius:999px;padding:1px 8px}
+.hp-toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.hp-search{flex:1;min-width:240px;display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E2E8F0;border-radius:10px;padding:0 10px;color:#94A3B8}
+.hp-search input{flex:1;border:0;outline:0;background:transparent;font:inherit;font-size:13.5px;padding:9px 0;color:#0F172A}
+.hp-search-x{border:0;background:transparent;cursor:pointer;color:#94A3B8;display:flex}
+.hp-select{border:1px solid #E2E8F0;border-radius:10px;background:#fff;padding:8px 10px;font:inherit;font-size:13px;color:#334155;cursor:pointer}
+.hp-bulk{display:flex;align-items:center;gap:12px;min-height:34px;margin-bottom:6px}
+.hp-check-all{display:flex;align-items:center;gap:7px;font-size:13px;color:#475569;cursor:pointer}
+.hp-list{display:flex;flex-direction:column;gap:10px}
+.hp-row{display:flex;align-items:center;gap:14px;background:#fff;border:1px solid #E2E8F0;border-radius:14px;padding:14px 16px;cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.hp-row:hover{border-color:#BFDBFE;box-shadow:0 6px 18px rgba(15,23,42,.06)}
+.hp-row.cur{border-color:#1D6FE8;box-shadow:0 0 0 3px rgba(29,111,232,.12)}
+.hp-row.sel{background:#F8FBFF}
+.hp-row-check{width:16px;height:16px;cursor:pointer;flex-shrink:0}
+.hp-avatar{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#DBEAFE,#BFDBFE);color:#1D4ED8;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.hp-avatar-demo{background:linear-gradient(135deg,#EDE9FE,#DDD6FE);color:#6D28D9}
+.hp-row-main{flex:1;min-width:0}
+.hp-row-name{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;color:#0F172A;font-size:15px}
+.hp-chip{font-size:11.5px;font-weight:600;color:#475569;background:#F1F5F9;border-radius:6px;padding:2px 7px}
+.hp-chip-cloud{background:#EFF6FF;color:#1D6FE8}
+.hp-row-dx{color:#475569;font-size:13px;margin-top:4px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.hp-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.hp-tag{font-size:11.5px;color:#0F766E;background:#F0FDFA;border:1px solid #CCFBF1;border-radius:999px;padding:1px 8px}
+.hp-row-meta{display:flex;align-items:center;gap:6px;color:#94A3B8;font-size:12px;margin-top:6px;flex-wrap:wrap}
+.hp-dot{opacity:.6}
+.hp-row-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.hp-icon{width:32px;height:32px;border-radius:9px;border:0;background:transparent;color:#94A3B8;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.hp-icon:hover{background:#F1F5F9;color:#334155}
+.hp-icon.on{color:#D97706}
+.hp-icon-danger:hover{background:#FEF2F2;color:#DC2626}
+.hp-empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;background:#fff;border:1px dashed #CBD5E1;border-radius:16px;padding:36px 20px}
+.hp-empty-sm{padding:18px;color:#64748B;font-size:13px}
+.hp-empty-ic{width:52px;height:52px;border-radius:14px;background:#F1F5F9;display:flex;align-items:center;justify-content:center}
+.hp-empty-t{font-weight:700;color:#0F172A}
+.hp-empty-d{color:#64748B;font-size:13.5px;max-width:420px;margin-bottom:6px}
+.hp-note{margin-top:10px;font-size:12.5px;color:#B45309;background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:8px 12px}
+@media (max-width:640px){
+  .hp-main{padding:20px 14px 48px}
+  .hp-row{flex-wrap:wrap}
+  .hp-row-actions{width:100%;justify-content:flex-end}
+}
+body.theme-dark .hp{background:var(--bg)}
+body.theme-dark .hp-title,body.theme-dark .hp-section-h h2,body.theme-dark .hp-row-name,body.theme-dark .hp-cloud-t,body.theme-dark .hp-empty-t{color:#E2E8F0}
+body.theme-dark .hp-card,body.theme-dark .hp-row,body.theme-dark .hp-empty,body.theme-dark .hp-search,body.theme-dark .hp-select,body.theme-dark .hp-btn-ghost,body.theme-dark .hp-back,body.theme-dark .hp-input{background:#1B2536;border-color:#2B3A52;color:#CBD5E1}
+body.theme-dark .hp-search input{color:#E2E8F0}
+body.theme-dark .hp-chip,body.theme-dark .hp-key{background:#243149;color:#CBD5E1}
+body.theme-dark .hp-row-dx{color:#94A3B8}
+body.theme-dark .hp-row.sel{background:#1E2B42}
 .lang-toggle{display:inline-flex;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-right:6px;background:rgba(255,255,255,.9)}
 .lang-toggle button{border:0;background:transparent;padding:6px 9px;font-size:12px;font-weight:700;color:#64748B;cursor:pointer}
 .lang-toggle button.on{background:#1D6FE8;color:#fff}
 body.theme-dark .lang-toggle{background:#1B2536;border-color:var(--border)}
 
 
-.auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:4px;background:#EEF3FA;border-radius:11px;margin:18px 0 0}
-.auth-tabs button{border:none;background:transparent;color:#6B7F99;font-family:inherit;font-size:12.5px;font-weight:700;padding:8px 10px;border-radius:8px;cursor:pointer;transition:all .15s}
-.auth-tabs button.active{background:#fff;color:#1D6FE8;box-shadow:0 2px 8px rgba(16,41,66,.1)}
-.field-optional{font-weight:400;color:#94A3B8}
 .login-ok{display:flex;align-items:flex-start;gap:7px;background:#ECFDF5;color:#047857;border:1px solid #A7F3D0;font-size:12.5px;line-height:1.5;padding:9px 12px;border-radius:9px;margin-bottom:13px;text-align:left}
 .auth-text-link{width:100%;border:none;background:transparent;color:#1D6FE8;font-family:inherit;font-size:12.5px;font-weight:700;padding:11px 4px 0;cursor:pointer}
 .auth-text-link:hover{text-decoration:underline}.auth-text-link:disabled{opacity:.55;cursor:not-allowed}
@@ -8913,7 +9278,7 @@ function UnifiedChatWidget({ report, hoSoText, clinicalMessages, setClinicalMess
           {isClinical && report && (
             <div className="fc-sug">
               {chatSuggestions("clinical").slice(0,3).map(s=>(
-                <button key={s} onClick={()=>send(s)} disabled={loading}>{s}</button>
+                <button key={s} onClick={()=>send(getLang()==="en" ? (translate(s) || s) : s)} disabled={loading}>{s}</button>
               ))}
             </div>
           )}
@@ -9029,7 +9394,7 @@ function LangToggle(){
   const [lang, setL] = useState(getLang())
   useEffect(() => onLangChange(setL), [])
   return (
-    <div className="lang-toggle" role="group" aria-label="Language" data-no-i18n>
+    <div className="lang-toggle" role="group" aria-label="Language" title={`Build ${document.documentElement.dataset.build || "dev"}`} data-no-i18n>
       {["en","vi"].map(l => (
         <button key={l} className={lang===l?"on":""} onClick={()=>setLang(l)} aria-pressed={lang===l}>{l.toUpperCase()}</button>
       ))}

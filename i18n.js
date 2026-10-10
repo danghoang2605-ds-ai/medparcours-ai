@@ -18,6 +18,55 @@ const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "TEXTAREA", "INPUT", "CODE", "PRE"
 
 // Dynamic strings built from templates (numbers/names inside).
 const PATTERNS = [
+  // Sentences React assembles from several text nodes (see processRun).
+  [/^Phân tích 1 tài liệu$/, "Analyze 1 document"],
+  [/^Phân tích (\d+) tài liệu$/, "Analyze $1 documents"],
+  [/^1 tài liệu đã chọn$/, "1 document selected"],
+  [/^(\d+) tài liệu đã chọn$/, "$1 documents selected"],
+  [/^(\d+) từ · lời dặn kèm hồ sơ$/, "$1 words · attached to the record as instructions"],
+  [/^Chi tiết (\d+) lượt siêu âm$/, "All $1 echo studies"],
+  [/^1 cảnh báo cao$/, "1 high-priority alert"], [/^(\d+) cảnh báo cao$/, "$1 high-priority alerts"],
+  [/^1 biến cố$/, "1 event"], [/^(\d+) biến cố$/, "$1 events"],
+  [/^(\d+) cần xử lý$/, "$1 need action"], [/^(\d+) theo dõi$/, "$1 to monitor"],
+  [/^Giai đoạn (\d): (.+)$/, "Phase $1: $2"],
+  [/^Kết luận Giai đoạn (\d):$/, "Phase $1 conclusion:"],
+  [/^Xóa (\d+) mục đã chọn$/, "Delete $1 selected"],
+  [/^Đã cập nhật 1 lần$/, "1 update"], [/^Đã cập nhật (\d+) lần$/, "$1 updates"],
+  [/^Cập nhật gần nhất: (.+)$/, "Last updated $1"],
+  [/^Vào viện (\S+)$/, "Admitted $1"],
+  [/^Xóa 1 mục đã chọn$/, "Delete 1 selected"],
+  [/^Phân tích hồ sơ mới$/, "Analyze a new record"],
+  [/^(\d+) tuổi, (.+) · BA (.+)$/, "$1 y/o, $2 · MRN $3"],
+  [/^Vào viện (.+) · (.+)$/, "Admitted $1 · $2"],
+  [/^(\d+) ký tự · tự lưu$/, "$1 characters · saved automatically"], [/^(\d+) ký tự$/, "$1 characters"],
+  [/^Đích điều trị: (.+) — (\d+) lần trong đích$/, "Target $1 · $2 readings in range"],
+  [/^Từ (.+) đến nay \((\d+) ngày\)$/, "Since $1 ($2 days)"],
+  [/^Từ (.+?) đến (.+)$/, "From $1 to $2"], [/^Từ (.+)$/, "Since $1"],
+  [/^Hiện tại: (.+)$/, "Now: $1"],
+  [/^Trước: (.+)$/, "Before: $1"],
+  [/^Tin cậy (\d+)%$/, "Confidence $1%"], [/^Ưu tiên (\d+)$/, "Priority $1"], [/^Bước (\d+)$/, "Step $1"],
+  [/^Điều phối viên · Mức đồng thuận: (.+)$/, "Moderator · Level of agreement: $1"],
+  [/^(\d+) tuổi • (.+?) • (.+)$/, "$1 y/o • $2 • $3"], [/^(\d+) tuổi, (.+)$/, "$1 y/o, $2"],
+  [/^Ngày sinh: (.+)$/, "Date of birth: $1"], [/^Số bệnh án: (.+)$/, "MRN: $1"],
+  [/^Lần đo đầu \((.+)\)$/, "First reading ($1)"], [/^Gần nhất \((.+)\)$/, "Latest ($1)"],
+  [/^Tương tác thuốc \((\d+)\)$/, "Drug interactions ($1)"],
+  [/^Chỉnh liều theo chức năng thận \((\d+)\)$/, "Renal dose adjustments ($1)"],
+  [/^Trùng nhóm thuốc \((\d+)\)$/, "Duplicate drug classes ($1)"],
+  [/^Phù hợp khuyến cáo \((\d+)\)$/, "Guideline-aligned ($1)"],
+  [/^(.+) \(eGFR hiện tại: (.+)\)$/, "$1 (current eGFR: $2)"],
+  [/^Ngày (\d.+)$/, "Date $1"],
+  [/^(\d+)\/(\d+) khoa$/, "$1/$2 specialties"],
+  [/^Kali (.+)$/, "Potassium $1"],
+  [/^Không có hồ sơ đã lưu với số (.+)\.$/, "No saved record with MRN $1."],
+  [/^Hồ sơ (.+) đã được lưu\. Dùng "Cập nhật hồ sơ" để thêm tài liệu\.$/, "Record $1 is already saved. Use \"Update record\" to add documents."],
+  [/^Đồng bộ đám mây thất bại \(mã (\d+)\)$/, "Cloud sync failed (code $1)"],
+  [/^Định dạng (.+) chưa được hỗ trợ\. Hỗ trợ: PDF, Word \(\.docx\), Excel \(\.xlsx\), PowerPoint \(\.pptx\), ảnh \(\.png\/\.jpg\)\.$/, "The $1 format isn't supported. Supported: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), images (.png/.jpg)."],
+  [/^Máy chủ phân tích gặp lỗi \(mã (\d+)\)\. Hãy thử lại sau giây lát\.$/, "The analysis server returned an error (code $1). Please try again in a moment."],
+  [/^Máy chủ phân tích gặp lỗi \(mã (\d+)\)\. File có thể quá lớn để tải lên trực tiếp; nếu là PDF scan, hãy dùng bản PDF có chữ\.$/, "The analysis server returned an error (code $1). The file may be too large to upload directly; if it's a scanned PDF, use one with selectable text."],
+  [/^Chỉ xem mức (.+)$/, "Show only: $1"],
+  [/^Siêu âm tim (.+)$/, "Echocardiogram ($1)"],
+  [/^(.+) - (.+) \((\d+) ngày\)$/, "$1 - $2 ($3 days)"],
+  [/^([+-]?[\d.]+%?) tăng$/, "$1 increase"], [/^([+-]?[\d.]+%?) giảm$/, "$1 decrease"],
   [/^Đang đọc (\d+)\/(\d+) trang$/, "Reading page $1/$2"],
   [/^Đã cập nhật hồ sơ — lần cập nhật thứ (\d+)$/, "Record updated: update #$1"],
   [/^Bản demo công khai đang giới hạn lượt dùng\. Thử lại sau (\d+) giây\.$/, "The public demo is rate-limited. Try again in $1 seconds."],
@@ -69,12 +118,15 @@ const FRAGMENTS = [
   [/^Giới tính ghi nhận: /g, "Recorded sex: "], [/^Huyết áp tâm thu ghi nhận gần nhất: /g, "Latest recorded systolic BP: "],
   [/^Dải INR ghi nhận: ([\d.]+) đến ([\d.]+) \(chênh ([\d.]+)\)$/g, "Recorded INR range: $1 to $2 (spread $3)"],
   [/Đã chuyển sang chế độ: /g, "Switched to mode: "],
-  [/Học vụ \(Giảng dạy\)/g, "Teaching"], [/Hội chẩn AI/g, "AI case conference"], [/Bác sĩ \(Lâm sàng\)/g, "Doctor (Clinical)"],
+  [/ — Nguồn: /g, " — Source: "], [/^Nguồn: /g, "Source: "], [/ESC suy tim/g, "ESC Heart Failure"], [/^Căn cứ: /g, "Basis: "], [/ \| Thận trọng: /g, " | Caution: "],
+  [/: tổng (\d+)\/(\d+) điểm/g, ": total $1/$2 points"],
+  [/Đây là vấn đề đã được hệ thống đánh giá là cần chú ý — nên xử trí theo đúng hướng ưu tiên đã nêu, không trì hoãn hoặc bỏ qua\./g, "The system flagged this as a problem that needs attention; act on the stated priority rather than delaying or skipping it."],
+  [/Học vụ \(Giảng dạy\)/g, "Teaching"], [/Hội chẩn AI/g, "AI case conference"], [/Bác sĩ \(Lâm sàng\)/g, "Clinician"],
   [/ đang trình bày nhận định\.\.\./g, " is presenting an assessment..."],
   [/Phẫu thuật Tim/g, "Cardiac surgery"], [/Hồi sức tích cực/g, "Intensive care"], [/Truyền nhiễm/g, "Infectious diseases"],
   [/Huyết học - Đông máu/g, "Hematology - Coagulation"], [/Thận - Tiết niệu/g, "Nephrology - Urology"],
   [/Dinh dưỡng lâm sàng/g, "Clinical nutrition"], [/Tim mạch/g, "Cardiology"],
-  [/, (\d+) tuổi, /g, ", $1 y/o, "], [/Địa chỉ:/g, "Address:"], [/Vào viện:/g, "Admitted:"], [/Số bệnh án:/g, "Record no.:"],
+  [/, (\d+) tuổi, /g, ", $1 y/o, "], [/Địa chỉ:/g, "Address:"], [/Vào viện:/g, "Admitted:"], [/Số bệnh án:/g, "MRN:"],
   [/Dấu hiệu sinh tồn/g, "Vital signs"], [/(^|[\s:(])HA (?=\d)/g, "$1BP "], [/mạch (\d+) l\/ph/g, "pulse $1 bpm"],
   [/nhiệt độ/g, "temperature"], [/nhịp thở/g, "respiratory rate"],
   [/^Ngoại khoa \(([^)]*)\):/g, "Surgery ($1):"], [/^Nội khoa:/g, "Medical:"],
@@ -96,11 +148,56 @@ const EN_SENTENCES = Object.fromEntries(
 
 let lang = typeof window !== "undefined" ? detectDefault() : "en"
 const listeners = new Set()
-const originalText = new WeakMap()   // Text node -> Vietnamese source
 const originalAttr = new WeakMap()   // Element -> { attr: Vietnamese source }
 
 export const getLang = () => lang
 export const onLangChange = (fn) => { listeners.add(fn); return () => listeners.delete(fn) }
+
+// Coarse separators first (keeps whole sentences together), then fine ones.
+const SEPARATORS = [
+  /(\s[—–-]\s|\s\|\s)/,
+  /(\s[—–-]\s|\[|\]\s?)/,
+  /(\s[—–-]\s|\[|\]\s?|:\s)/,
+  /(\s[—–-]\s|\[|\]\s?|:\s|;\s|\.\s|,\s|\s\(|\)\s?)/,
+]
+
+// Apply known sentences and fragment rules. Either order can be the one that
+// works (a fragment may break a known sentence, or vice versa), so try both.
+function substitute(text) {
+  const sentences = s => { for (const [vi, en] of Object.entries(EN_SENTENCES)) if (s.includes(vi)) s = s.split(vi).join(en); return s }
+  const fragments = s => { for (const [re, rep] of FRAGMENTS) s = s.replace(re, rep); return s }
+  const a = fragments(sentences(text))
+  if (!HAS_VI.test(a)) return a
+  const b = sentences(fragments(text))
+  return HAS_VI.test(b) ? a : b
+}
+
+function translatePiece(p) {
+  if (!p || !HAS_VI.test(p)) return p
+  const t = p.trim()
+  const hit = EN[t] ?? EN[t.charAt(0).toUpperCase() + t.slice(1)]
+  if (hit !== undefined) return p.replace(t, /^[a-zà-ỹđ]/.test(t) ? hit.charAt(0).toLowerCase() + hit.slice(1) : hit)
+  let f = t
+  for (const [re, rep] of PATTERNS) if (re.test(f)) { f = f.replace(re, rep); break }
+  if (HAS_VI.test(f)) f = substitute(f)
+  return p.replace(t, f)
+}
+
+// Split on the coarsest separator first; only pieces that are still
+// untranslated are split further, so whole sentences stay intact.
+function translateSegments(key, level = 0) {
+  if (level >= SEPARATORS.length) return null
+  const parts = key.split(SEPARATORS[level])
+  if (parts.length < 2) return translateSegments(key, level + 1)
+  const out = parts.map(p => {
+    const t = translatePiece(p)
+    if (!HAS_VI.test(t)) return t
+    // Recurse on the partially translated piece so whole sentences already
+    // replaced are not split apart again.
+    return translateSegments(t, level + 1) ?? translateSegments(p, level + 1) ?? t
+  }).join("")
+  return HAS_VI.test(out) ? null : out
+}
 
 export function translate(text) {
   if (!text) return null
@@ -108,7 +205,6 @@ export function translate(text) {
   if (!key) return null
   const hit = EN[key]
   if (hit !== undefined) return text.replace(key, hit)
-  if (!HAS_VI.test(key)) return null
   let out = key
   for (const [re, rep] of PATTERNS) {
     if (!re.test(out)) continue
@@ -119,10 +215,10 @@ export function translate(text) {
     }))
     break
   }
-  if (HAS_VI.test(out)) {
-    for (const [re, rep] of FRAGMENTS) out = out.replace(re, rep)
-    for (const [vi, en] of Object.entries(EN_SENTENCES)) if (out.includes(vi)) out = out.split(vi).join(en)
-  }
+  if (out === key && !HAS_VI.test(key)) return null   // nothing Vietnamese to translate
+  if (HAS_VI.test(out)) out = substitute(out)
+  // Last resort: sentences glued from parts ("[Monitor] Low sodium — Source: Labs").
+  if (HAS_VI.test(out)) out = translateSegments(out) ?? translateSegments(key) ?? out
   // Never show a half-translated node: if anything Vietnamese is left, keep the original.
   return HAS_VI.test(out) ? null : text.replace(key, out)
 }
@@ -134,23 +230,65 @@ function skip(el) {
   return false
 }
 
-function handleText(node) {
-  const parent = node.parentElement
-  if (!parent || skip(parent)) return
-  if (lang === "en") {
-    const tr = translate(node.nodeValue)
-    if (tr !== null && tr !== node.nodeValue) {
-      originalText.set(node, node.nodeValue)
-      node.nodeValue = tr
+// React renders "Analyze {n} documents" as several adjacent text nodes. Each
+// run of adjacent text nodes is translated as ONE string first (so word order
+// can change), then node by node as a fallback. SRC keeps the Vietnamese
+// source of every node we changed; WROTE remembers what we wrote, so a later
+// React update can be told apart from our own write.
+const SRC = new WeakMap()
+const WROTE = new WeakMap()
+
+function srcOf(n) { return SRC.has(n) ? SRC.get(n) : n.nodeValue }
+
+function write(n, value, source) {
+  SRC.set(n, source)
+  WROTE.set(n, value)
+  if (n.nodeValue !== value) n.nodeValue = value
+}
+
+function restore(n) {
+  if (!SRC.has(n)) return
+  const v = SRC.get(n)
+  SRC.delete(n); WROTE.delete(n)
+  if (n.nodeValue !== v) n.nodeValue = v
+}
+
+function processRun(nodes) {
+  const srcs = nodes.map(srcOf)
+  if (lang !== "en") { nodes.forEach(restore); return }
+  if (nodes.length > 1) {
+    const joined = srcs.join("")
+    {
+      const tr = translate(joined)
+      if (tr !== null) { nodes.forEach((n, i) => write(n, i === 0 ? tr : "", srcs[i])); return }
     }
-  } else if (originalText.has(node)) {
-    node.nodeValue = originalText.get(node)
-    originalText.delete(node)
   }
+  nodes.forEach((n, i) => {
+    const tr = translate(srcs[i])
+    if (tr !== null) write(n, tr, srcs[i])
+    else restore(n)
+  })
+}
+
+function applyParent(parent) {
+  if (!parent || skip(parent)) return
+  let run = []
+  const flush = () => { if (run.length) processRun(run); run = [] }
+  for (const k of parent.childNodes) { if (k.nodeType === 3) run.push(k); else flush() }
+  flush()
+}
+
+function onTextMutation(node) {
+  // React replaced the text: the new value is the new Vietnamese source.
+  if (SRC.has(node) && node.nodeValue !== WROTE.get(node)) { SRC.delete(node); WROTE.delete(node) }
+  applyParent(node.parentElement)
 }
 
 function handleAttrs(el) {
-  if (skip(el)) return
+  // Placeholders live on <input>/<textarea>, so only opt-outs and editable regions block attributes.
+  for (let n = el; n && n.tagName !== "BODY"; n = n.parentElement) {
+    if (n.isContentEditable || n.hasAttribute?.("data-no-i18n")) return
+  }
   for (const a of ATTRS) {
     if (!el.hasAttribute(a)) continue
     const store = originalAttr.get(el) || {}
@@ -169,13 +307,14 @@ function handleAttrs(el) {
 }
 
 function walk(root) {
-  if (root.nodeType === 3) return handleText(root)          // TEXT_NODE
-  if (root.nodeType !== 1) return                           // ELEMENT_NODE
+  if (root.nodeType === 3) return applyParent(root.parentElement)   // TEXT_NODE
+  if (root.nodeType !== 1) return                                     // ELEMENT_NODE
   handleAttrs(root)
+  applyParent(root)
   const doc = root.ownerDocument || document
-  const tw = doc.createTreeWalker(root, 1 | 4)               // SHOW_ELEMENT | SHOW_TEXT
+  const tw = doc.createTreeWalker(root, 1)                             // SHOW_ELEMENT
   let n
-  while ((n = tw.nextNode())) n.nodeType === 3 ? handleText(n) : handleAttrs(n)
+  while ((n = tw.nextNode())) { handleAttrs(n); applyParent(n) }
 }
 
 let observer = null
@@ -185,9 +324,9 @@ export function startI18n() {
   observer = new MutationObserver((records) => {
     if (lang !== "en") return
     for (const r of records) {
-      if (r.type === "characterData") handleText(r.target)
+      if (r.type === "characterData") onTextMutation(r.target)
       else if (r.type === "attributes") handleAttrs(r.target)
-      else r.addedNodes.forEach(walk)
+      else { r.addedNodes.forEach(walk); if (r.target.nodeType === 1) applyParent(r.target) }
     }
   })
   observer.observe(document.body, {

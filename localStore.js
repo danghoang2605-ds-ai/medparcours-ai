@@ -16,7 +16,7 @@ let dbPromise = null
 function openDb() {
   if (dbPromise) return dbPromise
   dbPromise = new Promise((resolve, reject) => {
-    if (typeof indexedDB === "undefined") return reject(new Error("IndexedDB is not available in this browser."))
+    if (typeof indexedDB === "undefined") return reject(new Error("Trình duyệt này không hỗ trợ lưu trữ IndexedDB."))
     const req = indexedDB.open(DB_NAME, 1)
     req.onupgradeneeded = () => {
       const db = req.result
@@ -42,7 +42,7 @@ function tx(mode, fn) {
 
 const reqP = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error) })
 const now = () => new Date().toISOString()
-const notFound = (id) => Object.assign(new Error(`No saved record for ${id}.`), { status: 404 })
+const notFound = (id) => Object.assign(new Error(`Không có hồ sơ đã lưu với số ${id}.`), { status: 404 })
 
 function keyOf(report) {
   return String(report?.thong_tin_benh_nhan?.so_benh_an || "").trim()
@@ -63,8 +63,8 @@ async function put(rec) {
 export const localStore = {
   async save(report, analysis) {
     const id = keyOf(report)
-    if (!id) throw Object.assign(new Error("This record has no record number (so_benh_an), so it cannot be saved."), { status: 400 })
-    if (await get(id)) throw Object.assign(new Error(`Record ${id} is already saved. Use "Update record" to add documents.`), { status: 409 })
+    if (!id) throw Object.assign(new Error("Hồ sơ không có số bệnh án nên chưa lưu được."), { status: 400 })
+    if (await get(id)) throw Object.assign(new Error(`Hồ sơ ${id} đã được lưu. Dùng "Cập nhật hồ sơ" để thêm tài liệu.`), { status: 409 })
     const t = now()
     const rec = {
       so_benh_an: id, ho_ten: report?.thong_tin_benh_nhan?.ho_ten || "", ten_hien_thi: null,
@@ -139,6 +139,18 @@ export const localStore = {
   async chat(id, limit = 100) {
     const rec = await get(id)
     return { success: true, messages: (rec?.chat || []).slice(-limit) }
+  },
+
+  // Raw record (with history and chat) for cloud sync.
+  async raw(id) {
+    return get(id)
+  },
+
+  // Store a record that came from cloud sync, replacing the local copy.
+  async importRecord(rec) {
+    if (!rec || !rec.so_benh_an) throw new Error("Hồ sơ không hợp lệ.")
+    await put(rec)
+    return rec
   },
 
   async exportAll() {

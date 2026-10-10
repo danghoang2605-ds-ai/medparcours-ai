@@ -35,7 +35,7 @@ ICD_GROUPS = {
     "I00_thap_tim_cap": {
         "ten_hien_thi": "Thấp tim cấp tính",
         "icd_range": "I00-I02",
-        "keywords": [
+        "keywords": [ "acute rheumatic fever", "rheumatic fever", "sydenham",
             "thap tim", "sot thap", "viem hop lien cau", "mua giat",
             "sydenham chorea", "thap khop",
         ],
@@ -45,7 +45,7 @@ ICD_GROUPS = {
     "I05_tim_man_do_thap": {
         "ten_hien_thi": "Bệnh tim mạn tính do thấp",
         "icd_range": "I05-I09",
-        "keywords": [
+        "keywords": [ "rheumatic heart disease", "rheumatic mitral stenosis", "rheumatic valve disease",
             "tim man tinh do thap", "hep van hai la do thap", "benh tim do thap",
         ],
         "thang_diem_dac_trung": ["wilkins_score", "whf_echo_criteria"],
@@ -57,7 +57,7 @@ ICD_GROUPS = {
     "I10_tang_huyet_ap": {
         "ten_hien_thi": "Bệnh lý tăng huyết áp",
         "icd_range": "I10-I16",
-        "keywords": [
+        "keywords": [ "hypertension", "hypertensive", "high blood pressure", "htn",
             "tang huyet ap", "cao huyet ap", "benh ly tang huyet ap",
             # KHÔNG dùng viết tắt "tha" đơn lẻ — đã phát hiện qua test: khớp
             # nhầm vào substring của rất nhiều từ khác ("thay van" chứa "tha",
@@ -70,7 +70,7 @@ ICD_GROUPS = {
     "I20_tim_thieu_mau_cuc_bo": {
         "ten_hien_thi": "Bệnh tim thiếu máu cục bộ (mạch vành)",
         "icd_range": "I20-I25",
-        "keywords": [
+        "keywords": [ "coronary artery disease", "myocardial infarction", "angina", "coronary stent", "coronary bypass", "acute coronary syndrome", "ischemic heart disease", "myocardial ischemia",
             "mach vanh", "nhoi mau co tim", "dat stent", "bac cau chu vanh",
             "dau thang nguc", "thieu mau co tim", "cad", "pci", "cabg",
             "hoi chung vanh cap", "acs", "dau nguc trai",
@@ -85,7 +85,7 @@ ICD_GROUPS = {
     "I26_tim_do_phoi": {
         "ten_hien_thi": "Bệnh tim do phổi và tuần hoàn phổi",
         "icd_range": "I26-I28",
-        "keywords": [
+        "keywords": [ "pulmonary embolism", "pulmonary hypertension", "cor pulmonale",
             "thuyen tap phoi", "tang ap phoi", "tam phe", "thuyen tac dong mach phoi",
         ],
         "thang_diem_dac_trung": ["wells_score_pe", "geneva_score", "perc_rule",
@@ -97,19 +97,19 @@ ICD_GROUPS = {
         # bệnh cảnh con có thang điểm riêng (đây là "subtypes" thật sự).
         "ten_hien_thi": "Thể khác của bệnh tim (suy tim/rung nhĩ/van tim/viêm tim)",
         "icd_range": "I30-I52",
-        "keywords": [
+        "keywords": [ "heart failure", "atrial fibrillation", "atrial flutter", "pericarditis", "endocarditis", "cardiomyopathy", "mechanical valve", "valve replacement", "valve repair", "stenosis", "regurgitation", "pericardial effusion",
             "suy tim", "rung nhi", "viem mang ngoai tim", "viem noi tam mac",
             "benh co tim", "van co hoc", "thay van", "sua van", "hep van", "ho van",
             "cuong nhi", "nyha", "hfref", "hfpef", "hfmref",
         ],
         "subtypes": {
             "heart_failure": {
-                "keywords": ["suy tim", "nyha", "hfref", "hfpef", "hfmref"],
+                "keywords": [ "heart failure","suy tim", "nyha", "hfref", "hfpef", "hfmref"],
                 "thang_diem_dac_trung": ["nyha_class", "lvef_classification",
                                           "nt_probnp", "kccq"],
             },
             "atrial_fibrillation": {
-                "keywords": ["rung nhi", "cuong nhi", "fibrillation"],
+                "keywords": [ "atrial fibrillation", "atrial flutter","rung nhi", "cuong nhi", "fibrillation"],
                 "thang_diem_dac_trung": ["cha2ds2_vasc", "has_bled", "ehra_class"],
             },
             "infective_endocarditis": {
@@ -121,7 +121,7 @@ ICD_GROUPS = {
                 "thang_diem_dac_trung": ["pericarditis_4_criteria"],
             },
             "valve_disease_non_rheumatic": {
-                "keywords": ["van co hoc", "thay van", "sua van", "hep van", "ho van"],
+                "keywords": [ "mechanical valve", "valve replacement", "valve repair", "stenosis", "regurgitation","van co hoc", "thay van", "sua van", "hep van", "ho van"],
                 "thang_diem_dac_trung": ["valve_gradient", "eroa", "sts_score", "euroscore_ii"],
                 "default": True,
             },
@@ -132,7 +132,7 @@ ICD_GROUPS = {
     "I60_mach_mau_nao": {
         "ten_hien_thi": "Bệnh mạch máu não (đột quỵ)",
         "icd_range": "I60-I69",
-        "keywords": [
+        "keywords": [ "stroke", "cerebrovascular accident", "cerebral infarction", "intracerebral hemorrhage", "subarachnoid hemorrhage", "transient ischemic attack", "tia",
             "xuat huyet duoi nhen", "xuat huyet nao", "nhoi mau nao", "tia ",
             "dot quy", "thieu mau nao thoang qua", "di chung dot quy",
         ],
@@ -143,7 +143,7 @@ ICD_GROUPS = {
     "I70_dong_mach": {
         "ten_hien_thi": "Bệnh động mạch, tiểu động mạch, mao mạch",
         "icd_range": "I70-I79",
-        "keywords": [
+        "keywords": [ "atherosclerosis", "peripheral artery disease", "aortic aneurysm", "aneurysm", "limb ischemia",
             "xo vua dong mach", "pad", "phinh dong mach", "benh mach chi",
             "thieu mau chi", "benh dong mach chi", "dong mach chi duoi",
         ],
@@ -153,7 +153,7 @@ ICD_GROUPS = {
     "I80_tinh_mach": {
         "ten_hien_thi": "Bệnh tĩnh mạch, mạch bạch huyết, hạch bạch huyết",
         "icd_range": "I80-I89",
-        "keywords": [
+        "keywords": [ "deep vein thrombosis", "varicose veins", "chronic venous insufficiency", "post-thrombotic syndrome",
             "dvt", "gian tinh mach", "suy tinh mach man", "hoi chung hau huyet khoi",
             "phu bach mach", "huyet khoi tinh mach sau",
         ],
@@ -163,7 +163,7 @@ ICD_GROUPS = {
     "I95_roi_loan_khac": {
         "ten_hien_thi": "Rối loạn khác/không xác định của hệ tuần hoàn",
         "icd_range": "I95-I99",
-        "keywords": [
+        "keywords": [ "hypotension", "shock", "syncope", "cardiac arrest",
             "ha huyet ap", "soc", "ngat", "ngung tuan hoan", "tut huyet ap",
         ],
         "thang_diem_dac_trung": ["shock_index", "map", "canadian_syncope_risk", "cpc"],

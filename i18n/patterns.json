@@ -170,5 +170,37 @@
  [
   "^KHÔNG\\ dò\\ được\\ ranh\\ giới\\ rõ\\ ràng\\ giữa\\ các\\ ô\\ chuyển\\ đạo\\ \\(ảnh\\ không\\ có\\ khoảng\\ trắng\\ phân\\ cách\\ thật,\\ thường\\ gặp\\ ở\\ ảnh\\ scan/chụp\\ giấy\\ in\\ liên\\ tục\\)\\ —\\ hệ\\ thống\\ CHIA\\ ĐỀU\\ theo\\ tỉ\\ lệ,\\ giả\\ định\\ bố\\ cục\\ (.+?)\\ cột\\ x\\ (.+?)\\ hàng\\.\\ Ranh\\ giới\\ mỗi\\ ô\\ có\\ thể\\ lệch\\ vài\\ mm\\ so\\ với\\ ảnh\\ gốc\\.\\ BẮT\\ BUỘC\\ bác\\ sĩ\\ đối\\ chiếu\\ từng\\ ô\\ với\\ ảnh\\ gốc\\ trước\\ khi\\ dùng\\ số\\ liệu,\\ và\\ có\\ thể\\ cần\\ sửa\\ lại\\ tên\\ chuyển\\ đạo\\ nếu\\ bố\\ cục\\ thật\\ khác\\ giả\\ định\\ này\\.$",
   "No clear boundaries between lead cells were detected (no real white separators, common in scans/photos of continuous printouts); the system split the image evenly, assuming a $1 columns x $2 rows layout. Each cell boundary may be off by a few mm. The physician MUST check each cell against the original before using the values, and may need to correct lead names if the real layout differs."
+ ],
+ [
+  "^Không\\ trích\\ được\\ nội\\ dung\\ từ\\ file\\ (.+?)\\.$",
+  "Couldn't extract any text from $1."
+ ],
+ [
+  "^Ảnh\\ quá\\ lớn\\ \\((.+?)MB\\)\\.\\ Giới\\ hạn\\ (.+?)MB\\.$",
+  "Image is too large ($1 MB). The limit is $2 MB."
+ ],
+ [
+  "^Ảnh\\ quá\\ lớn\\ \\((.+?)MB\\)\\.\\ Giới\\ hạn\\ (.+?)MB\\ —\\ hãy\\ chụp/scan\\ với\\ độ\\ phân\\ giải\\ thấp\\ hơn\\.$",
+  "Image is too large ($1 MB). The limit is $2 MB; try a lower-resolution photo or scan."
+ ],
+ [
+  "^Định\\ dạng\\ (.+?)\\ \\(phiên\\ bản\\ cũ\\)\\ chưa\\ được\\ hỗ\\ trợ\\.\\ Vui\\ lòng\\ lưu\\ lại\\ dưới\\ định\\ dạng\\ mới\\ \\(\\.docx/\\.xlsx/\\.pptx\\)\\ rồi\\ tải\\ lên\\.$",
+  "The older $1 format isn't supported. Save it as .docx/.xlsx/.pptx and upload again."
+ ],
+ [
+  "^Không\\ nhận\\ diện\\ được\\ định\\ dạng\\ file\\ (.+?)\\.\\ Hỗ\\ trợ:\\ PDF,\\ Word\\ \\(\\.docx\\),\\ Excel\\ \\(\\.xlsx\\),\\ PowerPoint\\ \\(\\.pptx\\),\\ ảnh\\ \\(\\.png/\\.jpg\\)\\.$",
+  "Unsupported file type $1. Supported: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), images (.png/.jpg)."
+ ],
+ [
+  "^Không\\ nhận\\ diện\\ được\\ định\\ dạng\\ file\\ (.+?)\\.\\ Hỗ\\ trợ:\\ PDF,\\ Word\\ \\(\\.docx\\),\\ Excel\\ \\(\\.xlsx\\),\\ PowerPoint\\ \\(\\.pptx\\)\\.$",
+  "Unsupported file type $1. Supported: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx)."
+ ],
+ [
+  "^Lỗi\\ xử\\ lý\\ ảnh:\\ (.+?)$",
+  "Image processing error: $1"
+ ],
+ [
+  "^Chuyển\\ đạo\\ (.+?)\\ không\\ nằm\\ trong\\ danh\\ sách\\ khuyến\\ nghị\\ cho\\ phân\\ tích\\ dải\\ nhịp\\.\\ Kết\\ quả\\ nhịp\\ tim\\ có\\ thể\\ kém\\ tin\\ cậy\\.$",
+  "Lead $1 isn't a recommended rhythm-strip lead, so the heart rate may be less reliable."
  ]
 ]

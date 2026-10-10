@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).parent
-FILES = ["clinical_rules.py", "ecg_engine.py", *sorted(str(p.relative_to(ROOT)) for p in (ROOT / "cde").glob("*.py")
+FILES = ["main.py", "clinical_rules.py", "ecg_engine.py", *sorted(str(p.relative_to(ROOT)) for p in (ROOT / "cde").glob("*.py")
                                                  if not p.name.startswith("test_"))]
 VI = re.compile(r"[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]", re.I)
 EN = json.loads((ROOT / "i18n/en.json").read_text(encoding="utf-8"))
@@ -22,7 +22,7 @@ def _messages(path):
     skip = set()
     for node in ast.walk(tree):
         # docstrings, keyword lists/sets and dict keys are not user-facing messages
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)) and ast.get_docstring(node, clean=False):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and ast.get_docstring(node, clean=False):
             skip.add(id(node.body[0].value))
         if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
             skip.update(id(e) for e in node.elts)
@@ -40,6 +40,10 @@ def _messages(path):
                 and getattr(node.test.left, "id", "") == "__name__"):
             for a in ast.walk(node):
                 skip.add(id(a))
+        # module-level prompt constants (REPORT_SYSTEM, ...) are model input, not UI text
+        if isinstance(node, ast.Assign) and any(getattr(tg, "id", "").isupper() for tg in node.targets):
+            for a in ast.walk(node.value):
+                skip.add(id(a))
         if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "print":
             for a in ast.walk(node):
                 skip.add(id(a))
@@ -54,7 +58,16 @@ def _messages(path):
                 yield sample, node.lineno
 
 
+# main.py text that is sent TO the model (prompts) or logged, never shown to users.
+INTERNAL_PREFIXES = (
+    "[... hồ sơ quá dài", "Hồ sơ bệnh nhân:", "Đây là ảnh chụp/scan", "Các mốc chênh lệch chỉ số",
+    "[Hồ sơ đọc từ ảnh", "NGÔN NGỮ:", "{}", "0\n\nQUY TẮC AN TOÀN", "assistant_type chỉ nhận",
+)
+
+
 def _covered(msg):
+    if msg.startswith(INTERNAL_PREFIXES):
+        return True
     return msg in EN or any(p.match(msg) for p in PATTERNS)
 
 

@@ -52,7 +52,7 @@ def identify_patient(report: dict) -> dict:
 PROFILE_REGISTRY = {
     "valve_disease": {
         "ten_hien_thi": "Bệnh van tim",
-        "keywords": [
+        "keywords": [ "mechanical valve", "valve replacement", "valve repair", "valvuloplasty", "annuloplasty", "aortic stenosis", "mitral stenosis", "tricuspid stenosis", "aortic regurgitation", "mitral regurgitation", "tricuspid regurgitation", "aortic valve", "mitral valve", "tricuspid valve", "valvular heart disease", "prosthetic valve", "avr", "mvr", "tavi", "tavr",
             "van co hoc", "thay van", "sua van", "hep van", "ho van",
             "on-x", "on x", "st jude", "van sinh hoc", "khau van", "tao hinh van",
             "hep ho van", "van hai la", "van dong mach chu", "van ba la", "van dmc",
@@ -78,24 +78,24 @@ PROFILE_REGISTRY = {
             # "van sinh học"/"bioprosthetic" là khẳng định TRỰC TIẾP, RÕ
             # RÀNG, đáng tin hơn nhiều so với suy luận GIÁN TIẾP từ tên
             # thương hiệu mơ hồ (dùng chung cho cả 2 loại van).
-            "bioprosthetic": {"keywords": ["van sinh hoc", "bioprosthetic"]},
-            "mechanical": {"keywords": ["van co hoc", "on-x", "on x", "st jude",
+            "bioprosthetic": {"keywords": [ "biological valve", "tissue valve","van sinh hoc", "bioprosthetic"]},
+            "mechanical": {"keywords": [ "mechanical valve", "mechanical aortic", "mechanical mitral", "co hoc","van co hoc", "on-x", "on x", "st jude",
                                          "carbomedics", "sorin bicarbon", "ats",
                                          "medtronic open pivot"]},
-            "repair": {"keywords": ["sua van", "khau van", "tao hinh van"]},
-            "native_disease": {"keywords": ["hep van", "ho van"], "default": True},
+            "repair": {"keywords": [ "valve repair", "valvuloplasty", "annuloplasty","sua van", "khau van", "tao hinh van"]},
+            "native_disease": {"keywords": [ "stenosis", "regurgitation","hep van", "ho van"], "default": True},
         },
     },
     "atrial_fibrillation": {
         "ten_hien_thi": "Rung nhĩ",
-        "keywords": [
+        "keywords": [ "atrial fibrillation", "atrial flutter", "af",
             "rung nhi", "af ", "fibrillation", "cuong nhi", "rung cuong nhi",
         ],
         "subtypes": None,
     },
     "ckd": {
         "ten_hien_thi": "Bệnh thận mạn",
-        "keywords": [
+        "keywords": [ "chronic kidney disease", "renal failure", "renal insufficiency", "kidney failure", "glomerulonephritis",
             "suy than", "benh than man", "ckd", "lc thận", "viem cau than man",
         ],
         # CKD còn có thể active từ KẾT QUẢ TÍNH TOÁN (eGFR < 90), không chỉ

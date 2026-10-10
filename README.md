@@ -6,7 +6,7 @@
 
 <p align="center">
   Clinical decision support that turns a long medical record into a structured report, risk alerts and record-aware Q&A in about a minute.<br>
-  No sign-up. Patient records never leave your browser.
+  No sign-up. Records stay in your browser, with optional private cloud sync.
 </p>
 
 <p align="center">
@@ -49,7 +49,7 @@ Doctors in district and provincial hospitals read long paper or PDF records in v
 - **Longitudinal records**: save a record, then add follow-up documents; the server merges them and re-runs the rule engine on the combined history.
 - **ECG digitization**: waveform and heart-rate extraction from ECG paper images.
 - **Exports**: full report, one-page handoff, plain-language patient summary, labs as CSV, all in the selected language.
-- **Bilingual**: English by default, Vietnamese one click away. The demo case, exports and the assistant follow the selected language.
+- **Bilingual**: English by default, Vietnamese one click away. The report language follows the selection at analysis time: choose EN and an uploaded record (Vietnamese or English) is summarized in English; choose VI and it is summarized in Vietnamese. The demo case, exports and the assistant follow the same setting.
 
 ## Architecture
 
@@ -69,10 +69,12 @@ Doctors in district and provincial hospitals read long paper or PDF records in v
 | Decision | Why |
 |---|---|
 | **LLM for language, code for math** | Claude reads free text and writes narratives. Every clinical number comes from plain, unit-tested Python in [`cde/`](cde/) that gives the same result for the same input. |
-| **No accounts, no server storage** | Patient records are stored only in the user's browser (IndexedDB, [`localStore.js`](localStore.js)). The backend keeps nothing between requests, which removes a whole class of privacy and security risk and makes the app instantly usable. |
+| **Optional cloud sync without accounts** | With Turso configured, each browser gets a random sync key; records are stored under SHA-256(key) via Turso's HTTP API ([`cloud_store.py`](cloud_store.py)). Pasting the key on another device opens the same records. |
+| **No accounts, browser-first storage** | Patient records are stored only in the user's browser (IndexedDB, [`localStore.js`](localStore.js)). The backend keeps nothing between requests, which removes a whole class of privacy and security risk and makes the app instantly usable. |
 | **Stateless merge** | To add a follow-up document, the browser sends the record it already holds; the server extracts, merges ([`report_merge.py`](report_merge.py)) and re-evaluates, then returns the result. |
 | **Abuse protection without login** | A per-IP sliding-window limit on every AI endpoint returns `429` with `Retry-After`. |
 | **Translation that cannot break logic** | The UI was written in Vietnamese. [`i18n.js`](i18n.js) swaps rendered text for English using [`i18n/en.json`](i18n/en.json) (about 1,300 strings) and [`i18n/patterns.json`](i18n/patterns.json) (templated rule-engine messages) instead of rewriting components, so no string comparison in the app logic changes. A node is never half-translated: if any Vietnamese would remain, the original is kept. A CI test fails if the rule engine gains a message without an English translation. |
+| **Output language per request** | The browser sends `X-Lang`; an ASGI middleware stores it in a context variable and the extraction, trend and chat prompts add a language instruction. JSON keys, enum codes and lab keys never change, so the rule engine sees the same structure in both languages. Parity tests check that an English record and its Vietnamese equivalent get the same profiles, ICD groups, eGFR and risk scores. |
 | **Bilingual clinical rules** | Risk-score keyword detection matches whole words in Vietnamese and English, with negation in both ("không ghi nhận", "no history of", "denies"). Sex parsing accepts "Nam/Nữ" and "Male/Female". |
 | **Graceful degradation** | If browser storage is unavailable, analysis still works. Voice falls back to the browser's speech APIs. |
 
@@ -118,10 +120,17 @@ docker-compose up --build
 | Variable | Default | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | required | Extraction, narratives, chat |
+| `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | empty | Optional cloud copy of saved records (`file:local.db` works for local testing) |
 | `RATE_LIMIT_REQUESTS` | `30` | AI requests allowed per IP per window (`0` disables) |
 | `RATE_LIMIT_WINDOW_S` | `600` | Window length in seconds |
 
 The frontend talks to the hosted API by default; `npm run dev` and Docker point it at `localhost:8000`. For the Pages build, set the `MEDIFLOW_API_URL` repository variable to use another backend.
+
+## Deploying
+
+- **Frontend**: every push to `main` builds with `scripts/build.mjs` and deploys to GitHub Pages. The bundle name is content-hashed, so a new deploy is never served from a stale cache. Hover the EN/VI switch to see the build id.
+- **Backend**: the API runs on a Hugging Face Space. After changing backend code, run `powershell -ExecutionPolicy Bypass -File scripts\sync-hf-space.ps1` to copy the backend to the Space repo and push (needs a Hugging Face write token).
+- Step-by-step setup (API key, Space secrets, Pages settings, troubleshooting): [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ## Testing
 
@@ -141,6 +150,7 @@ Everything runs offline: the Claude API is mocked and IndexedDB is simulated wit
 | `POST /records/merge`, `POST /records/merge-file` | Merge a new document into a record the client sends |
 | `POST /chat` | Record-aware Q&A (`assistant_type: clinical`) or product help (`system`); language from `X-Lang` |
 | `GET /ecg/synthetic`, `POST /ecg` | ECG digitization |
+| `GET /cloud/status`, `GET/PUT/DELETE /cloud/records[/{id}]` | Optional cloud sync (requires `X-Workspace` sync key) |
 | `GET /health` | Health check (not rate-limited) |
 
 Full schema: https://danghoang2605-mediflow-ai.hf.space/docs
@@ -151,7 +161,8 @@ Full schema: https://danghoang2605-mediflow-ai.hf.space/docs
 .
 ├── App.jsx                  # Frontend (single-file React app)
 ├── api.js                   # Backend URL + fetch helper (sends X-Lang)
-├── localStore.js            # IndexedDB record store (browser only)
+├── localStore.js            # IndexedDB record store (browser)
+├── cloudSync.js, cloud_store.py  # Optional cloud sync (sync key + Turso)
 ├── i18n.js, i18n/           # EN/VI translation layer (dictionary + patterns)
 ├── demoData.en.js           # English synthetic demo case
 ├── main.py                  # FastAPI app: endpoints, extraction pipeline, rate limit
@@ -168,9 +179,9 @@ Full schema: https://danghoang2605-mediflow-ai.hf.space/docs
 
 ## Limitations and roadmap
 
-- Uploaded records are summarized in Vietnamese even when the UI is in English (the extraction prompt is Vietnamese-first). The rule engine is already bilingual, so English extraction is the next step.
+- Dates are shown day/month/year (DD/MM/YYYY), as in the source records.
+
 - The second demo case is Vietnamese-only and is shown in VI mode only.
-- Saved records live in one browser; there is a full-export function in the storage layer but no import UI yet.
 - Rate limiting is in-memory, which fits a single-instance deployment. Multiple instances would need a shared store such as Redis.
 - `App.jsx` is a large single file; splitting it into feature modules is planned.
 
@@ -181,5 +192,10 @@ Full schema: https://danghoang2605-mediflow-ai.hf.space/docs
 ## Changelog (highlights)
 
 - **Risk-score fix**: the hypertension abbreviation "THA" used to match inside "thay van" (valve replacement), adding a false CHA2DS2-VASc point to valve patients. Keywords now match whole words only.
+- **English report output**: uploaded records are summarized in the selected language; Vietnamese and English records score identically in the rule engine.
+- **Valve detection fix**: "thay van hai lá cơ học" (word order with the valve name in between) is now recognized as a mechanical valve.
+- **Cloud sync (optional)**: reconnects to Turso, with private sync keys instead of accounts.
+- **Redesigned Record history**: search, filters, pinning, rename, bulk delete, sync status.
+- **US-friendly English**: MRN instead of record number, dictation and read-aloud in en-US, natural phrasing for sentences the app assembles at runtime ("Analyze 3 documents"), and translated backend error messages.
 - **Sex parsing fix**: "Male" was previously read as female (the check looked for the Vietnamese "nam"), affecting eGFR and risk scores for English records.
 - **No login, stateless backend**: records live in the browser; per-IP rate limiting protects the public demo.

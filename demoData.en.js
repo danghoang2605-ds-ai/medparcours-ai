@@ -104,7 +104,7 @@ export const MOCK_REPORT_EN = {
     { ten_thuoc:"Buflan 2g (Cefoperazone + Sulbactam)", nhom:"Antibiotic",    lieu:"2 vials/day",   cach_dung:"IV infusion at 9:00 and 21:00", bat_dau:"28/09", ket_thuc:"03/10", color:"#EF4444" },
     { ten_thuoc:"Medoxasol 500mg (Levofloxacin)",       nhom:"Antibiotic",    lieu:"2 tablets/day", cach_dung:"Oral at 9:00 and 20:00", bat_dau:"03/10", so_luong:14, vien_moi_ngay:2, color:"#F97316" },
     { ten_thuoc:"Vincerol 1mg (Acenocoumarol)",         nhom:"Anticoagulant", lieu:"1 tablet/day",  cach_dung:"Oral at 20:00 daily", bat_dau:"03/10", keo_dai:true, color:"#8B5CF6" },
-    { ten_thuoc:"Agifuros 40mg (Furosemid)",            nhom:"Diuretic",      lieu:"1 tablet/day",  cach_dung:"Oral at 9:00", bat_dau:"28/09", keo_dai:true, color:"#06B6D4" },
+    { ten_thuoc:"Agifuros 40mg (Furosemide)",            nhom:"Diuretic",      lieu:"1 tablet/day",  cach_dung:"Oral at 9:00", bat_dau:"28/09", keo_dai:true, color:"#06B6D4" },
     { ten_thuoc:"Forxiga 10mg (Dapagliflozin)",         nhom:"Cardiovascular",lieu:"1 tablet/day",  cach_dung:"Oral in the morning", bat_dau:"26/09", keo_dai:true, color:"#10B981" },
     { ten_thuoc:"Pantoloc 40mg (Pantoprazole)",         nhom:"Gastric",       lieu:"1 tablet/day",  cach_dung:"Oral at 6:00 before meals", bat_dau:"24/09", keo_dai:true, color:"#3B82F6" },
   ],

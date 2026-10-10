@@ -9,6 +9,7 @@ import tempfile
 import base64
 import asyncio
 import time
+import contextvars
 from collections import defaultdict, deque
 # Nạp biến môi trường từ file .env nếu có (an toàn nếu chưa cài python-dotenv)
 try:
@@ -25,9 +26,9 @@ from pydantic import BaseModel
 # HIS export là PDF text thuần nên không cần OCR; bỏ OCR giúp vừa RAM 512MB.
 from pypdf import PdfReader
 import anthropic
-import clinical_rules
 import document_extract
 import report_merge
+import cloud_store
 from cde.engine import evaluate_v2
 import ecg_engine
 import numpy as np
@@ -49,6 +50,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ─── OUTPUT LANGUAGE ────────────────────────────────────────────────────────
+# The UI sends X-Lang: en | vi on every request. Report extraction, trend
+# narratives and chat answers are written in that language. Codes, JSON keys,
+# lab keys and numbers stay fixed so the rule engine sees the same structure.
+_request_lang: contextvars.ContextVar[str] = contextvars.ContextVar("request_lang", default="vi")
+
+
+class LanguageMiddleware:
+    """Pure ASGI middleware (contextvars set here reach the endpoint and threads)."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            raw = dict(scope.get("headers") or []).get(b"x-lang", b"").decode().lower()
+            token = _request_lang.set("en" if raw.startswith("en") else "vi")
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                _request_lang.reset(token)
+        else:
+            await self.app(scope, receive, send)
+
+
+app.add_middleware(LanguageMiddleware)
+
+
 # ─── RATE LIMITING ──────────────────────────────────────────────────────────
 # There is no login, so every LLM-backed endpoint is public. A per-IP sliding
 # window keeps a public demo from draining the API key. In-memory is enough
@@ -58,23 +86,40 @@ RATE_LIMIT_WINDOW_S = int(os.environ.get("RATE_LIMIT_WINDOW_S", "600"))
 _rate_buckets: dict[str, deque] = defaultdict(deque)
 
 
-def rate_limit(request: Request) -> None:
-    if RATE_LIMIT_REQUESTS <= 0:  # 0 disables limiting (tests, private deployments)
+def _client_ip(request: Request) -> str:
+    # Proxies APPEND the address they saw, so the last entry is the one our own
+    # proxy (e.g. Hugging Face) added. The first entry is client-controlled and
+    # would let anyone dodge the limit by sending a fake X-Forwarded-For.
+    forwarded = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+    return forwarded[-1] if forwarded else (request.client.host if request.client else "unknown")
+
+
+def _check_bucket(key: str, limit: int, window: int) -> None:
+    if limit <= 0:  # 0 disables limiting (tests, private deployments)
         return
-    forwarded = request.headers.get("x-forwarded-for", "")
-    ip = forwarded.split(",")[0].strip() or (request.client.host if request.client else "unknown")
     now = time.monotonic()
-    bucket = _rate_buckets[ip]
-    while bucket and now - bucket[0] > RATE_LIMIT_WINDOW_S:
+    bucket = _rate_buckets[key]
+    while bucket and now - bucket[0] > window:
         bucket.popleft()
-    if len(bucket) >= RATE_LIMIT_REQUESTS:
-        retry = int(RATE_LIMIT_WINDOW_S - (now - bucket[0])) + 1
+    if len(bucket) >= limit:
+        retry = int(window - (now - bucket[0])) + 1
         raise HTTPException(
             status_code=429,
             detail=f"Too many requests. Try again in {retry}s.",
             headers={"Retry-After": str(retry)},
         )
     bucket.append(now)
+
+
+def rate_limit(request: Request) -> None:
+    """AI endpoints: each call costs model tokens."""
+    _check_bucket("ai:" + _client_ip(request), RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_S)
+
+
+def cloud_rate_limit(request: Request) -> None:
+    """Storage endpoints are cheap, so they get a separate, larger budget."""
+    limit = RATE_LIMIT_REQUESTS * 10 if RATE_LIMIT_REQUESTS > 0 else 0
+    _check_bucket("cloud:" + _client_ip(request), limit, RATE_LIMIT_WINDOW_S)
 
 
 # ─── SYSTEM PROMPTS ─────────────────────────────────────────────────────────
@@ -370,6 +415,36 @@ def extract_text_from_pdf(pdf_path: str) -> dict:
     }
 
 
+REPORT_EN_SUFFIX = """
+
+OUTPUT LANGUAGE: ENGLISH (this overrides any instruction above about writing in Vietnamese).
+- Write every free-text value in clear clinical English, even when the source record is in
+  Vietnamese: descriptions, diagnoses, reasons, summaries, alerts, reasoning, problem names,
+  drug groups (nhom), usage instructions, takeaways and priority actions.
+- Keep EXACTLY as defined in the schema: every JSON key, every enumerated code value
+  (e.g. loai, phase, muc_do, status, trang_thai, arrow, uu_tien), lab "key" names
+  (e.g. Creatinin, Na+, K+, NT-proBNP, INR, CRP, HGB, WBC, PLT, EF), dates and numbers.
+- Keep drug brand and generic names exactly as written in the record.
+- gioi_tinh: write "Male" or "Female".
+- tom_tat_toan_canh: use the section markers "PRE-OP PHASE:", "POST-OP INPATIENT PHASE:" and
+  "OUTPATIENT FOLLOW-UP PHASE:" in place of the Vietnamese markers.
+- Never invent values that are not in the record.
+"""
+
+TREND_EN_SUFFIX = "\n\nOUTPUT LANGUAGE: Write the narrative in clear clinical English."
+
+
+def _localize_system(system: str) -> str:
+    """Append the English-output instruction to extraction/trend prompts when the UI is in English."""
+    if _request_lang.get() != "en":
+        return system
+    if system == REPORT_SYSTEM:
+        return system + REPORT_EN_SUFFIX
+    if system == TREND_SYSTEM:
+        return system + TREND_EN_SUFFIX
+    return system
+
+
 def call_claude(system: str, user_message: str, max_tokens: int = 4000,
                  cache_system: bool = False) -> str:
     """Call Claude API.
@@ -382,6 +457,7 @@ def call_claude(system: str, user_message: str, max_tokens: int = 4000,
     thì cache hết hạn trước khi dùng lại -> không có lợi, nhưng cũng không lỗ vì
     Anthropic tự fallback xử lý như bình thường.
     """
+    system = _localize_system(system)
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY chưa được cấu hình")
@@ -416,6 +492,7 @@ def call_claude_with_image(system: str, user_text: str, image_b64: str,
     Không cache_control cho ảnh (cache theo ảnh ít lợi vì mỗi hồ sơ là ảnh khác
     nhau, không lặp lại như REPORT_SYSTEM text).
     """
+    system = _localize_system(system)
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY chưa được cấu hình")
@@ -1232,6 +1309,63 @@ async def faq_bot(request: FaqBotRequest, x_lang: str | None = Header(default=No
             "provider": "fallback",
         }
     return {"text": answer, "provider": "claude-support"}
+
+
+# ─── CLOUD SYNC (optional) ──────────────────────────────────────────────────
+# Records live in the browser. When TURSO_DATABASE_URL is set, the browser can
+# also keep a copy in the cloud under its private sync key (X-Workspace).
+def _workspace(x_workspace: str | None) -> str:
+    try:
+        return cloud_store.workspace_id(x_workspace or "")
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+
+def _cloud_call(fn, *args):
+    try:
+        return fn(*args)
+    except cloud_store.CloudError as e:
+        print(f"[CLOUD] {e}")
+        raise HTTPException(status_code=503, detail="Cloud storage is temporarily unavailable.")
+
+
+@app.get("/cloud/status")
+def cloud_status():
+    return {"enabled": cloud_store.enabled()}
+
+
+@app.get("/cloud/records", dependencies=[Depends(cloud_rate_limit)])
+def cloud_list(x_workspace: str | None = Header(default=None)):
+    ws = _workspace(x_workspace)
+    return {"success": True, "records": _cloud_call(cloud_store.list_records, ws)}
+
+
+@app.get("/cloud/records/{so_benh_an:path}", dependencies=[Depends(cloud_rate_limit)])
+def cloud_get(so_benh_an: str, x_workspace: str | None = Header(default=None)):
+    ws = _workspace(x_workspace)
+    rec = _cloud_call(cloud_store.get_record, ws, so_benh_an)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="Record not found in cloud storage.")
+    return {"success": True, "record": rec}
+
+
+@app.put("/cloud/records/{so_benh_an:path}", dependencies=[Depends(cloud_rate_limit)])
+def cloud_put(so_benh_an: str, record: dict, x_workspace: str | None = Header(default=None)):
+    ws = _workspace(x_workspace)
+    if str(record.get("so_benh_an", "")) != so_benh_an:
+        raise HTTPException(status_code=400, detail="Record number in the body does not match the URL.")
+    try:
+        _cloud_call(cloud_store.put_record, ws, so_benh_an, record)
+    except ValueError as e:
+        raise HTTPException(status_code=413, detail=str(e))
+    return {"success": True}
+
+
+@app.delete("/cloud/records/{so_benh_an:path}", dependencies=[Depends(cloud_rate_limit)])
+def cloud_delete(so_benh_an: str, x_workspace: str | None = Header(default=None)):
+    ws = _workspace(x_workspace)
+    _cloud_call(cloud_store.delete_record, ws, so_benh_an)
+    return {"success": True}
 
 
 # ─── ECG DIGITIZATION ──────────────────────────────────────────────────────
