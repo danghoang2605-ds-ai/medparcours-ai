@@ -98,6 +98,9 @@ def _check_bucket(key: str, limit: int, window: int) -> None:
     if limit <= 0:  # 0 disables limiting (tests, private deployments)
         return
     now = time.monotonic()
+    if len(_rate_buckets) > 5000:  # public server: forget clients idle for a full window
+        for k in [k for k, b in _rate_buckets.items() if not b or now - b[-1] > window]:
+            del _rate_buckets[k]
     bucket = _rate_buckets[key]
     while bucket and now - bucket[0] > window:
         bucket.popleft()
@@ -657,6 +660,19 @@ def select_relevant_text(full_text: str, budget: int):
     return out, {"filtered": True, "pages_total": n, "pages_kept": len(kept)}
 
 
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25MB for PDF/Office uploads
+MAX_QUESTION_CHARS = 4_000            # one chat question
+MAX_HISTORY_MSG_CHARS = 4_000         # each earlier chat turn sent back to the model
+
+
+async def _read_upload(file: UploadFile) -> bytes:
+    """Read an upload with a hard size cap (the API is public, no login)."""
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File quá lớn. Giới hạn {MAX_UPLOAD_BYTES // 1024 // 1024}MB.")
+    return content
+
+
 MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8MB - giới hạn an toàn cho ảnh chụp/scan hồ sơ
 
 
@@ -986,16 +1002,20 @@ async def analyze_record(
     Legacy Office formats (.doc/.xls/.ppt) are not supported — return 400 with a clear message.
     For large PDFs, prefer /analyze_text (client-side text extraction via pdf.js).
     """
-    filename_lower = file.filename.lower()
+    filename_lower = (file.filename or "").lower()
     ext = "." + filename_lower.rsplit(".", 1)[-1] if "." in filename_lower else ""
 
     if ext == ".pdf":
+        content = await _read_upload(file)
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            content = await file.read()
             tmp.write(content)
             tmp_path = tmp.name
         try:
-            extracted = extract_text_from_pdf(tmp_path)
+            try:
+                extracted = extract_text_from_pdf(tmp_path)
+            except Exception as e:
+                print(f"[PDF ERROR] {type(e).__name__}: {e}")
+                raise HTTPException(status_code=400, detail="File PDF bị lỗi hoặc không đọc được. Hãy xuất lại file PDF rồi thử lại.")
             response = run_analysis_pipeline(
                 extracted["text"],
                 pages=extracted["pages"],
@@ -1007,8 +1027,8 @@ async def analyze_record(
             os.unlink(tmp_path)
 
     if ext in document_extract.EXTRACTORS:
-        content = await file.read()
-        text, warning, _ = document_extract.extract_from_filename(file.filename, content)
+        content = await _read_upload(file)
+        text, warning, _ = document_extract.extract_from_filename(file.filename or "", content)
         if not text.strip():
             raise HTTPException(
                 status_code=400,
@@ -1019,7 +1039,7 @@ async def analyze_record(
 
     if ext in document_extract.UNSUPPORTED_BUT_LISTED_IN_UI:
         if ext in (".png", ".jpg", ".jpeg"):
-            content = await file.read()
+            content = await _read_upload(file)
             media_type = "image/png" if ext == ".png" else "image/jpeg"
             response = run_analysis_pipeline_from_image(content, media_type, filename=file.filename)
             return response
@@ -1129,8 +1149,9 @@ async def merge_record_text(req: MergeTextRequest):
     """Merge a new document (already text-extracted in the browser) into an existing record."""
     if not req.ho_so_text.strip():
         raise HTTPException(status_code=400, detail="Tài liệu mới không có nội dung.")
+    text, _ = select_relevant_text(req.ho_so_text, MAX_TEXT_CHARS)
     try:
-        report_moi = _parse_report_text(call_claude(system=REPORT_SYSTEM, user_message=req.ho_so_text))
+        report_moi = _parse_report_text(call_claude(system=REPORT_SYSTEM, user_message=f"Hồ sơ bệnh nhân:\n\n{text}"))
     except json.JSONDecodeError:
         return JSONResponse({"success": False, "error": _UNREADABLE_NEW_DOC})
     return _merge_and_reevaluate(req.existing_report, report_moi)
@@ -1187,16 +1208,26 @@ GIỚI HẠN BẮT BUỘC:
 
 
 def _normalise_claude_history(chat_history: list) -> list[dict]:
-    """Giữ tối đa 6 tin gần nhất và chỉ chuyển role hợp lệ sang Claude."""
+    """Last 6 valid turns, each capped, starting with a user turn and with
+    consecutive same-role turns merged (the Messages API expects alternation;
+    the UI's greeting is an assistant turn that would otherwise come first)."""
     messages: list[dict] = []
-    for msg in chat_history[-6:]:
+    for msg in (chat_history or [])[-6:]:
         if not isinstance(msg, dict):
             continue
         role = msg.get("role")
-        content = str(msg.get("content") or "").strip()
+        content = str(msg.get("content") or "").strip()[:MAX_HISTORY_MSG_CHARS]
         if role not in {"user", "assistant"} or not content:
             continue
-        messages.append({"role": role, "content": content})
+        if messages and messages[-1]["role"] == role:
+            messages[-1]["content"] += "\n\n" + content
+        else:
+            messages.append({"role": role, "content": content})
+    while messages and messages[0]["role"] != "user":
+        messages.pop(0)
+    # The caller appends the new question as a user turn.
+    if messages and messages[-1]["role"] == "user":
+        messages.pop()
     return messages
 
 
@@ -1242,6 +1273,8 @@ async def chat(
     - assistant_type="system": product-support assistant (Claude, no patient data).
     """
     question = request.question.strip()
+    if len(question) > MAX_QUESTION_CHARS:
+        raise HTTPException(status_code=413, detail=f"Câu hỏi quá dài (tối đa {MAX_QUESTION_CHARS} ký tự).")
     if not question:
         raise HTTPException(status_code=400, detail="Câu hỏi không được để trống")
 
@@ -1296,6 +1329,8 @@ async def faq_bot(request: FaqBotRequest, x_lang: str | None = Header(default=No
     """Product-support Q&A (no patient data). Kept for backward compatibility;
     new clients should call /chat with assistant_type="system"."""
     question = request.question.strip()
+    if len(question) > MAX_QUESTION_CHARS:
+        raise HTTPException(status_code=413, detail=f"Câu hỏi quá dài (tối đa {MAX_QUESTION_CHARS} ký tự).")
     if not question:
         raise HTTPException(status_code=400, detail="Câu hỏi không được để trống")
     try:
@@ -1358,6 +1393,8 @@ def cloud_put(so_benh_an: str, record: dict, x_workspace: str | None = Header(de
         _cloud_call(cloud_store.put_record, ws, so_benh_an, record)
     except ValueError as e:
         raise HTTPException(status_code=413, detail=str(e))
+    except cloud_store.StaleWrite:
+        raise HTTPException(status_code=409, detail="This record was deleted on another device.")
     return {"success": True}
 
 

@@ -45,6 +45,8 @@ def test_put_get_list_delete_roundtrip(client):
     assert [r["so_benh_an"] for r in rows] == ["BA-1"]
     assert client.delete("/cloud/records/BA-1", headers=h).status_code == 200
     assert client.get("/cloud/records/BA-1", headers=h).status_code == 404
+    rows = client.get("/cloud/records", headers=h).json()["records"]
+    assert rows[0]["deleted"] is True and rows[0]["ho_ten"] == ""
 
 
 def test_upsert_keeps_one_row_and_latest_data(client):
@@ -106,3 +108,32 @@ def test_record_numbers_with_slashes(client):
     assert client.put("/cloud/records/25%2F0196", json=_rec("25/0196"), headers=h).status_code == 200
     assert client.get("/cloud/records/25%2F0196", headers=h).json()["record"]["so_benh_an"] == "25/0196"
     assert client.delete("/cloud/records/25%2F0196", headers=h).status_code == 200
+
+
+def test_deleted_record_is_not_resurrected_by_a_stale_device(client):
+    h = {"X-Workspace": KEY_A}
+    client.put("/cloud/records/BA-1", json=_rec("BA-1", ts="2026-10-01T00:00:00Z"), headers=h)
+    client.delete("/cloud/records/BA-1", headers=h)
+    # A device that still has the old copy tries to upload it again.
+    r = client.put("/cloud/records/BA-1", json=_rec("BA-1", ts="2026-10-01T00:00:00Z"), headers=h)
+    assert r.status_code == 409
+    assert client.get("/cloud/records/BA-1", headers=h).status_code == 404
+
+
+def test_saving_again_after_delete_is_allowed(client):
+    h = {"X-Workspace": KEY_A}
+    client.put("/cloud/records/BA-1", json=_rec("BA-1"), headers=h)
+    client.delete("/cloud/records/BA-1", headers=h)
+    r = client.put("/cloud/records/BA-1", json=_rec("BA-1", name="New", ts="2099-01-01T00:00:00Z"), headers=h)
+    assert r.status_code == 200
+    assert client.get("/cloud/records/BA-1", headers=h).json()["record"]["ho_ten"] == "New"
+
+
+def test_tombstone_keeps_no_patient_data(client, tmp_path):
+    h = {"X-Workspace": KEY_A}
+    client.put("/cloud/records/BA-1", json=_rec("BA-1", name="Very Private Name"), headers=h)
+    client.delete("/cloud/records/BA-1", headers=h)
+    import sqlite3
+    with sqlite3.connect(tmp_path / "cloud.db") as c:
+        rows = c.execute("SELECT ho_ten, data FROM mp_records").fetchall()
+    assert all("Very Private Name" not in (a or "") + (b or "") for a, b in rows)

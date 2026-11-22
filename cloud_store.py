@@ -13,6 +13,7 @@ records in the browser only.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import hashlib
 import json
 import os
@@ -154,30 +155,60 @@ def _require():
 
 
 # ─── operations ────────────────────────────────────────────────────────────
+TOMBSTONE = '{"deleted": true}'
+
+
+def _now_iso() -> str:
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 def list_records(ws: str) -> list[dict]:
-    return _require().execute(
-        "SELECT so_benh_an, ho_ten, nhom_benh, so_lan_cap_nhat, tao_luc, cap_nhat_luc "
-        "FROM mp_records WHERE workspace = ? ORDER BY cap_nhat_luc DESC LIMIT 500", (ws,))
+    """All records, including deletion markers (deleted=True) so other devices
+    can remove their local copies instead of re-uploading them."""
+    rows = _require().execute(
+        "SELECT so_benh_an, ho_ten, nhom_benh, so_lan_cap_nhat, tao_luc, cap_nhat_luc, "
+        "CASE WHEN data = ? THEN 1 ELSE 0 END AS deleted "
+        "FROM mp_records WHERE workspace = ? ORDER BY cap_nhat_luc DESC LIMIT 1000", (TOMBSTONE, ws))
+    for r in rows:
+        r["deleted"] = bool(r.get("deleted"))
+    return rows
 
 
 def get_record(ws: str, so_benh_an: str) -> dict | None:
     rows = _require().execute(
         "SELECT data FROM mp_records WHERE workspace = ? AND so_benh_an = ?", (ws, so_benh_an))
-    return json.loads(rows[0]["data"]) if rows else None
+    if not rows or rows[0]["data"] == TOMBSTONE:
+        return None
+    return json.loads(rows[0]["data"])
+
+
+class StaleWrite(Exception):
+    """The record was deleted after the version the client is trying to upload."""
 
 
 def put_record(ws: str, so_benh_an: str, record: dict) -> None:
     data = json.dumps(record, ensure_ascii=False)
     if len(data.encode()) > MAX_RECORD_BYTES:
         raise ValueError("Record is too large to sync (limit 5 MB).")
+    incoming = str(record.get("cap_nhat_luc") or "")
+    existing = _require().execute(
+        "SELECT data, cap_nhat_luc FROM mp_records WHERE workspace = ? AND so_benh_an = ?", (ws, so_benh_an))
+    if existing and existing[0]["data"] == TOMBSTONE and str(existing[0]["cap_nhat_luc"] or "") >= incoming:
+        raise StaleWrite(so_benh_an)
     _require().execute(
         "INSERT INTO mp_records (workspace, so_benh_an, ho_ten, nhom_benh, so_lan_cap_nhat, tao_luc, cap_nhat_luc, data) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(workspace, so_benh_an) DO UPDATE SET ho_ten=excluded.ho_ten, nhom_benh=excluded.nhom_benh, "
-        "so_lan_cap_nhat=excluded.so_lan_cap_nhat, cap_nhat_luc=excluded.cap_nhat_luc, data=excluded.data",
+        "so_lan_cap_nhat=excluded.so_lan_cap_nhat, tao_luc=excluded.tao_luc, cap_nhat_luc=excluded.cap_nhat_luc, data=excluded.data",
         (ws, so_benh_an, record.get("ten_hien_thi") or record.get("ho_ten") or "", record.get("nhom_benh") or "",
-         int(record.get("so_lan_cap_nhat") or 1), record.get("tao_luc") or "", record.get("cap_nhat_luc") or "", data))
+         int(record.get("so_lan_cap_nhat") or 1), record.get("tao_luc") or "", incoming, data))
 
 
 def delete_record(ws: str, so_benh_an: str) -> None:
-    _require().execute("DELETE FROM mp_records WHERE workspace = ? AND so_benh_an = ?", (ws, so_benh_an))
+    """Replace the record with a deletion marker (no patient data is kept)."""
+    _require().execute(
+        "INSERT INTO mp_records (workspace, so_benh_an, ho_ten, nhom_benh, so_lan_cap_nhat, tao_luc, cap_nhat_luc, data) "
+        "VALUES (?, ?, '', '', 0, '', ?, ?) "
+        "ON CONFLICT(workspace, so_benh_an) DO UPDATE SET ho_ten='', nhom_benh='', so_lan_cap_nhat=0, "
+        "cap_nhat_luc=excluded.cap_nhat_luc, data=excluded.data",
+        (ws, so_benh_an, _now_iso(), TOMBSTONE))

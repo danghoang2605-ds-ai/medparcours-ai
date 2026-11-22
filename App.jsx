@@ -32,6 +32,11 @@ async function mpFetchJSON(path, body, ms=45000, method="POST"){
     return await res.json()
   } finally { clearTimeout(timer) }
 }
+// Deletions that haven't reached the cloud yet (e.g. made offline). Retried on the next sync.
+const PENDING_DEL_KEY = "mp_pending_cloud_deletes"
+function pendingDeletes() { try { return JSON.parse(localStorage.getItem(PENDING_DEL_KEY) || "[]") } catch { return [] } }
+function setPendingDeletes(ids) { try { localStorage.setItem(PENDING_DEL_KEY, JSON.stringify([...new Set(ids)])) } catch {} }
+
 // Background cloud copy (no-op when the server has no cloud storage configured).
 const _pushTimers = {}
 let _cloudWarned = false
@@ -42,6 +47,7 @@ function pushToCloud(soBenhAn, delay = 0) {
       const rec = await localStore.raw(soBenhAn)
       if (rec) await cloud.put(rec)
     } catch (e) {
+      if (e.status === 409) return   // deleted on another device; the next sync removes it here
       if (!_cloudWarned) { _cloudWarned = true; mpToast("Đã lưu trên trình duyệt này; đồng bộ đám mây tạm thời không khả dụng.", "err") }
     }
   }, delay)
@@ -50,23 +56,34 @@ function pushToCloud(soBenhAn, delay = 0) {
 async function syncAllToCloud() {
   const st = await cloudStatus()
   if (!st.enabled) return { enabled: false }
+  // 1. Deletions made while offline.
+  const pending = pendingDeletes()
+  for (const id of pending) { try { await cloud.remove(id) } catch { continue } }
+  setPendingDeletes([])
+  // 2. Compare by last-updated time; newest wins. Deletion markers count as updates.
   const local = (await localStore.list()).patients
   const remote = ((await cloud.list()) || {}).records || []
   const remoteById = new Map(remote.map(r => [r.so_benh_an, r]))
-  let up = 0, down = 0
+  let up = 0, down = 0, removed = 0
   for (const p of local) {
     const r = remoteById.get(p.so_benh_an)
-    if (!r || String(p.cap_nhat_luc) > String(r.cap_nhat_luc)) { await cloud.put(await localStore.raw(p.so_benh_an)); up++ }
+    if (r && r.deleted && String(r.cap_nhat_luc) >= String(p.cap_nhat_luc)) {
+      await localStore.remove(p.so_benh_an).catch(() => {}); removed++; continue
+    }
+    if (!r || String(p.cap_nhat_luc) > String(r.cap_nhat_luc)) {
+      try { await cloud.put(await localStore.raw(p.so_benh_an)); up++ } catch (e) { if (e.status !== 409) throw e }
+    }
   }
   const localById = new Map(local.map(p => [p.so_benh_an, p]))
   for (const r of remote) {
+    if (r.deleted) continue
     const l = localById.get(r.so_benh_an)
     if (!l || String(r.cap_nhat_luc) > String(l.cap_nhat_luc)) {
       const got = await cloud.get(r.so_benh_an)
       if (got && got.record) { await localStore.importRecord(got.record); down++ }
     }
   }
-  return { enabled: true, up, down }
+  return { enabled: true, up, down, removed }
 }
 
 const mpApi = {
@@ -131,6 +148,7 @@ const mpApi = {
       if (!remote || !remote.records) return local
       const byId = new Map(local.patients.map(p => [p.so_benh_an, p]))
       for (const r of remote.records) {
+        if (r.deleted) continue
         const mine = byId.get(r.so_benh_an)
         if (!mine) byId.set(r.so_benh_an, { ...r, ho_ten_goc: r.ho_ten, cloud_only: true, in_cloud: true })
         else byId.set(r.so_benh_an, { ...mine, in_cloud: true })
@@ -143,7 +161,7 @@ const mpApi = {
   },
   deletePatient: async (soBenhAn) => {
     try { await localStore.remove(soBenhAn) } catch (e) { if (e.status !== 404) throw e }
-    await cloud.remove(soBenhAn).catch(() => {})
+    await cloud.remove(soBenhAn).catch(() => setPendingDeletes([...pendingDeletes(), soBenhAn]))
     return { success: true, so_benh_an: soBenhAn }
   },
   renamePatient: async (soBenhAn, tenMoi) => {
@@ -2586,7 +2604,21 @@ function localizePrintHtml(html) {
   for (const [vi, en] of PRINT_EN_PAIRS) out = out.split(vi).join(en)
   return out
 }
+// HTML-escape every string in a value (deep). Report and analysis text come from
+// uploaded documents via the AI, so they are untrusted when written into a
+// same-origin print window with document.write.
+function escHtml(v) {
+  return String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;")
+}
+function escDeep(v) {
+  if (typeof v === "string") return escHtml(v)
+  if (Array.isArray(v)) return v.map(escDeep)
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, escDeep(x)]))
+  return v
+}
+
 function triggerPrint(r, mode, docNote, bookmarks, analysis) {
+  r = escDeep(r || {}); analysis = escDeep(analysis)
   const EN = getLang() === "en"
   const p = r.thong_tin_benh_nhan
   const PRINT_META = {

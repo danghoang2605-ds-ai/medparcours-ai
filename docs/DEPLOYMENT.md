@@ -33,7 +33,7 @@ The frontend never holds an API key. The Anthropic key lives only in the Space's
 Without Turso, records stay in each browser. With the two Turso secrets set, the Record history
 page shows **Cloud sync: On** and a private *sync key*. Paste that key on another device to open the
 same records. Records are stored in a table `mp_records`, partitioned by a SHA-256 hash of the sync
-key; the key itself is never stored. Older tables in the same database (for example `patients` from
+key; the key itself is never stored. Deleting a record leaves a small deletion marker (no patient data) so other devices remove their copy instead of uploading it again. Older tables in the same database (for example `patients` from
 earlier versions) are left untouched.
 
 To get the Turso values: turso.tech dashboard → your database → copy the URL (`libsql://...`) →

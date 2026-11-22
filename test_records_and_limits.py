@@ -1,5 +1,6 @@
 """Stateless record merge, rate limiting, and the no-login/no-storage contract."""
 import io
+import time
 import json
 
 import pytest
@@ -152,4 +153,54 @@ def test_spoofed_forwarded_for_does_not_bypass_limit(client, monkeypatch, mock_a
     # Same real client (last hop) with different fake first entries.
     assert client.post("/chat", json=body, headers={"x-forwarded-for": "1.1.1.1, 9.9.9.9"}).status_code == 200
     assert client.post("/chat", json=body, headers={"x-forwarded-for": "2.2.2.2, 9.9.9.9"}).status_code == 429
+    main._rate_buckets.clear()
+
+
+# ─── Abuse limits and robustness (public API, no login) ────────────────────
+def test_upload_size_cap(client, monkeypatch):
+    monkeypatch.setattr(main, "MAX_UPLOAD_BYTES", 1000)
+    r = client.post("/analyze", files={"file": ("big.docx", io.BytesIO(b"x" * 2000), "application/octet-stream")})
+    assert r.status_code == 413
+
+
+def test_corrupt_pdf_returns_400_not_500(client):
+    r = client.post("/analyze", files={"file": ("broken.pdf", io.BytesIO(b"not a pdf at all"), "application/pdf")})
+    assert r.status_code == 400
+
+
+def test_question_length_cap(client):
+    body = {"question": "x" * (main.MAX_QUESTION_CHARS + 1), "assistant_type": "system", "ho_so_text": "", "chat_history": []}
+    assert client.post("/chat", json=body).status_code == 413
+
+
+def test_merge_text_is_capped_before_reaching_the_model(client, mock_anthropic):
+    huge = "Tái khám. INR 2.5. " * 50_000          # ~950k chars
+    r = client.post("/records/merge", json={"existing_report": MOCK_REPORT, "ho_so_text": huge})
+    assert r.status_code == 200
+    sent = mock_anthropic[0]["messages"][0]["content"]
+    sent = sent if isinstance(sent, str) else sent[0]["text"]
+    assert len(sent) <= main.MAX_TEXT_CHARS + 200
+
+
+def test_chat_history_is_normalised_for_the_messages_api():
+    hist = [
+        {"role": "assistant", "content": "Hello, I'm MedAmi"},   # greeting first
+        {"role": "user", "content": "a"}, {"role": "user", "content": "b"},
+        {"role": "assistant", "content": "c"},
+        {"role": "user", "content": "question already appended by the UI"},
+    ]
+    out = main._normalise_claude_history(hist)
+    assert out[0]["role"] == "user"
+    assert all(out[i]["role"] != out[i + 1]["role"] for i in range(len(out) - 1))
+    assert out[-1]["role"] == "assistant"   # caller adds the new user question
+    assert out[0]["content"] == "a\n\nb"
+
+
+def test_rate_limit_buckets_are_pruned(monkeypatch):
+    main._rate_buckets.clear()
+    old = time.monotonic() - 10_000
+    for i in range(5001):
+        main._rate_buckets[f"ai:10.0.{i // 256}.{i % 256}"].append(old)
+    main._check_bucket("ai:1.2.3.4", 30, 600)
+    assert len(main._rate_buckets) < 10
     main._rate_buckets.clear()

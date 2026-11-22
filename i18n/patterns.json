@@ -202,5 +202,13 @@
  [
   "^Chuyển\\ đạo\\ (.+?)\\ không\\ nằm\\ trong\\ danh\\ sách\\ khuyến\\ nghị\\ cho\\ phân\\ tích\\ dải\\ nhịp\\.\\ Kết\\ quả\\ nhịp\\ tim\\ có\\ thể\\ kém\\ tin\\ cậy\\.$",
   "Lead $1 isn't a recommended rhythm-strip lead, so the heart rate may be less reliable."
+ ],
+ [
+  "^File quá lớn\\. Giới hạn (.+?)MB\\.$",
+  "File is too large. The limit is $1 MB."
+ ],
+ [
+  "^Câu hỏi quá dài \\(tối đa (.+?) ký tự\\)\\.$",
+  "Your question is too long (max $1 characters)."
  ]
 ]

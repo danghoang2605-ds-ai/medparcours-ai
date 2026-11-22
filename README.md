@@ -194,7 +194,8 @@ Full schema: https://danghoang2605-mediflow-ai.hf.space/docs
 - **Risk-score fix**: the hypertension abbreviation "THA" used to match inside "thay van" (valve replacement), adding a false CHA2DS2-VASc point to valve patients. Keywords now match whole words only.
 - **English report output**: uploaded records are summarized in the selected language; Vietnamese and English records score identically in the rule engine.
 - **Valve detection fix**: "thay van hai lá cơ học" (word order with the valve name in between) is now recognized as a mechanical valve.
-- **Cloud sync (optional)**: reconnects to Turso, with private sync keys instead of accounts.
+- **Cloud sync (optional)**: reconnects to Turso, with private sync keys instead of accounts; deletions propagate across devices.
+- **Security hardening**: printed reports escape all record text (crafted uploads can't inject scripts); upload, question and merge-text size caps; chat history normalized for the Messages API.
 - **Redesigned Record history**: search, filters, pinning, rename, bulk delete, sync status.
 - **US-friendly English**: MRN instead of record number, dictation and read-aloud in en-US, natural phrasing for sentences the app assembles at runtime ("Analyze 3 documents"), and translated backend error messages.
 - **Sex parsing fix**: "Male" was previously read as female (the check looked for the Vietnamese "nam"), affecting eGFR and risk scores for English records.
