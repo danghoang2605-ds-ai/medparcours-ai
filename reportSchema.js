@@ -73,6 +73,12 @@ export function normalizeReport(report) {
     const ps = isObj(r.problem_status) ? r.problem_status : {}
     r.problem_status = { hien_tai: listOfDicts(ps.hien_tai, "ten"), da_qua: listOfDicts(ps.da_qua, "ten") }
   }
+  // Lab rows: the UI parses "val" (e.g. "116 g/L") and keys rows by "key".
+  // The model sometimes returns only rawVal/unit; rebuild what is missing.
+  for (const k of ["xet_nghiem_key", "xet_nghiem_meta"]) for (const lab of r[k] || []) {
+    if (!lab.val && lab.rawVal != null) lab.val = `${lab.rawVal} ${lab.unit || ""}`.trim()
+    if (!lab.key) lab.key = lab.desc || "?"
+  }
   // The UI always reads patient info; guarantee the object and text fields exist.
   const info = isObj(r.thong_tin_benh_nhan) ? r.thong_tin_benh_nhan : {}
   if (info.so_benh_an != null) info.so_benh_an = String(toText(info.so_benh_an)).trim()

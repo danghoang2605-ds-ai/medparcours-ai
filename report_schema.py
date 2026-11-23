@@ -123,6 +123,14 @@ def normalize_report(report) -> dict:
     if "problem_status" in r:
         ps = r["problem_status"] if isinstance(r["problem_status"], dict) else {}
         r["problem_status"] = {k: _list_of_dicts(ps.get(k), "ten") for k in ("hien_tai", "da_qua")}
+    # Lab rows: the UI parses "val" (e.g. "116 g/L") and keys rows by "key".
+    # The model sometimes returns only rawVal/unit; rebuild what is missing.
+    for k in ("xet_nghiem_key", "xet_nghiem_meta"):
+        for lab in r.get(k) or []:
+            if not lab.get("val") and lab.get("rawVal") is not None:
+                lab["val"] = f"{lab['rawVal']} {lab.get('unit') or ''}".strip()
+            if not lab.get("key"):
+                lab["key"] = lab.get("desc") or "?"
     info = r.get("thong_tin_benh_nhan")
     if isinstance(info, dict) and info.get("so_benh_an") is not None:
         info["so_benh_an"] = to_text(info["so_benh_an"]).strip()

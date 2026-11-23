@@ -1774,14 +1774,14 @@ function buildEgfrDetail(creatUmol, age, sexMale) {
 // Chuẩn hóa danh sách thuốc -> hoạt chất gốc + nhóm
 function resolveGenerics(meds) {
   return (meds || []).map(m => {
-    const paren = (m.ten_thuoc.match(/\(([^)]+)\)/) || [])[1]
+    const paren = ((m.ten_thuoc||"").match(/\(([^)]+)\)/) || [])[1]
     let generic = null
     if (paren) {
       const first = paren.split(/[+/,]/)[0].trim().toLowerCase()
       generic = Object.keys(GENERIC_INFO).find(g => first.includes(g) || g.includes(first)) || null
     }
     if (!generic) {
-      const brand = m.ten_thuoc.split(/\d/)[0].trim().toLowerCase()
+      const brand = (m.ten_thuoc||"").split(/\d/)[0].trim().toLowerCase()
       generic = BRAND_TO_GENERIC[brand] || null
     }
     const info = generic ? GENERIC_INFO[generic] : null
@@ -2257,7 +2257,7 @@ function buildChips(report) {
   // Chống đông
   const ac = (report.thuoc_cuoi_ky || []).find(m => /chống đông|acenocoumarol|warfarin|coumarin/i.test(`${m.ten_thuoc}`))
   if (ac) {
-    const name = (ac.ten_thuoc.split(/\d/)[0] || "").trim()
+    const name = ((ac.ten_thuoc||"").split(/\d/)[0] || "").trim()
     chips.push({ label:`Chống đông ${name}`, cls:"warn" })
   }
   // Chỉ số cao đáng chú ý
@@ -2378,13 +2378,20 @@ function exportLabsCSV(r) {
       rows.push([l.key, l.desc||"", l.unit||"", l.ngay||"", l.rawVal!=null?l.rawVal:l.val, l.normal||"", l.status||""])
     }
   })
-  const esc = v => { const s = String(v==null?"":v); return /[",\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s }
+  const esc = v => {
+    let s = String(v==null?"":v)
+    // CSV/formula injection (OWASP): text from an uploaded document such as
+    // =HYPERLINK(...) would run as a formula in Excel/Sheets. Neutralize cells
+    // that start with a formula trigger, except plain numbers like -1.5.
+    if (typeof v !== "number" && /^[=+\-@\t\r]/.test(s) && !/^[-+]?\d+([.,]\d+)?$/.test(s)) s = "'" + s
+    return /[",\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s
+  }
   const csv = "\uFEFF" + rows.map(row => row.map(esc).join(",")).join("\r\n")
   try {
     const blob = new Blob([csv], { type:"text/csv;charset=utf-8" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
-    const name = (r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an) || "benh_an"
+    const name = String((r.thong_tin_benh_nhan && r.thong_tin_benh_nhan.so_benh_an) || "benh_an").replace(/[^\w.-]+/g, "_").slice(0, 60)
     a.href = url; a.download = (getLang()==="en" ? "labs_" : "xet_nghiem_") + name + ".csv"
     document.body.appendChild(a); a.click(); document.body.removeChild(a)
     setTimeout(() => URL.revokeObjectURL(url), 1500)
@@ -2606,6 +2613,22 @@ function localizePrintHtml(html) {
   for (const [vi, en] of PRINT_EN_PAIRS) out = out.split(vi).join(en)
   return out
 }
+// "62 tuổi", "Nam" -> "62 tuổi, Nam"; skips missing parts so a record without an
+// age or sex never shows a dangling " tuổi, " or "undefined".
+function ageLabel(t) {
+  if (t == null || typeof t === "object") return ""
+  const s = String(t).trim()
+  return !s ? "" : /tuổi|y\/o|years?/i.test(s) ? s : `${s} tuổi`
+}
+function joinBits(bits, sep) {
+  return bits.map(b => (b == null || typeof b === "object") ? "" : String(b).trim()).filter(Boolean).join(sep)
+}
+// Local record ID for documents that carry no MRN, e.g. "LOCAL-261123-K7QX".
+function makeLocalId() {
+  const d = new Date(), p = n => String(n).padStart(2, "0")
+  const rnd = Math.random().toString(36).slice(2, 6).toUpperCase().padEnd(4, "0")
+  return `LOCAL-${String(d.getFullYear()).slice(2)}${p(d.getMonth() + 1)}${p(d.getDate())}-${rnd}`
+}
 // HTML-escape every string in a value (deep). Report and analysis text come from
 // uploaded documents via the AI, so they are untrusted when written into a
 // same-origin print window with document.write.
@@ -2619,10 +2642,18 @@ function escDeep(v) {
   return v
 }
 
+// Tag for the print templates: a field the record doesn't have prints as
+// nothing instead of "undefined" or "null".
+function printTpl(strings, ...vals) {
+  let out = strings[0]
+  for (let i = 0; i < vals.length; i++) out += (vals[i] == null ? "" : vals[i]) + strings[i + 1]
+  return out
+}
+
 function triggerPrint(r, mode, docNote, bookmarks, analysis) {
   r = escDeep(r || {}); analysis = escDeep(analysis)
   const EN = getLang() === "en"
-  const p = r.thong_tin_benh_nhan
+  const p = r.thong_tin_benh_nhan || {}
   const PRINT_META = {
     clinical:{ title:"Báo cáo lâm sàng", label:"MedParcours AI: Báo cáo lâm sàng tự động" },
     hoi_chan:{ title:"Biên bản hội chẩn đa chuyên khoa", label:"MedParcours AI: Biên bản hội chẩn đa chuyên khoa (AI)" },
@@ -2642,11 +2673,11 @@ function triggerPrint(r, mode, docNote, bookmarks, analysis) {
     h += `<p style="font-size:9pt;color:#555">Hỗ trợ quyết định, không tự kê đơn/chỉnh liều. Cần bác sĩ xác nhận.</p>`
     if (rs.cha2ds2_vasc) {
       const cv = rs.cha2ds2_vasc
-      h += `<div class="alert"><div class="al">${cv.ten_thang_diem}: ${cv.tong_diem}/${cv.thang_diem_toi_da} điểm</div><div class="as">${cv.canh_bao_boi_canh}</div></div>`
+      h += printTpl`<div class="alert"><div class="al">${cv.ten_thang_diem}: ${cv.tong_diem}/${cv.thang_diem_toi_da} điểm</div><div class="as">${cv.canh_bao_boi_canh}</div></div>`
     }
     if (rs.has_bled) {
       const hb = rs.has_bled
-      h += `<div class="alert"><div class="al">${hb.ten_thang_diem}: ${hb.tong_diem}/${hb.thang_diem_toi_da} điểm</div><div class="as">${hb.dien_giai_muc_nguy_co}</div></div>`
+      h += printTpl`<div class="alert"><div class="al">${hb.ten_thang_diem}: ${hb.tong_diem}/${hb.thang_diem_toi_da} điểm</div><div class="as">${hb.dien_giai_muc_nguy_co}</div></div>`
     }
     return h
   })()
@@ -2654,7 +2685,7 @@ function triggerPrint(r, mode, docNote, bookmarks, analysis) {
   const ttrPrintBlock = (() => {
     const ttr = analysis && analysis.ttr
     if (!ttr) return ""
-    return `<h2>XII. TTR — Time in Therapeutic Range</h2>
+    return printTpl`<h2>XII. TTR — Time in Therapeutic Range</h2>
 <p style="font-size:9pt;color:#555">${ttr.phuong_phap}</p>
 <div class="alert"><div class="al">TTR: ${ttr.ttr_percent}% (${ttr.so_lan_trong_dich}/${ttr.so_lan_do} lần trong đích ${ttr.dich_dieu_tri})</div><div class="as">${ttr.dien_giai}</div></div>`
   })()
@@ -2663,63 +2694,72 @@ function triggerPrint(r, mode, docNote, bookmarks, analysis) {
     if (!gaps || !gaps.length) return ""
     const sevLabel = { cao:"ƯU TIÊN CAO", trung_binh:"Trung bình", thap:"Theo dõi" }
     return `<h2>XIII. Khoảng trống theo guideline</h2>` +
-      gaps.map(g=>`<div class="alert"><div class="al">[${sevLabel[g.muc_do]||g.muc_do}] ${g.tieu_de}</div><div class="as">${g.ly_do}</div></div>`).join("")
+      gaps.map(g=>printTpl`<div class="alert"><div class="al">[${sevLabel[g.muc_do]||g.muc_do}] ${g.tieu_de}</div><div class="as">${g.ly_do}</div></div>`).join("")
   })()
-  const clinicalBody = `<h2>I. Chẩn đoán</h2><div class="row"><span class="lbl">Chẩn đoán chính:</span><span>${r.chan_doan_chinh}</span></div><div class="row"><span class="lbl">Lý do nhập viện:</span><span>${r.ly_do_vao_vien}</span></div><div class="row"><span class="lbl">Tiền sử:</span><span>${r.tien_su_benh}</span></div>
-<h2>II. Phẫu thuật</h2><table><tr><th>Ngày</th><th>Phương pháp</th><th>Kết quả</th></tr><tr><td>${r.phau_thuat.ngay}</td><td>${r.phau_thuat.phuong_phap}</td><td>${r.phau_thuat.ket_qua}</td></tr></table><div class="row"><span class="lbl">Phẫu thuật viên:</span><span>${r.phau_thuat.bac_si_phau_thuat}</span></div>
-<h2>III. Xét nghiệm</h2><table><tr><th>Chỉ số</th><th>Kết quả</th><th>BT</th><th>Đánh giá</th></tr>${(r.xet_nghiem_key||r.xet_nghiem_meta||[]).map(m=>`<tr><td>${m.key} (${m.desc})</td><td>${m.val}</td><td>${m.normal}</td><td>${m.status==="high"?"Cao":m.status==="low"?"Thấp":"BT"}</td></tr>`).join("")}</table>
-<h2>IV. Diễn biến</h2><table><tr><th style="width:80pt">Ngày</th><th style="width:70pt">Loại</th><th>Mô tả</th></tr>${(r.dien_bien_lam_sang||[]).map(ev=>`<tr><td>${ev.ngay}</td><td>${ev.loai==="canh_bao"?"Cảnh báo":ev.loai==="bat_thuong"?"Bất thường":"BT"}</td><td>${ev.mo_ta}</td></tr>`).join("")}</table>
-<h2>V. Siêu âm tim (${(r.sieu_am_tim?.lan_kham||[]).length} lượt)</h2><table><tr><th>Ngày</th><th>EF</th><th>Chênh áp</th><th>Kết luận</th></tr>${(r.sieu_am_tim?.lan_kham||[]).map(s=>`<tr><td>${s.ngay}${s.latest?" (gần nhất)":""}</td><td>${s.ef!=null?s.ef+"%":"-"}</td><td>${s.grad_max!=null?s.grad_max+(s.grad_tb!=null?"/"+s.grad_tb:"")+" mmHg":"-"}</td><td>${s.ghi_chu||s.chan_doan||""}</td></tr>`).join("")}</table>
-<h2>VI. Thuốc</h2><table><tr><th>Tên thuốc</th><th>Liều</th><th>Cách dùng</th></tr>${(r.thuoc_cuoi_ky||[]).map(t=>`<tr><td>${t.ten_thuoc}</td><td>${t.lieu}</td><td>${t.cach_dung}</td></tr>`).join("")}</table>
-<h2>VII. Cảnh báo</h2>${(r.canh_bao_nguy_co||[]).map(c=>`<div class="alert"><div class="al">[${c.muc_do==="cao"?"ƯU TIÊN CAO":c.muc_do==="trung_binh"?"Trung bình":"Theo dõi"}] ${c.mo_ta}</div><div class="as">Căn cứ: ${c.can_cu}</div></div>`).join("")}
-${(()=>{const{findings,egfr,ctx}=runPriorityScreens(r);const s=checkDrugSafety(r.thuoc_cuoi_ky,egfr,ctx);const act=findings.filter(f=>f.muc!=="stable").sort((a,b)=>TIER_ORDER[a.muc]-TIER_ORDER[b.muc]);let h="<h2>VIII. Phân tầng ưu tiên lâm sàng</h2>";h+=act.map(f=>`<div class="alert"><div class="al">[${TIER_META[f.muc].label}] ${f.ten}</div><div class="as">${f.ly_do} — Nguồn: ${f.nguon}</div></div>`).join("")||"<p>Không có cảnh báo cần xử trí ngay.</p>";h+=`<h2>IX. Kiểm tra an toàn đơn thuốc</h2><p>Chức năng thận: eGFR ${egfr} mL/phút/1.73m2 (CKD-EPI 2021).</p>`;if(s.interactions.length)h+="<table><tr><th>Cặp thuốc</th><th>Mức</th><th>Hậu quả</th><th>Đề xuất</th></tr>"+s.interactions.map(it=>`<tr><td>${it.thuoc_a} + ${it.thuoc_b}</td><td>${TIER_META[it.muc].label}</td><td>${it.hau_qua}</td><td>${it.de_xuat}</td></tr>`).join("")+"</table>";if(s.favorable.length)h+="<p>Phù hợp khuyến cáo: "+s.favorable.map(f=>`${f.thuoc} (${f.nguon})`).join("; ")+"</p>";return h})()}
+  const clinicalBody = printTpl`<h2>I. Chẩn đoán</h2><div class="row"><span class="lbl">Chẩn đoán chính:</span><span>${r.chan_doan_chinh}</span></div><div class="row"><span class="lbl">Lý do nhập viện:</span><span>${r.ly_do_vao_vien}</span></div><div class="row"><span class="lbl">Tiền sử:</span><span>${r.tien_su_benh}</span></div>
+<h2>II. Phẫu thuật</h2><table><tr><th>Ngày</th><th>Phương pháp</th><th>Kết quả</th></tr><tr><td>${r.phau_thuat.ngay}</td><td>${r.phau_thuat.phuong_phap}</td><td>${r.phau_thuat.ket_qua}</td></tr></table>${r.phau_thuat.bac_si_phau_thuat?`<div class="row"><span class="lbl">Phẫu thuật viên:</span><span>${r.phau_thuat.bac_si_phau_thuat}</span></div>`:""}
+<h2>III. Xét nghiệm</h2><table><tr><th>Chỉ số</th><th>Kết quả</th><th>BT</th><th>Đánh giá</th></tr>${(r.xet_nghiem_key||r.xet_nghiem_meta||[]).map(m=>printTpl`<tr><td>${m.key}${m.desc?` (${m.desc})`:""}</td><td>${m.val}</td><td>${m.normal}</td><td>${m.status==="high"?"Cao":m.status==="low"?"Thấp":"BT"}</td></tr>`).join("")}</table>
+<h2>IV. Diễn biến</h2><table><tr><th style="width:80pt">Ngày</th><th style="width:70pt">Loại</th><th>Mô tả</th></tr>${(r.dien_bien_lam_sang||[]).map(ev=>printTpl`<tr><td>${ev.ngay}</td><td>${ev.loai==="canh_bao"?"Cảnh báo":ev.loai==="bat_thuong"?"Bất thường":"BT"}</td><td>${ev.mo_ta}</td></tr>`).join("")}</table>
+<h2>V. Siêu âm tim (${(r.sieu_am_tim?.lan_kham||[]).length} lượt)</h2><table><tr><th>Ngày</th><th>EF</th><th>Chênh áp</th><th>Kết luận</th></tr>${(r.sieu_am_tim?.lan_kham||[]).map(s=>printTpl`<tr><td>${s.ngay||"-"}${s.latest?" (gần nhất)":""}</td><td>${s.ef!=null?s.ef+"%":"-"}</td><td>${s.grad_max!=null?s.grad_max+(s.grad_tb!=null?"/"+s.grad_tb:"")+" mmHg":"-"}</td><td>${s.ghi_chu||s.chan_doan||""}</td></tr>`).join("")}</table>
+<h2>VI. Thuốc</h2><table><tr><th>Tên thuốc</th><th>Liều</th><th>Cách dùng</th></tr>${(r.thuoc_cuoi_ky||[]).map(t=>printTpl`<tr><td>${t.ten_thuoc}</td><td>${t.lieu}</td><td>${t.cach_dung}</td></tr>`).join("")}</table>
+<h2>VII. Cảnh báo</h2>${(r.canh_bao_nguy_co||[]).map(c=>printTpl`<div class="alert"><div class="al">[${c.muc_do==="cao"?"ƯU TIÊN CAO":c.muc_do==="trung_binh"?"Trung bình":"Theo dõi"}] ${c.mo_ta}</div>${c.can_cu?`<div class="as">Căn cứ: ${c.can_cu}</div>`:""}</div>`).join("")}
+${(()=>{const{findings,egfr,ctx}=runPriorityScreens(r);const s=checkDrugSafety(r.thuoc_cuoi_ky,egfr,ctx);const act=findings.filter(f=>f.muc!=="stable").sort((a,b)=>TIER_ORDER[a.muc]-TIER_ORDER[b.muc]);let h="<h2>VIII. Phân tầng ưu tiên lâm sàng</h2>";h+=act.map(f=>printTpl`<div class="alert"><div class="al">[${TIER_META[f.muc].label}] ${f.ten}</div><div class="as">${f.ly_do} — Nguồn: ${f.nguon}</div></div>`).join("")||"<p>Không có cảnh báo cần xử trí ngay.</p>";h+=printTpl`<h2>IX. Kiểm tra an toàn đơn thuốc</h2><p>Chức năng thận: eGFR ${egfr} mL/phút/1.73m2 (CKD-EPI 2021).</p>`;if(s.interactions.length)h+="<table><tr><th>Cặp thuốc</th><th>Mức</th><th>Hậu quả</th><th>Đề xuất</th></tr>"+s.interactions.map(it=>printTpl`<tr><td>${it.thuoc_a} + ${it.thuoc_b}</td><td>${TIER_META[it.muc].label}</td><td>${it.hau_qua}</td><td>${it.de_xuat}</td></tr>`).join("")+"</table>";if(s.favorable.length)h+="<p>Phù hợp khuyến cáo: "+s.favorable.map(f=>printTpl`${f.thuoc||""}${f.nguon?printTpl` (${f.nguon})`:""}`).join("; ")+"</p>";return h})()}
 ${riskScoresPrintBlock}
 ${ttrPrintBlock}
 ${careGapsPrintBlock}
-<h2>X. Tóm tắt</h2>${splitTomTatTheoGiaiDoan(r.tom_tat_toan_canh).map(sec=>`${sec.tieuDe?`<div class="tomtat-giaidoan-t">${sec.tieuDe}</div>`:""}<ul class="tomtat-giaidoan-ul">${sec.cau.map(c=>`<li>${c}</li>`).join("")}</ul>`).join("")}`
+<h2>X. Tóm tắt</h2>${splitTomTatTheoGiaiDoan(r.tom_tat_toan_canh).map(sec=>printTpl`${sec.tieuDe?printTpl`<div class="tomtat-giaidoan-t">${sec.tieuDe}</div>`:""}<ul class="tomtat-giaidoan-ul">${sec.cau.map(c=>printTpl`<li>${c}</li>`).join("")}</ul>`).join("")}`
   const mdtPrintBody = (rr) => {
     const m = deriveMDT(rr)
-    let h = `<h2>I. Tổng quan nguy cơ (MDT Risk Dashboard)</h2><table><tr><th>Vấn đề</th><th>Mức độ</th></tr>` + m.risk.map(d=>`<tr><td>${d.ten}</td><td>${d.pct}%</td></tr>`).join("") + `</table>`
-    h += `<h2>II. Ưu tiên lâm sàng</h2>` + m.priorities.map(pr=>`<div class="alert"><div class="al">Ưu tiên ${pr.rank}: ${pr.ten}</div><div class="as">${pr.ly_do}</div></div>`).join("")
-    h += `<h2>III. Chuyên khoa được mời</h2><table><tr><th>Chuyên khoa</th><th>Liên quan</th><th>Vai trò</th></tr>` + m.specialties.map(y=>`<tr><td>${y.khoa}</td><td>${y.relevance}</td><td>${y.role}</td></tr>`).join("") + `</table>`
-    h += `<h2>IV. Nhận định theo chuyên khoa</h2>` + m.specialties.map(y=>`<div class="alert"><div class="al">${y.khoa} - Độ tin cậy ${y.confidence}%</div><div class="as"><b>Kết luận chính:</b> ${(y.ket_luan_chinh||[]).join("; ")||"-"}<br><b>Đề xuất:</b> ${(y.de_xuat||[]).join("; ")||"-"}<br><b>Dữ liệu còn thiếu:</b> ${y.con_thieu||"-"}</div></div>`).join("")
-    h += `<h2>V. Kết luận hội chẩn (đồng thuận)</h2><p>${m.consensus}</p>`
+    let h = `<h2>I. Tổng quan nguy cơ (MDT Risk Dashboard)</h2><table><tr><th>Vấn đề</th><th>Mức độ</th></tr>` + m.risk.map(d=>printTpl`<tr><td>${d.ten}</td><td>${d.pct}%</td></tr>`).join("") + `</table>`
+    h += `<h2>II. Ưu tiên lâm sàng</h2>` + m.priorities.map(pr=>printTpl`<div class="alert"><div class="al">Ưu tiên ${pr.rank}: ${pr.ten}</div><div class="as">${pr.ly_do}</div></div>`).join("")
+    h += `<h2>III. Chuyên khoa được mời</h2><table><tr><th>Chuyên khoa</th><th>Liên quan</th><th>Vai trò</th></tr>` + m.specialties.map(y=>printTpl`<tr><td>${y.khoa}</td><td>${y.relevance}</td><td>${y.role}</td></tr>`).join("") + `</table>`
+    h += `<h2>IV. Nhận định theo chuyên khoa</h2>` + m.specialties.map(y=>printTpl`<div class="alert"><div class="al">${y.khoa} - Độ tin cậy ${y.confidence}%</div><div class="as"><b>Kết luận chính:</b> ${(y.ket_luan_chinh||[]).join("; ")||"-"}<br><b>Đề xuất:</b> ${(y.de_xuat||[]).join("; ")||"-"}<br><b>Dữ liệu còn thiếu:</b> ${y.con_thieu||"-"}</div></div>`).join("")
+    h += printTpl`<h2>V. Kết luận hội chẩn (đồng thuận)</h2><p>${m.consensus}</p>`
     return h
   }
   const teachingPrintBody = (rr) => {
     const t = deriveTeaching(rr)
-    const li = (arr) => `<ul>` + (arr||[]).map(x=>`<li>${x}</li>`).join("") + `</ul>`
+    const li = (arr) => `<ul>` + (arr||[]).map(x=>printTpl`<li>${x}</li>`).join("") + `</ul>`
     const khamTxt = (t.kham && typeof t.kham==="object") ? Object.values(t.kham).join("; ") : (t.kham||"-")
-    let h = `<h2>I. Hành chính</h2><p>${t.hanh_chinh}</p>`
-    h += `<h2>II. Lý do vào viện</h2><p>${t.ly_do}</p>`
+    let h = printTpl`<h2>I. Hành chính</h2><p>${t.hanh_chinh}</p>`
+    h += printTpl`<h2>II. Lý do vào viện</h2><p>${t.ly_do}</p>`
     h += `<h2>III. Bệnh sử</h2>` + li(t.benh_su)
-    h += `<h2>IV. Tiền sử</h2><p>${t.tien_su}</p>`
-    h += `<h2>V. Khám lâm sàng</h2><p>${khamTxt}</p>`
+    h += printTpl`<h2>IV. Tiền sử</h2><p>${t.tien_su}</p>`
+    h += printTpl`<h2>V. Khám lâm sàng</h2><p>${khamTxt}</p>`
     h += `<h2>VI. Tóm tắt hội chứng</h2>` + li(t.tom_tat)
-    h += `<h2>VII. Chẩn đoán sơ bộ</h2><p>${t.chan_doan_so_bo}</p>`
+    h += printTpl`<h2>VII. Chẩn đoán sơ bộ</h2><p>${t.chan_doan_so_bo}</p>`
     h += `<h2>VIII. Chẩn đoán phân biệt</h2>` + li(t.ddx)
     h += `<h2>IX. Biện luận</h2>` + li(t.bien_luan)
-    h += `<h2>X. Cận lâm sàng đề nghị</h2><ul>` + (t.can_lam_sang||[]).map(c=>`<li>${c.viec} - ${c.ly_do}</li>`).join("") + `</ul>`
-    h += `<h2>XI. Điều trị</h2><p>${t.dieu_tri_ngoai||""}</p>` + li(t.dieu_tri_noi)
-    h += `<h2>XII. Tiên lượng - Dự phòng</h2><p>${t.tien_luong||"-"}</p>`
-    h += `<h2>XIII. Red flags cần nhớ</h2><ul>` + (t.red_flags||[]).map(f=>`<li><b>${f.dau_hieu}:</b> ${f.y_nghia}</li>`).join("") + `</ul>`
-    h += `<h2>XIV. Câu hỏi vấn đáp (Socratic)</h2>` + (t.socratic||[]).map((s,k)=>`<div class="alert"><div class="al">Câu ${k+1}: ${s.q}</div><div class="as">Gợi ý đáp án: ${s.a}</div></div>`).join("")
+    h += `<h2>X. Cận lâm sàng đề nghị</h2><ul>` + (t.can_lam_sang||[]).map(c=>printTpl`<li>${c.viec} - ${c.ly_do}</li>`).join("") + `</ul>`
+    h += printTpl`<h2>XI. Điều trị</h2><p>${t.dieu_tri_ngoai||""}</p>` + li(t.dieu_tri_noi)
+    h += printTpl`<h2>XII. Tiên lượng - Dự phòng</h2><p>${t.tien_luong||"-"}</p>`
+    h += `<h2>XIII. Red flags cần nhớ</h2><ul>` + (t.red_flags||[]).map(f=>printTpl`<li><b>${f.dau_hieu}:</b> ${f.y_nghia}</li>`).join("") + `</ul>`
+    h += `<h2>XIV. Câu hỏi vấn đáp (Socratic)</h2>` + (t.socratic||[]).map((s,k)=>printTpl`<div class="alert"><div class="al">Câu ${k+1}: ${s.q}</div><div class="as">Gợi ý đáp án: ${s.a}</div></div>`).join("")
     return h
   }
-  const sectionSep = (t)=>`<div style="margin:26pt 0 12pt;padding-bottom:6pt;border-bottom:2pt solid #1B5FCB;font-size:14pt;font-weight:700;color:#1B5FCB">${t}</div>`
+  const sectionSep = (t)=>printTpl`<div style="margin:26pt 0 12pt;padding-bottom:6pt;border-bottom:2pt solid #1B5FCB;font-size:14pt;font-weight:700;color:#1B5FCB">${t}</div>`
   let bodyHtml = clinicalBody
   if(mode==="hoi_chan") bodyHtml = mdtPrintBody(r)
   else if(mode==="teaching") bodyHtml = teachingPrintBody(r)
   else if(mode==="full") bodyHtml = sectionSep("PHẦN A - BÁO CÁO LÂM SÀNG") + clinicalBody + sectionSep("PHẦN B - BIÊN BẢN HỘI CHẨN ĐA CHUYÊN KHOA") + mdtPrintBody(r) + sectionSep("PHẦN C - TÀI LIỆU GIẢNG DẠY") + teachingPrintBody(r)
+  // Header lines: only the parts the record actually has, so a missing date of
+  // birth doesn't leave a bare "Date of birth:" label.
+  const hdrLine1 = joinBits([
+    p.so_benh_an ? `${EN?"MRN":"Số bệnh án"}: ${p.so_benh_an}` : "",
+    joinBits([p.tuoi ? `${p.tuoi} ${EN?"y/o":"tuổi"}` : "", p.gioi_tinh], ", "),
+    p.dia_chi,
+  ], " | ")
+  const hdrLine2 = joinBits([[EN?"Date of birth":"Ngày sinh", p.ngay_sinh], [EN?"Admitted":"Vào viện", p.ngay_vao_vien], [EN?"Discharged":"Ra viện", p.ngay_ra_vien]]
+    .map(([k, v]) => (v == null || v === "") ? "" : `${k}: ${v}`), " | ")
   const win = window.open("", "_blank", "width=900,height=700")
-  const html = `<!DOCTYPE html><html lang="${EN?"en":"vi"}"><head><meta charset="UTF-8"><title>${meta.title}: ${p.ho_ten}</title>
+  const html = printTpl`<!DOCTYPE html><html lang="${EN?"en":"vi"}"><head><meta charset="UTF-8"><title>${meta.title}: ${p.ho_ten}</title>
 <style>body{font-family:'Times New Roman',serif;color:#000;font-size:11pt;line-height:1.55;background:#fff;margin:0}.page{padding:18mm 16mm;max-width:210mm;margin:0 auto}h1{font-size:13pt;text-transform:uppercase;margin:0 0 2pt}h2{font-size:10pt;font-weight:700;text-transform:uppercase;border-bottom:1.5px solid #000;padding-bottom:3pt;margin:14pt 0 7pt}.hdr{border-bottom:2.5px solid #000;padding-bottom:10pt;margin-bottom:8pt;display:flex;justify-content:space-between}.hdr-r{text-align:right;font-size:9pt;color:#444}.sub{font-size:9pt;color:#444;margin:2pt 0}.row{display:flex;gap:6pt;font-size:10pt;margin:3pt 0}.lbl{color:#555;min-width:110pt}table{width:100%;border-collapse:collapse;font-size:10pt;margin:6pt 0 12pt}th{background:#eee;font-weight:700;text-align:left;padding:4pt 7pt;border:1px solid #aaa;font-size:9pt;text-transform:uppercase}td{padding:4pt 7pt;border:1px solid #ccc;vertical-align:top}tr:nth-child(even) td{background:#f9f9f9}.alert{border:1.5px solid #000;border-left:4px solid #000;padding:6pt 10pt;margin:5pt 0}.al{font-size:9pt;font-weight:700;text-transform:uppercase;margin-bottom:2pt}.as{font-size:9pt;color:#555}.footer{border-top:1px solid #999;margin-top:20pt;padding-top:7pt;font-size:8pt;color:#666;display:flex;justify-content:space-between}.stamp{border:1.5px solid #999;width:100pt;height:60pt;display:inline-block;margin-top:8pt;text-align:center;font-size:8pt;padding:5pt;color:#999}.tomtat-giaidoan-t{font-size:10pt;font-weight:700;text-decoration:underline;margin:10pt 0 3pt}.tomtat-giaidoan-ul{margin:0 0 4pt 16pt;padding:0}.tomtat-giaidoan-ul li{margin:2pt 0;font-size:10.5pt;line-height:1.5}@media print{@page{size:A4;margin:18mm 16mm}}</style>
 </head><body><div class="page">
-<div class="hdr"><div><div style="font-size:9pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:4pt">${meta.label}</div><h1>${p.ho_ten}</h1><div class="sub">${EN?"MRN":"Số bệnh án"}: ${p.so_benh_an} | ${p.tuoi} ${EN?"y/o":"tuổi"}, ${p.gioi_tinh} | ${p.dia_chi}</div><div class="sub">${EN?"Date of birth":"Ngày sinh"}: ${p.ngay_sinh} | ${EN?"Admitted":"Vào viện"}: ${p.ngay_vao_vien} | ${EN?"Discharged":"Ra viện"}: ${p.ngay_ra_vien}</div></div><div class="hdr-r">${EN?"Printed":"In ngày"}: ${new Date().toLocaleDateString(EN?"en-US":"vi-VN")}<br>MedParcours AI<br><span style="color:#c00;font-weight:700">${EN?"Requires physician confirmation":"Cần bác sĩ xác nhận"}</span></div></div>
+<div class="hdr"><div><div style="font-size:9pt;text-transform:uppercase;letter-spacing:.1em;color:#555;margin-bottom:4pt">${meta.label}</div><h1>${p.ho_ten}</h1><div class="sub">${hdrLine1}</div>${hdrLine2?`<div class="sub">${hdrLine2}</div>`:""}</div><div class="hdr-r">${EN?"Printed":"In ngày"}: ${new Date().toLocaleDateString(EN?"en-US":"vi-VN")}<br>MedParcours AI<br><span style="color:#c00;font-weight:700">${EN?"Requires physician confirmation":"Cần bác sĩ xác nhận"}</span></div></div>
 ${bodyHtml}
 <div style="display:flex;justify-content:space-between;margin-top:24pt"><div><div class="stamp">Xác nhận bác sĩ phụ trách</div></div><div><div class="stamp">Ký tên bác sĩ</div></div></div>
-${bookmarks && bookmarks.length ? `<h2>Mục đánh dấu cần theo dõi</h2><ul>${bookmarks.map(b=>`<li>${(b.label||"").replace(/&/g,"&amp;").replace(/</g,"&lt;")}${b.sub?` - ${b.sub.replace(/&/g,"&amp;").replace(/</g,"&lt;")}`:""}</li>`).join("")}</ul>` : ""}
-        ${docNote && docNote.trim() ? `<h2>Ghi chú của bác sĩ</h2><div class="alert"><div class="as" style="white-space:pre-wrap">${docNote.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</div></div>` : ""}
+${bookmarks && bookmarks.length ? printTpl`<h2>Mục đánh dấu cần theo dõi</h2><ul>${bookmarks.map(b=>printTpl`<li>${(b.label||"").replace(/&/g,"&amp;").replace(/</g,"&lt;")}${b.sub?printTpl` - ${b.sub.replace(/&/g,"&amp;").replace(/</g,"&lt;")}`:""}</li>`).join("")}</ul>` : ""}
+        ${docNote && docNote.trim() ? printTpl`<h2>Ghi chú của bác sĩ</h2><div class="alert"><div class="as" style="white-space:pre-wrap">${docNote.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</div></div>` : ""}
 <div class="footer"><span>Báo cáo tạo tự động bởi MedParcours AI v1.2. Cần bác sĩ xem xét trước khi dùng cho mục đích lâm sàng.</span><span>MedParcours AI</span></div>
 </div><script>window.onload=function(){window.print()}<\/script></body></html>`
   win.document.write(EN ? localizePrintHtml(html) : html)
@@ -3031,9 +3071,9 @@ function EchoTimeline({ sieu_am, info }) {
   const echoInsight = (() => {
     const parts = []
     if (grFirst != null && grLast != null && grFirst > grLast)
-      parts.push(`Chênh áp qua van giảm từ ${grFirst} xuống ${grLast} mmHg (van hoạt động tốt sau thay).`)
+      parts.push(`Chênh áp qua van giảm từ ${grFirst} xuống ${grLast} mmHg.`)
     if (efMin != null && efLast != null && efMin < efLast && efMin < 55)
-      parts.push(`EF tụt thấp nhất còn ${efMin}%${warnSess ? ` (${warnSess.ngay}, ${warnSess.ghi_chu?.toLowerCase().includes("dịch") ? "do dịch màng tim" : "bất thường"})` : ""}, sau đó hồi phục lên ${efLast}%.`)
+      parts.push(`EF tụt thấp nhất còn ${efMin}%${warnSess ? ` (${[warnSess.ngay, String(warnSess.ghi_chu||"").toLowerCase().includes("dịch") ? "do dịch màng tim" : "bất thường"].filter(Boolean).join(", ")})` : ""}, sau đó hồi phục lên ${efLast}%.`)
     else if (efFirst != null && efLast != null && efLast > efFirst)
       parts.push(`EF cải thiện từ ${efFirst}% lên ${efLast}%.`)
     else if (efLast != null)
@@ -3158,11 +3198,11 @@ function EchoTimeline({ sieu_am, info }) {
             </>}
             {/* Nhãn ngày trục X (xoay) */}
             <text x={x(i)} y={H - 38} textAnchor="end" fontSize="7.5" fill={s.latest ? "#1D6FE8" : "#94A3B8"} fontWeight={s.latest ? "700" : "400"}
-              transform={`rotate(-40 ${x(i)} ${H - 38})`}>{s.ngay.slice(0,5)}</text>
+              transform={`rotate(-40 ${x(i)} ${H - 38})`}>{(s.ngay||"").slice(0,5)}</text>
           </g>
         ))}
         {/* Badge "Gần nhất" cho lượt latest */}
-        {mode!=="grad" && sessions.map((s, i) => s.latest && (
+        {mode!=="grad" && sessions.map((s, i) => s.latest && s.ef != null && (
           <g key={`latest-${i}`}>
             <rect x={x(i) - 26} y={efY(s.ef) - 30} width="52" height="14" rx="7" fill="#1D6FE8" />
             <text x={x(i)} y={efY(s.ef) - 20} textAnchor="middle" fontSize="8" fill="#fff" fontWeight="700">Gần nhất</text>
@@ -3718,7 +3758,8 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
       })
     return () => { cancelled = true }
   }, [pkey])
-  const handleSavePatient = async () => {
+  const saveFlight = useSingleFlight()
+  const handleSavePatient = saveFlight(async () => {
     try {
       const saved = await mpApi.savePatient(report, analysis)
       setSavedStatus("da_luu")
@@ -3727,7 +3768,26 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
     } catch (err) {
       mpToast(err.message || "Không lưu được hồ sơ", "err")
     }
-  }
+  })
+  // Records without an MRN: let the user type one (or keep a generated local ID)
+  // instead of blocking the save until the source document is re-analyzed.
+  const [idPromptOpen, setIdPromptOpen] = useState(false)
+  const [idDraft, setIdDraft] = useState("")
+  const handleSaveWithId = saveFlight(async () => {
+    const id = idDraft.trim().slice(0, 64)
+    if (!id) return
+    const withId = { ...report, thong_tin_benh_nhan: { ...(report.thong_tin_benh_nhan || {}), so_benh_an: id } }
+    try {
+      const saved = await mpApi.savePatient(withId, analysis)
+      setIdPromptOpen(false)
+      setSavedStatus("da_luu")
+      setSavedMeta({ so_lan_cap_nhat: saved.so_lan_cap_nhat, cap_nhat_luc: saved.cap_nhat_luc, storage: "browser" })
+      onReportUpdated && onReportUpdated(withId, analysis)
+      mpToast("Đã lưu hồ sơ trên trình duyệt này — có thể cập nhật thêm tài liệu cho lần khám sau")
+    } catch (err) {
+      mpToast(err.message || "Không lưu được hồ sơ", "err")
+    }
+  })
   const [bmList, setBmList] = useState([])
   useEffect(() => { const h=()=>setBmList(bmGet(pkey)); h(); window.addEventListener("mp-bm",h); return ()=>window.removeEventListener("mp-bm",h) }, [pkey])
   const goToBookmark = (it) => {
@@ -3847,10 +3907,22 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
                 <span className="nav-btn-txt">Lịch sử bệnh án</span>
               </button>
               {(!pkey || pkey === "x") ? (
-                <button className="nav-save-btn err" disabled title="Hồ sơ này chưa có số bệnh án (AI không trích được từ tài liệu) — không thể lưu lâu dài. Bổ sung số bệnh án trong hồ sơ gốc rồi phân tích lại." aria-label="Thiếu số bệnh án, không lưu được">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><line x1="12" y1="11" x2="12" y2="14"/><circle cx="12" cy="17" r="0.5" fill="currentColor"/></svg>
-                  <span className="nav-btn-txt">Không thể lưu</span>
-                </button>
+                <div className="nav-id-wrap">
+                  <button className="nav-save-btn primary" onClick={()=>{ setIdDraft(v => v || makeLocalId()); setIdPromptOpen(o => !o) }} title="Hồ sơ chưa có số bệnh án. Nhập số bệnh án để lưu." aria-label="Lưu hồ sơ" aria-expanded={idPromptOpen}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    <span className="nav-btn-txt">Lưu</span>
+                  </button>
+                  {idPromptOpen && (
+                    <form className="nav-id-pop" onSubmit={e=>{ e.preventDefault(); handleSaveWithId() }}>
+                      <label htmlFor="nav-id-input">Tài liệu không ghi số bệnh án. Nhập số bệnh án, hoặc giữ mã tạm bên dưới:</label>
+                      <input id="nav-id-input" value={idDraft} maxLength={64} autoFocus onChange={e=>setIdDraft(e.target.value)} onKeyDown={e=>{ if (e.key === "Escape") setIdPromptOpen(false) }}/>
+                      <div className="nav-id-actions">
+                        <button type="button" className="hp-btn hp-btn-ghost" onClick={()=>setIdPromptOpen(false)}>Hủy</button>
+                        <button type="submit" className="hp-btn hp-btn-primary" disabled={!idDraft.trim()}>Lưu hồ sơ</button>
+                      </div>
+                    </form>
+                  )}
+                </div>
               ) : <>
                 {savedStatus === "chua_luu" && (
                   <button className="nav-save-btn primary" onClick={handleSavePatient} title="Lưu hồ sơ (để cập nhật lần sau)" aria-label="Lưu hồ sơ">
@@ -3929,7 +4001,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
             <div className="nav-patient">
               <div className="patient-avatar">{(r.thong_tin_benh_nhan.ho_ten || "?").charAt(0)}</div>
               <span className="patient-name">{r.thong_tin_benh_nhan.ho_ten}</span>
-              <span className="patient-meta">{r.thong_tin_benh_nhan.tuoi} tuổi, {r.thong_tin_benh_nhan.gioi_tinh}</span>
+              <span className="patient-meta">{joinBits([ageLabel(r.thong_tin_benh_nhan.tuoi), r.thong_tin_benh_nhan.gioi_tinh], ", ")}</span>
             </div>
             <div className="nav-right">
               <ModeDropdown mode={viewMode} onChange={setViewMode}/>
@@ -4308,7 +4380,7 @@ function ClinicalStatusBanner({ info, report }) {
       sub:`Giai đoạn ${info.currentPhase}: ${info.isOutpatient?"Tái khám định kỳ":"Đang điều trị"}`, foot:"Tính theo ngày có xét nghiệm hoặc siêu âm gần nhất" },
     { lbl:"Tái khám gần nhất", color:"#1D6FE8", big:fmt(info.current), unit:"", num:false,
       sub:latestEcho?`Siêu âm tim ${latestEcho.nguon||""}`.trim():"",
-      foot:latestEcho?`EF ${latestEcho.ef}%, chênh áp ${latestEcho.grad_max} mmHg - Van tốt`:"" },
+      foot:latestEcho?[latestEcho.ef!=null?`EF ${latestEcho.ef}%`:"", latestEcho.grad_max!=null?`chênh áp ${latestEcho.grad_max} mmHg`:""].filter(Boolean).join(", "):"" },
   ]
   return (
     <div className="status-cards">
@@ -4397,6 +4469,38 @@ function bmHas(pkey,label){ return bmGet(pkey).some(x=>x.label===label) }
 // Lưu sessionStorage, KHÔNG lưu chuỗi rỗng (tránh rác key khi bác sĩ bấm vào
 // ô ghi chú rồi không gõ gì và rời đi — đúng yêu cầu "tránh rườm rà").
 function noteKey(pkey, widgetId){ return "mp_note_" + (pkey||"x") + "_" + widgetId }
+// Run an async action at most once at a time. React state (loading flags,
+// disabled buttons) only updates on the next render, so rapid double clicks
+// would otherwise start the action twice: two paid model calls, or a record
+// merged twice. A ref is updated synchronously.
+function useSingleFlight() {
+  const busy = useRef(false)
+  return useCallback(fn => async (...args) => {
+    if (busy.current) return undefined
+    busy.current = true
+    try { return await fn(...args) } finally { busy.current = false }
+  }, [])
+}
+
+// Inline edits are stored as HTML and rendered back with innerHTML. Pasting from
+// another web page can bring active content along, so strip anything executable.
+const UNSAFE_TAGS = "script,style,iframe,frame,object,embed,link,meta,base,form,svg,math"
+function sanitizeEditHtml(html){
+  if (!html) return ""
+  try {
+    const t = document.createElement("template")
+    t.innerHTML = String(html)
+    t.content.querySelectorAll(UNSAFE_TAGS).forEach(el => el.remove())
+    t.content.querySelectorAll("*").forEach(el => {
+      for (const a of [...el.attributes]) {
+        const n = a.name.toLowerCase(), v = a.value.replace(/[\s\u0000-\u001f]/g, "").toLowerCase()
+        if (n.startsWith("on") || n === "srcdoc" || ((n === "href" || n === "src" || n === "xlink:href" || n === "action" || n === "formaction") && /^(javascript|vbscript|data):/.test(v)))
+          el.removeAttribute(a.name)
+      }
+    })
+    return t.innerHTML
+  } catch { return "" }
+}
 function noteGet(pkey, widgetId){ try{ return sessionStorage.getItem(noteKey(pkey,widgetId)) || "" }catch{ return "" } }
 function noteSet(pkey, widgetId, text){
   try{
@@ -4414,7 +4518,7 @@ function useWidgetTools(widgetId, pkey) {
   const key = pkey || CURRENT_PKEY
   const [editing, setEditing] = useState(false)
   const [editInitialHTML, setEditInitialHTML] = useState("")
-  const savedEdit = noteGet(key, widgetId + "_edit")
+  const savedEdit = sanitizeEditHtml(noteGet(key, widgetId + "_edit"))
   const bodyElRef = useRef(null) // trỏ tới nội dung GỐC (chưa vào edit), set bởi WidgetEditableBody qua bodyRef
   const liveElRef = useRef(null) // trỏ tới vùng contentEditable đang gõ, set bởi WidgetEditableBody qua _liveRef
   const startEdit = () => {
@@ -4426,7 +4530,7 @@ function useWidgetTools(widgetId, pkey) {
   const saveEdit = () => {
     // Đọc trực tiếp DOM thật (trình duyệt tự quản lý trong lúc gõ), KHÔNG
     // qua state — tránh vòng lặp setState -> re-render -> ghi đè DOM.
-    const html = liveElRef.current ? liveElRef.current.innerHTML : ""
+    const html = sanitizeEditHtml(liveElRef.current ? liveElRef.current.innerHTML : "")
     noteSet(key, widgetId + "_edit", html)
     setEditing(false)
     mpToast(html.trim() ? "Đã lưu chỉnh sửa" : "Đã xóa nội dung chỉnh sửa")
@@ -4613,7 +4717,8 @@ function UpdatePatientPanel({ pkey, onClose, onUpdated }){
   }
   const clearStaged = () => { if (staged?.url) try { URL.revokeObjectURL(staged.url) } catch {}; setStaged(null) }
 
-  const submitFile = async () => {
+  const updateFlight = useSingleFlight()
+  const submitFile = updateFlight(async () => {
     setLoading(true); setError(null)
     try {
       let result
@@ -4640,9 +4745,9 @@ function UpdatePatientPanel({ pkey, onClose, onUpdated }){
       setError(e.message || "Có lỗi khi cập nhật hồ sơ. Hãy thử lại.")
       setLoading(false)
     }
-  }
+  })
 
-  const submitNote = async () => {
+  const submitNote = updateFlight(async () => {
     if (!note.trim()) return
     setLoading(true); setError(null); setProgress("Đang gộp vào hồ sơ đã lưu...")
     try {
@@ -4658,7 +4763,7 @@ function UpdatePatientPanel({ pkey, onClose, onUpdated }){
       setError(e.message || "Có lỗi khi cập nhật hồ sơ. Hãy thử lại.")
       setLoading(false)
     }
-  }
+  })
 
   const canSubmit = staged || note.trim().length > 0
 
@@ -5249,7 +5354,7 @@ function LabPanel({ labs, note, inrTargetDetail, anticoagulantStatus, phaseInfo 
                   chartData={()=>({type:"CHART_LAB", data:{key:m.key, val:m.val, unit:m.unit, arrow:m.arrow, statusTxt, effStatus: isDoac?"normal":effStatus, trend:m.trend, trendDates:m.trendDates}})}/>
               </div>
               <div className="lab-val-row">
-                <span className="lab-val"><CountUp value={parseFloat(m.val)} decimals={(String(m.rawVal).split(".")[1]||"").length} suffix={(m.val.split(" ")[0].match(/[^0-9.,\-]+$/)||[""])[0]}/></span>
+                <span className="lab-val"><CountUp value={parseFloat(m.val)} decimals={(String(m.rawVal).split(".")[1]||"").length} suffix={(String(m.val||"").split(" ")[0].match(/[^0-9.,\-]+$/)||[""])[0]}/></span>
                 <span className={`lab-arrow ${m.arrow}`}>{arrowChar}</span>
                 {m.unit&&<span className="lab-unit">{m.unit}</span>}
               </div>
@@ -6242,7 +6347,7 @@ function ReportTab({ report: r, analysis }) {
             <div>
               <div className="banner-ba">Số bệnh án: {r.thong_tin_benh_nhan.so_benh_an}</div>
               <div className="banner-name">{r.thong_tin_benh_nhan.ho_ten}</div>
-              <div className="banner-info">{r.thong_tin_benh_nhan.tuoi} tuổi • {r.thong_tin_benh_nhan.gioi_tinh} • {r.thong_tin_benh_nhan.dia_chi}</div>
+              <div className="banner-info">{joinBits([ageLabel(r.thong_tin_benh_nhan.tuoi), r.thong_tin_benh_nhan.gioi_tinh, r.thong_tin_benh_nhan.dia_chi], " • ")}</div>
               <div className="banner-dob">Ngày sinh: {r.thong_tin_benh_nhan.ngay_sinh}</div>
             </div>
             <div className="banner-dates">
@@ -6982,12 +7087,12 @@ function deriveMDT(r){
   })
   const names=specialties.map(s=>s.khoa)
   const order=["sốc","sepsis","nhiễm","lactate","toan","hô hấp","máy thở","phù phổi","huyết động","thận","creatinin","egfr","inr","chống đông","dinh dưỡng","albumin","loét"]
-  const sev=c=>{ const t=c.mo_ta.toLowerCase(); const i=order.findIndex(k=>t.includes(k)); return i<0?999:i }
+  const sev=c=>{ const t=(c.mo_ta||"").toLowerCase(); const i=order.findIndex(k=>t.includes(k)); return i<0?999:i }
   const priorities=(r.canh_bao_nguy_co||[]).filter(c=>c.muc_do==="cao").slice().sort((a,b)=>sev(a)-sev(b)).slice(0,3).map((c,i)=>({rank:i+1,ten:shortLabel(c.mo_ta),ly_do:c.mo_ta}))
   const has=(...k)=>matchKw(text,k)
   const agreement=[`Thống nhất chẩn đoán chính: ${expandAbbr(r.chan_doan_chinh)}`]
   ;(r.clinical_takeaway||[]).filter(t=>t.loai==="good").forEach(t=>agreement.push(t.txt))
-  const concern=(r.problem_status&&r.problem_status.hien_tai||[]).filter(p=>p.trang_thai==="active").map(p=>`${p.ten}: ${p.mo_ta}`)
+  const concern=(r.problem_status&&r.problem_status.hien_tai||[]).filter(p=>p.trang_thai==="active").map(p=>joinBits([p.ten, p.mo_ta], ": ")).filter(Boolean)
   ;(r.canh_bao_nguy_co||[]).filter(c=>c.muc_do==="cao").slice(0,2).forEach(c=>concern.push(c.mo_ta))
   const uncertainty=[]
   if(has("van","sửa van","thay van")) uncertainty.push("Chưa có siêu âm tim kiểm tra lại sau mổ để khẳng định mức hở van và chức năng tim.")
@@ -7094,31 +7199,33 @@ function deriveTeaching(r){
   if(matchKw(dxl,["tăng áp"])) ddx.push("Tăng áp ĐMP nhóm 2 (do tim trái) với các nhóm tăng áp ĐMP khác.")
   if(ddx.length===0) ddx.push("Phân biệt nguyên nhân dựa trên bệnh cảnh và cận lâm sàng đặc hiệu.")
   const red_flags=(r.canh_bao_nguy_co||[]).filter(c=>c.muc_do==="cao").map(c=>({ dau_hieu:shortLabel(c.can_cu||c.mo_ta), y_nghia:c.mo_ta }))
+  // Self-assessment rubric for the learner. No scores: nothing here grades a
+  // student's answer, so showing numbers would be made up.
   const reasoning_score={ items:[
-    {ten:"Khai thác bệnh sử", score:9, nx:"Nắm tốt diễn tiến trước - trong - sau mổ."},
-    {ten:"Tóm tắt bệnh án", score:8, nx:"Cần làm nổi bật hơn các hội chứng chính."},
-    {ten:"Chẩn đoán phân biệt", score:7, nx:"Bổ sung phân biệt nguyên nhân của tổn thương van."},
-    {ten:"Chỉ định cận lâm sàng", score:8, nx:"Hợp lý; nên nêu rõ kết quả kỳ vọng."},
-    {ten:"Lập kế hoạch điều trị", score:9, nx:"Toàn diện cả nội và ngoại khoa."},
-  ], overall:82 }
+    {ten:"Khai thác bệnh sử", nx:"Nêu đủ diễn tiến theo thời gian, các mốc điều trị và biến cố."},
+    {ten:"Tóm tắt bệnh án", nx:"Gom dữ kiện thành các hội chứng chính, ngắn gọn."},
+    {ten:"Chẩn đoán phân biệt", nx:"Nêu các nguyên nhân cần loại trừ và dữ kiện giúp phân biệt."},
+    {ten:"Chỉ định cận lâm sàng", nx:"Mỗi chỉ định có lý do và kết quả kỳ vọng."},
+    {ten:"Lập kế hoạch điều trị", nx:"Bao quát nội khoa, ngoại khoa (nếu có) và kế hoạch theo dõi."},
+  ] }
   return {
-    dx, hanh_chinh:`${p.ho_ten}, ${p.tuoi} tuổi, ${p.gioi_tinh}. Địa chỉ: ${p.dia_chi||"-"}. Vào viện: ${p.ngay_vao_vien}. Số bệnh án: ${p.so_benh_an}.`,
-    ly_do:r.ly_do_vao_vien, benh_su:(r.dien_bien_lam_sang||[]).map(d=>`${d.ngay}: ${d.mo_ta}`), tien_su:r.tien_su_benh, kham,
+    dx, hanh_chinh:`${joinBits([p.ho_ten, ageLabel(p.tuoi), p.gioi_tinh], ", ") || "-"}. Địa chỉ: ${p.dia_chi||"-"}. Vào viện: ${p.ngay_vao_vien||"-"}. Số bệnh án: ${p.so_benh_an||"-"}.`,
+    ly_do:r.ly_do_vao_vien, benh_su:(r.dien_bien_lam_sang||[]).map(d=>joinBits([d.ngay, d.mo_ta], ": ")).filter(Boolean), tien_su:r.tien_su_benh, kham,
     tom_tat:splitSentences(r.tom_tat_toan_canh), chan_doan_so_bo:dx, ddx,
-    bien_luan:(r.ly_luan_lam_sang||[]).map(l=>`${l.tieu_de}: ${l.noi_dung}`),
+    bien_luan:(r.ly_luan_lam_sang||[]).map(l=>joinBits([l.tieu_de, l.noi_dung], ": ")).filter(Boolean),
     can_lam_sang:(r.hanh_dong_uu_tien||[]).map(a=>({viec:a.viec,ly_do:a.ly_do})),
-    dieu_tri_ngoai:r.phau_thuat?`Ngoại khoa (${r.phau_thuat.ngay}): ${r.phau_thuat.phuong_phap}`:"",
-    dieu_tri_noi:(r.thuoc_cuoi_ky||[]).map(m=>`${m.ten_thuoc}${m.lieu?" — "+m.lieu:""}`),
+    dieu_tri_ngoai:(r.phau_thuat&&r.phau_thuat.phuong_phap)?`Ngoại khoa${r.phau_thuat.ngay?` (${r.phau_thuat.ngay})`:""}: ${r.phau_thuat.phuong_phap}`:"",
+    dieu_tri_noi:(r.thuoc_cuoi_ky||[]).filter(m=>m.ten_thuoc).map(m=>`${m.ten_thuoc}${m.lieu?" — "+m.lieu:""}`),
     tien_luong:(r.ket_luan_giai_doan&&(r.ket_luan_giai_doan[3]||r.ket_luan_giai_doan[2]))||"",
     red_flags, decisions:buildDecisions(r), reasoning_score,
     muc_tieu:["Khai thác bệnh sử và khám lâm sàng theo khung bệnh án ngoại khoa Đại học Y Hà Nội (HMU).","Tóm tắt thành hội chứng, chẩn đoán sơ bộ và phân biệt.","Biện luận và đề nghị cận lâm sàng hợp lý.","Trình bày điều trị, tiên lượng và dự phòng biến chứng."],
     socratic:[
       { q:"Từ bệnh sử và thăm khám, hãy tóm tắt ca này bằng 1-2 câu (nêu các hội chứng chính).", a:splitSentences(r.tom_tat_toan_canh).slice(0,2).join(" ") },
-      { q:"Từ các dữ kiện hiện có, anh/chị nghĩ tới chẩn đoán sơ bộ nào và dựa vào đâu?", a:`${dx} Dựa trên bệnh cảnh suy tim, khám tim mạch và siêu âm tim.` },
+      { q:"Từ các dữ kiện hiện có, anh/chị nghĩ tới chẩn đoán sơ bộ nào và dựa vào đâu?", a:joinBits([dx, "Đối chiếu với bệnh sử, thăm khám và cận lâm sàng trong hồ sơ."], " ") },
       { q:"Vì sao nghĩ đến chẩn đoán đó? Dấu hiệu nào ủng hộ, dữ kiện nào chống lại?", a:(r.ly_luan_lam_sang&&r.ly_luan_lam_sang[0]?r.ly_luan_lam_sang[0].noi_dung:ddx.join(" ")) },
       { q:"Cần phân biệt với những bệnh nào?", a:ddx.join(" ") },
       { q:"Đề nghị cận lâm sàng nào và kỳ vọng kết quả gì?", a:(r.hanh_dong_uu_tien||[]).map(a=>a.viec).join("; ") },
-      { q:"Trình bày nguyên tắc điều trị và theo dõi hậu phẫu.", a:`${r.phau_thuat?("Ngoại khoa: "+r.phau_thuat.phuong_phap+". "):""}Nội khoa: ${(r.thuoc_cuoi_ky||[]).map(m=>m.ten_thuoc).join(", ")}.` },
+      { q:"Trình bày nguyên tắc điều trị và theo dõi hậu phẫu.", a:`${(r.phau_thuat&&r.phau_thuat.phuong_phap)?("Ngoại khoa: "+r.phau_thuat.phuong_phap+". "):""}Nội khoa: ${(r.thuoc_cuoi_ky||[]).map(m=>m.ten_thuoc).filter(Boolean).join(", ")||"-"}.` },
     ],
   }
 }
@@ -7526,17 +7633,14 @@ function TeachingView({ report }){
           <TeachCard n={num()} title="Tiên lượng & dự phòng"><p className="teach-p">{t.tien_luong}</p></TeachCard>
         </>}
 
-      <div className="teach-block-h">Đánh giá năng lực suy luận lâm sàng</div>
+      <div className="teach-block-h">Tiêu chí tự đánh giá suy luận lâm sàng</div>
       <div className="score-card">
         {t.reasoning_score.items.map((s,i)=>(
           <div key={i} className="score-row">
             <span className="score-ten">{s.ten}</span>
-            <span className="score-bar"><span className="score-fill" style={{width:(s.score*10)+"%"}}/></span>
-            <span className="score-num">{s.score}/10</span>
             <span className="score-nx">{s.nx}</span>
           </div>
         ))}
-        <div className="score-overall">Tổng điểm: <b>{t.reasoning_score.overall}/100</b></div>
       </div>
     </div>
   )
@@ -8331,6 +8435,16 @@ body.theme-dark .nav-hist-btn:hover{background:#132038;color:#93C5FD}
 .nav-save-btn.primary{background:linear-gradient(135deg,#1D6FE8,#0E9488);border-color:transparent;color:#fff}
 .nav-save-btn.primary:hover{filter:brightness(1.08);background:linear-gradient(135deg,#1D6FE8,#0E9488);border-color:transparent;color:#fff}
 .nav-save-btn.primary.saved{color:#fff}
+.nav-id-wrap{position:relative}
+.nav-id-pop{position:absolute;right:0;top:calc(100% + 8px);z-index:60;width:300px;max-width:calc(100vw - 32px);background:var(--card,#fff);border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 32px rgba(15,40,90,.16);padding:12px;display:flex;flex-direction:column;gap:8px}
+.nav-id-pop label{font-size:12.5px;line-height:1.45;color:#475569;font-weight:500}
+.nav-id-pop input{height:34px;border:1px solid var(--border);border-radius:8px;padding:0 10px;font:inherit;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#fff;color:#0F172A}
+.nav-id-pop input:focus{outline:2px solid #93C5FD;outline-offset:1px;border-color:#1D6FE8}
+.nav-id-actions{display:flex;justify-content:flex-end;gap:6px}
+@media(max-width:620px){.nav-id-pop{position:fixed;left:16px;right:16px;top:60px;width:auto;max-width:none}}
+body.theme-dark .nav-id-pop{background:#1A2333;border-color:#2B3A52}
+body.theme-dark .nav-id-pop label{color:#CBD5E1}
+body.theme-dark .nav-id-pop input{background:#0F172A;color:#E2E8F0;border-color:#2B3A52}
 .nav-save-btn.primary.saved:hover{background:linear-gradient(135deg,#1D6FE8,#0E9488);border-color:transparent;color:#fff;filter:brightness(1.08)}
 .nav-save-btn.saved{color:#059669}
 .nav-save-btn.saved:hover{background:#ECFDF5;border-color:#6EE7B7}
@@ -8806,7 +8920,7 @@ body.theme-dark .hist-dx{color:#9FB3CC}
 .score-bar{flex:1;min-width:90px;height:8px;background:#eef2f7;border-radius:6px;overflow:hidden}
 .score-fill{display:block;height:100%;background:linear-gradient(90deg,#0E9488,#1D6FE8);border-radius:6px}
 .score-num{font-size:12px;font-weight:700;color:#0E9488;min-width:38px}
-.score-nx{flex-basis:100%;font-size:11.5px;color:#7A96C8;padding-left:160px;line-height:1.45}
+.score-nx{flex:1 1 240px;font-size:12px;color:#5B6B85;line-height:1.5}
 .score-overall{margin-top:6px;padding-top:10px;border-top:1px solid #eef3fa;font-size:13.5px;color:#0F2740}.score-overall b{color:#0E9488;font-size:16px}
 .tb-group{display:inline-flex;align-items:center;gap:2px;background:#f1f5fb;border-radius:11px;padding:3px}
 .tb-btn{display:inline-flex;align-items:center;gap:6px;border:none;background:none;color:#475569;font-size:12.5px;font-weight:600;padding:7px 11px;border-radius:8px;cursor:pointer}
@@ -9570,7 +9684,8 @@ export default function App() {
     return () => window.removeEventListener("mp-load-demo-patient", h)
   }, [initChat])
 
-  const handleUpload = async (file) => {
+  const singleFlight = useSingleFlight()
+  const handleUpload = singleFlight(async (file) => {
     // Không có file: dùng hồ sơ mẫu (nút "Xem demo")
     if (!file) {
       const demo = demoReportA()
@@ -9648,7 +9763,7 @@ export default function App() {
       }
       setLoading(false)
     }
-  }
+  })
 
   // Switching language while the main demo is open swaps it to that language.
   useEffect(() => onLangChange(() => {

@@ -15,7 +15,13 @@ from test_main import MOCK_REPORT
 
 def test_valid_report_is_unchanged_and_idempotent():
     n = normalize_report(copy.deepcopy(MOCK_REPORT))
-    assert n == MOCK_REPORT
+    # The only change allowed on a valid report: filling in a missing lab display value.
+    stripped = copy.deepcopy(n)
+    for lab in stripped.get("xet_nghiem_key", []):
+        orig = next(x for x in MOCK_REPORT["xet_nghiem_key"] if x.get("key") == lab["key"])
+        if "val" not in orig:
+            lab.pop("val")
+    assert stripped == MOCK_REPORT
     assert normalize_report(n) == n
 
 
@@ -42,7 +48,7 @@ def test_typical_model_mistakes_are_repaired():
     assert r["thong_tin_benh_nhan"]["gioi_tinh"] == "Nam"
     assert r["thong_tin_benh_nhan"]["so_benh_an"] == "25019647"
     assert r["chan_doan_chinh"] == "Hẹp van ĐMC; Suy tim"
-    assert r["xet_nghiem_meta"] == [{"key": "INR", "rawVal": 2.25, "trend": [1.2], "trendDates": ["27/09"]}]
+    assert r["xet_nghiem_meta"] == [{"key": "INR", "rawVal": 2.25, "trend": [1.2], "trendDates": ["27/09"], "val": "2.25"}]
     assert [e.get("ef") for e in r["sieu_am_tim"]["lan_kham"]] == [50, None]
     assert r["sieu_am_tim"]["lan_kham"][1]["ghi_chu"] == "free text echo note"
     assert r["canh_bao_nguy_co"] == [{"mo_ta": "INR dao động mạnh"}]
@@ -68,7 +74,7 @@ def _mutations(report, seed, n):
             for k, v in o.items():
                 yield from paths(v, p + (k,))
         elif isinstance(o, list):
-            for i, v in enumerate(o[:3]):
+            for i, v in enumerate(o[:8]):
                 yield from paths(v, p + (i,))
 
     all_paths = [p for p in paths(report) if p]
@@ -79,7 +85,10 @@ def _mutations(report, seed, n):
             try:
                 for k in p[:-1]:
                     o = o[k]
-                o[p[-1]] = copy.deepcopy(rnd.choice(weird))
+                if rnd.random() < 0.4:
+                    del o[p[-1]]          # the model left a field out entirely
+                else:
+                    o[p[-1]] = copy.deepcopy(rnd.choice(weird))
             except (KeyError, IndexError, TypeError):
                 pass
         yield r
@@ -112,3 +121,9 @@ def test_no_sepsis_all_clear_without_measurements():
     assert "Không dấu hiệu sốc nhiễm khuẩn" not in names
     full = run_priority_screens({"dau_hieu_sinh_ton": {"nhiet_do": 36.8, "lactate": 1.2, "ha_tt": 120, "ha_ttr": 70}})
     assert any(f["ten"] == "Không dấu hiệu sốc nhiễm khuẩn" and "None" not in f["ly_do"] for f in full["findings"])
+
+
+def test_lab_rows_missing_display_value_or_key_are_completed():
+    r = normalize_report({"xet_nghiem_key": [{"rawVal": 2.25, "unit": ""}, {"rawVal": 116, "unit": "g/L", "desc": "Hemoglobin"}]})
+    assert r["xet_nghiem_key"][0] == {"rawVal": 2.25, "unit": "", "val": "2.25", "key": "?"}
+    assert r["xet_nghiem_key"][1]["val"] == "116 g/L" and r["xet_nghiem_key"][1]["key"] == "Hemoglobin"

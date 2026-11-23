@@ -202,6 +202,14 @@ Full schema: https://danghoang2605-mediflow-ai.hf.space/docs
 
 ## Changelog (highlights)
 
+- **Records without an MRN can be saved**: the Save button used to be disabled when the document had no record number. It now asks for one and pre-fills a temporary local ID.
+- **No fabricated teaching content**: Teaching mode showed the same "clinical reasoning score" (82/100, with canned feedback) for every patient, and justified every diagnosis with "heart failure picture and echo". It now shows a self-check rubric with no scores and a neutral prompt.
+- **Clean printed reports**: missing fields no longer print as "undefined" or "null", and labels such as "Date of birth:" or "Surgeon:" are left out when there is no value. Covered by a print-output fuzzer.
+- **No invented findings**: the echo card used to append "valve OK" and "prosthetic valve functioning well" whenever the gradient fell, even for records without a valve replacement. It now states only the measured EF and gradient.
+- **Missing fields render cleanly**: records without an age, sex, echo date, EF value, lab display value or drug name no longer show "undefined", "NaN" or dangling labels, and no longer crash the lab panel. Found by a fuzzer that deletes fields and scans the visible text in every view.
+- **Spreadsheet-safe CSV export**: lab cells starting with `=`, `+`, `-` or `@` are neutralized, so a crafted record can't run formulas in Excel.
+- **Sanitized report edits**: scripts, event handlers and `javascript:` links are stripped from edited report HTML before it is saved or shown.
+- **Double-click safe**: Analyze, Save and Update ignore repeat clicks while a request is running (one double-click used to start three paid analyses).
 - **Risk-score fix**: the hypertension abbreviation "THA" used to match inside "thay van" (valve replacement), adding a false CHA2DS2-VASc point to valve patients. Keywords now match whole words only.
 - **English report output**: uploaded records are summarized in the selected language; Vietnamese and English records score identically in the rule engine.
 - **Valve detection fix**: "thay van hai lá cơ học" (word order with the valve name in between) is now recognized as a mechanical valve.
