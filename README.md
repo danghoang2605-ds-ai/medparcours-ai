@@ -135,11 +135,21 @@ The frontend talks to the hosted API by default; `npm run dev` and Docker point 
 ## Testing
 
 ```bash
-pip install -r requirements-dev.txt && pytest -q     # backend: rule engine, endpoints, merge, rate limit, i18n coverage
-npm install && npm test                              # frontend: storage, translation, schema, and jsdom UI smoke tests
+pip install -r requirements-dev.txt && pytest -q     # backend
+npm install && npm test                              # frontend: storage, translation, schema, jsdom UI tests
 ```
 
-Everything runs offline: the Claude API is mocked and IndexedDB is simulated with `fake-indexeddb`. CI runs both suites and a production build on every push ([`tests.yml`](.github/workflows/tests.yml)).
+Everything runs offline (the Claude API is mocked, IndexedDB is simulated). CI runs both suites, a lint step and a production build on every push ([`tests.yml`](.github/workflows/tests.yml)). Beyond example-based tests, the suite uses techniques that catch bugs hand-written tests usually miss:
+
+| Technique | Tool | What it guards |
+|---|---|---|
+| API fuzzing from the OpenAPI schema | [Schemathesis](https://schemathesis.readthedocs.io/) ([`test_api_fuzz.py`](test_api_fuzz.py)) | No endpoint returns a 5xx for any schema-valid input |
+| Property-based tests | [Hypothesis](https://hypothesis.readthedocs.io/) ([`test_merge_properties.py`](test_merge_properties.py)) | Merging a follow-up never drops new data, loses history, or duplicates on re-upload |
+| Malformed-output fuzzing | [`test_report_schema.py`](test_report_schema.py) | The rule engine and UI survive whatever shape the model returns |
+| React rules of hooks | [eslint-plugin-react-hooks](https://www.npmjs.com/package/eslint-plugin-react-hooks) | No conditional hooks (crash when a card's data appears later) |
+| UI smoke tests in jsdom | [`tests/ui.test.mjs`](tests/ui.test.mjs) | English-only UI, demo render, malformed saved records, print escaping |
+
+Also run periodically (not in CI): `gitleaks` over the full git history, `pip-audit`, `npm audit`, `bandit`, `ruff`.
 
 ## API
 
@@ -196,6 +206,10 @@ Full schema: https://danghoang2605-mediflow-ai.hf.space/docs
 - **English report output**: uploaded records are summarized in the selected language; Vietnamese and English records score identically in the rule engine.
 - **Valve detection fix**: "thay van hai lá cơ học" (word order with the valve name in between) is now recognized as a mechanical valve.
 - **Cloud sync (optional)**: reconnects to Turso, with private sync keys instead of accounts; deletions propagate across devices.
+- **Follow-up visits update the current state**: vitals, priority actions, key takeaways and the active problem list now come from the newest document (previously a follow-up with SpO2 85% still showed "breathing stable"); history lists keep accumulating. Guarded by Hypothesis property tests.
+- **Hardening found by fuzzing**: a non-UTF-8 language header crashed every endpoint; `/ecg/synthetic?heart_rate_bpm=0` divided by zero; a 0.4 MB PNG could decode to 400 megapixels. Added request-size and pixel limits.
+- **React fixes**: a conditional hook in the ICD card, and the case-conference animation counting the previous case's specialties.
+- **Dependencies**: esbuild 0.28.2 (fixes a dev-server file-read issue on Windows).
 - **Robust to imperfect AI output**: every report is normalized to the expected schema ([`report_schema.py`](report_schema.py), mirrored in [`reportSchema.js`](reportSchema.js)) before the rule engine or UI sees it; fuzz tests feed hundreds of malformed reports through both.
 - **No unfounded "all clear"**: the sepsis and respiratory screens only report "no signs" when the relevant vitals were actually measured.
 - **eGFR fix**: the priority screen read "Male" as female, so English records could be flagged with the wrong renal stage.

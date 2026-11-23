@@ -33,7 +33,7 @@ jobs:
           node-version: "22"
 
       - name: Install build dependencies
-        run: npm install --no-save esbuild@0.27.7 react@19.2.6 react-dom@19.2.6
+        run: npm install --no-save esbuild@0.28.2 react@19.2.6 react-dom@19.2.6
 
       - name: Build static site
         env:

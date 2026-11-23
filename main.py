@@ -18,7 +18,7 @@ try:
 except Exception:
     pass
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, Header
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -31,6 +31,9 @@ import report_merge
 from report_schema import normalize_report
 import cloud_store
 from cde.engine import evaluate_v2
+# Decompression-bomb guard: an 8 MB PNG can decode to billions of pixels. OpenCV
+# reads this limit when it is imported, so set it before ecg_engine/cv2 load.
+os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", str(40_000_000))
 import ecg_engine
 import numpy as np
 import cv2
@@ -65,7 +68,7 @@ class LanguageMiddleware:
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
-            raw = dict(scope.get("headers") or []).get(b"x-lang", b"").decode().lower()
+            raw = dict(scope.get("headers") or []).get(b"x-lang", b"").decode("latin-1").lower()  # HTTP headers are latin-1
             token = _request_lang.set("en" if raw.startswith("en") else "vi")
             try:
                 await self.app(scope, receive, send)
@@ -76,6 +79,37 @@ class LanguageMiddleware:
 
 
 app.add_middleware(LanguageMiddleware)
+
+MAX_REQUEST_BYTES = 40 * 1024 * 1024  # largest legitimate request: a 25 MB upload
+
+
+class BodySizeLimitMiddleware:
+    """Reject oversized requests before FastAPI buffers them into memory.
+    Checks Content-Length up front and counts streamed bytes as a backstop."""
+    def __init__(self, app, limit=MAX_REQUEST_BYTES):
+        self.app, self.limit = app, limit
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        length = dict(scope.get("headers") or []).get(b"content-length")
+        too_big = JSONResponse({"detail": "Request too large."}, status_code=413)
+        if length is not None and length.isdigit() and int(length) > self.limit:
+            return await too_big(scope, receive, send)
+        seen = 0
+
+        async def limited_receive():
+            nonlocal seen
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > self.limit:
+                    raise HTTPException(status_code=413, detail="Request too large.")
+            return message
+        await self.app(scope, limited_receive, send)
+
+
+app.add_middleware(BodySizeLimitMiddleware)
 
 
 # ─── RATE LIMITING ──────────────────────────────────────────────────────────
@@ -1423,7 +1457,7 @@ class EcgRequest(BaseModel):
 
 
 @app.get("/ecg/synthetic")
-async def ecg_synthetic(heart_rate_bpm: int = 75):
+async def ecg_synthetic(heart_rate_bpm: int = Query(75, ge=30, le=220)):
     """Generate a synthetic ECG image, digitize it, and return the full
     pipeline result (signal + calibration + heart rate).  Useful for
     frontend development and demo without real ECG images."""
@@ -1460,6 +1494,8 @@ async def ecg_digitize(req: EcgRequest):
     if lead_name not in VALID_12_LEADS:
         lead_name = "II"
 
+    if len(req.image_base64) > MAX_IMAGE_BYTES * 4 // 3 + 4:
+        raise HTTPException(status_code=413, detail=f"Image exceeds {MAX_IMAGE_BYTES // (1024*1024)}MB limit")
     try:
         raw = base64.b64decode(req.image_base64)
     except Exception:
@@ -1469,7 +1505,10 @@ async def ecg_digitize(req: EcgRequest):
         raise HTTPException(status_code=413, detail=f"Image exceeds {MAX_IMAGE_BYTES // (1024*1024)}MB limit")
 
     arr = np.frombuffer(raw, dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    try:
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR) if arr.size else None
+    except cv2.error:
+        img = None  # e.g. above OPENCV_IO_MAX_IMAGE_PIXELS
     if img is None:
         raise HTTPException(status_code=400, detail="Cannot decode image (corrupt or unsupported format)")
 

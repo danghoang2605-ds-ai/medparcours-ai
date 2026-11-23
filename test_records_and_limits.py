@@ -204,3 +204,32 @@ def test_rate_limit_buckets_are_pruned(monkeypatch):
     main._check_bucket("ai:1.2.3.4", 30, 600)
     assert len(main._rate_buckets) < 10
     main._rate_buckets.clear()
+
+
+def test_oversized_request_rejected_before_parsing(client, monkeypatch):
+    r = client.post("/analyze_text", content=b"{}", headers={"Content-Type": "application/json",
+                                                              "Content-Length": str(main.MAX_REQUEST_BYTES + 1)})
+    assert r.status_code == 413
+
+
+@pytest.mark.parametrize("bpm", [0, -5, 5000])
+def test_synthetic_ecg_rejects_impossible_heart_rates(client, bpm):
+    assert client.get(f"/ecg/synthetic?heart_rate_bpm={bpm}").status_code == 422
+
+
+def test_ecg_rejects_decompression_bomb(client):
+    import base64, struct, zlib
+    w, h = 10000, 5000   # 50 megapixels (> 40M cap) in a tiny PNG
+    raw = b"".join(b"\x00" + b"\xff" * w for _ in range(h))
+    def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+    r = client.post("/ecg", json={"image_base64": base64.b64encode(png).decode()})
+    assert r.status_code == 400
+
+
+def test_non_utf8_language_header_does_not_crash_any_endpoint():
+    # Found by Schemathesis: the language middleware decoded headers as UTF-8.
+    raw = TestClient(main.app, raise_server_exceptions=False)
+    r = raw.get("/health", headers={"X-Lang": "st chênh".encode("latin-1")})
+    assert r.status_code == 200

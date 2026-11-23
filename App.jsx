@@ -3764,10 +3764,13 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
     mpToast('Không tìm thấy "' + query.trim() + '" trong báo cáo', "err")
   }, [query])
   useEffect(() => {
-    setChatMessages(prev => (prev.length <= 1
+    // Re-greet in the current mode and language while the conversation hasn't started.
+    const regreet = () => setChatMessages(prev => (prev.length <= 1
       ? [{ role:"assistant", content: modeGreeting(viewMode, report.thong_tin_benh_nhan && report.thong_tin_benh_nhan.ho_ten) }]
       : prev))
-  }, [viewMode])
+    regreet()
+    return onLangChange(regreet)
+  }, [viewMode, report, setChatMessages])
   const [activeSection, setActiveSection] = useState("sec-status")
   const navLock = useRef(0)
   const r = report
@@ -5906,8 +5909,10 @@ function MedDiagChangesPanel({ report: r, pkey }) {
   )
 }
 function IcdGroupsCard({ groups, pkey }) {
-  if (!groups || groups.length === 0) return null
+  // Hooks must run on every render, before any early return (rules of hooks):
+  // groups can go from empty to non-empty after a record update.
   const tools = useWidgetTools("sec-icd", pkey)
+  if (!groups || groups.length === 0) return null
   const detail = groups.map(g =>
     `${g.ten_hien_thi} (${g.icd_range})${g.subtype ? " — " + g.subtype : ""}: ${(g.thang_diem_dac_trung||[]).join(", ")}`
   ).join("\n")
@@ -7309,10 +7314,13 @@ function MDTView({ report }){
     // hẳn cho tới khi tích hợp đúng bộ endpoint /mdt/* thật.
   }, [report])
   useEffect(() => {
+    // Depends on mdt (not report): mdt is recomputed after a report change, and the
+    // interval must count the NEW case's specialties, not the previous case's.
     setShown(0); setAskI(-1)
-    const id=setInterval(()=>setShown(s=>{ if(s>=mdt.specialties.length){clearInterval(id);return s} return s+1 }),520)
+    const total = mdt.specialties.length
+    const id=setInterval(()=>setShown(s=>{ if(s>=total){clearInterval(id);return s} return s+1 }),520)
     return ()=>clearInterval(id)
-  }, [report])
+  }, [mdt])
   const done = shown >= mdt.specialties.length
   return (
     <div className="mode-card mdt-card">

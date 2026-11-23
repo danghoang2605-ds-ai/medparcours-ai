@@ -2,7 +2,7 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY . .
-RUN npm install --no-save esbuild@0.27.7 react@19.2.6 react-dom@19.2.6
+RUN npm install --no-save esbuild@0.28.2 react@19.2.6 react-dom@19.2.6
 # Point the browser at the local backend container.
 ENV MEDIFLOW_API_URL=http://localhost:8000
 RUN node scripts/build.mjs

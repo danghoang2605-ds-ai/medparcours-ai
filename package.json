@@ -14,7 +14,7 @@
     "react-dom": "^19.2.6"
   },
   "devDependencies": {
-    "esbuild": "^0.27.7",
+    "esbuild": "^0.28.2",
     "fake-indexeddb": "^6.0.0",
     "jsdom": "^24.1.0"
   }
