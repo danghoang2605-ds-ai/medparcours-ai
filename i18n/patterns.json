@@ -210,5 +210,21 @@
  [
   "^Câu hỏi quá dài \\(tối đa (.+?) ký tự\\)\\.$",
   "Your question is too long (max $1 characters)."
+ ],
+ [
+  "^, lactate (.+?) mmol/L, nhiệt độ (.+?) độ$",
+  ", lactate $1 mmol/L, temperature $2 °C"
+ ],
+ [
+  "^Huyết áp ([\\d./]+)$",
+  "BP $1"
+ ],
+ [
+  "^, nhịp thở (.+?) lần/phút$",
+  ", respiratory rate $1/min"
+ ],
+ [
+  "^SpO2 (.+?)%, nhịp thở (.+?) lần/phút$",
+  "SpO2 $1%, respiratory rate $2/min"
  ]
 ]

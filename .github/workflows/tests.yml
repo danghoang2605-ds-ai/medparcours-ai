@@ -26,8 +26,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npm install --no-save esbuild@0.27.7 react@19.2.6 react-dom@19.2.6 fake-indexeddb@6
-      - name: Unit tests (browser storage)
+      - run: npm install --no-save esbuild@0.27.7 react@19.2.6 react-dom@19.2.6 fake-indexeddb@6 jsdom@24
+      - name: Unit and UI tests
         run: npm test
       - name: Build
         run: node scripts/build.mjs

@@ -4,6 +4,7 @@ import { localStore } from "./localStore"
 import { cloud, cloudStatus, getSyncKey, setSyncKey } from "./cloudSync"
 import { getLang, setLang, onLangChange, startI18n, translateDocument, translate } from "./i18n"
 import { MOCK_REPORT_EN } from "./demoData.en"
+import { normalizeReport } from "./reportSchema"
 
 // ─── Lớp gọi Backend (Hugging Face Spaces) ───────────────────────────────────
 // analyzeText/analyze: phân tích hồ sơ. mdt/teaching: lấy biên bản hội chẩn và
@@ -2032,7 +2033,7 @@ function runPriorityScreens(report) {
   // Hô hấp (ESC): SpO2, nhịp thở
   if (v.spo2 != null && v.spo2 < 92) add("critical","Suy hô hấp", `SpO2 ${v.spo2}% (dưới 92%)`, "ESC")
   else if (v.nhip_tho >= 25) add("warning","Theo dõi hô hấp", `Nhịp thở ${v.nhip_tho} lần/phút`, "ESC")
-  else if (v.spo2 != null) add("stable","Hô hấp ổn định", `SpO2 ${v.spo2}%, nhịp thở ${v.nhip_tho} lần/phút`, "ESC")
+  else if (v.spo2 != null) add("stable","Hô hấp ổn định", `SpO2 ${v.spo2}%` + (v.nhip_tho != null ? `, nhịp thở ${v.nhip_tho} lần/phút` : ""), "ESC")
 
   // Nhiễm khuẩn huyết (qSOFA rút gọn): HA tâm thu, nhịp thở, lactate, nhiệt độ
   let qsofa = 0
@@ -2042,7 +2043,8 @@ function runPriorityScreens(report) {
   if (v.nhiet_do >= 38) sepsisSigns.push(`sốt ${v.nhiet_do} độ`)
   if (v.lactate >= 2) sepsisSigns.push(`lactate ${v.lactate} mmol/L`)
   if (qsofa >= 2 || sepsisSigns.length >= 2) add("critical","Nghi ngờ nhiễm khuẩn huyết", `qSOFA ${qsofa}, ${sepsisSigns.join(", ")||"dấu hiệu sinh tồn bất thường"}`, "Sepsis 2026 / KDIGO")
-  else add("stable","Không dấu hiệu nhiễm khuẩn huyết cấp", `Huyết áp ${v.ha_tt}/${v.ha_ttr}, lactate ${v.lactate} mmol/L, nhiệt độ ${v.nhiet_do} độ`, "Sepsis 2026")
+  // Only claim "no signs" when the key vitals were actually measured (missing data is not evidence of absence).
+  else if (v.ha_tt != null && v.lactate != null && v.nhiet_do != null) add("stable","Không dấu hiệu nhiễm khuẩn huyết cấp", `Huyết áp ${v.ha_tt}` + (v.ha_ttr != null ? `/${v.ha_ttr}` : "") + `, lactate ${v.lactate} mmol/L, nhiệt độ ${v.nhiet_do} độ`, "Sepsis 2026")
 
   // Suy thận (KDIGO): eGFR
   const creat = labOf("Creatinin")?.rawVal
@@ -3922,7 +3924,7 @@ function ReportPage({ report, hoSoText, analysis, onReset, onReportUpdated, chat
           </div>
           <div className="nav-row2">
             <div className="nav-patient">
-              <div className="patient-avatar">{r.thong_tin_benh_nhan.ho_ten.charAt(0)}</div>
+              <div className="patient-avatar">{(r.thong_tin_benh_nhan.ho_ten || "?").charAt(0)}</div>
               <span className="patient-name">{r.thong_tin_benh_nhan.ho_ten}</span>
               <span className="patient-meta">{r.thong_tin_benh_nhan.tuoi} tuổi, {r.thong_tin_benh_nhan.gioi_tinh}</span>
             </div>
@@ -9495,7 +9497,10 @@ function ShortcutHelp(){
 
 export default function App() {
   const [state, setState] = useState("upload")
-  const [report, setReport] = useState(null)
+  const [report, setReportRaw] = useState(null)
+  // Every report the UI shows passes through the same shape repair as the backend
+  // (records saved by older versions may contain malformed fields).
+  const setReport = useCallback(r => setReportRaw(r == null ? r : normalizeReport(r)), [])
   const [hoSoText, setHoSoText] = useState("")
   const [analysis, setAnalysis] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -9541,7 +9546,7 @@ export default function App() {
   }, [])
 
   const initChat = useCallback((rpt) => {
-    setChatMessages([{role:"assistant", content: modeGreeting("clinical", rpt.thong_tin_benh_nhan && rpt.thong_tin_benh_nhan.ho_ten)}])
+    setChatMessages([{role:"assistant", content: modeGreeting("clinical", normalizeReport(rpt).thong_tin_benh_nhan.ho_ten)}])
   }, [])
   // CCCD lookup mock (mount sâu trong ReportPage) cần điều hướng App() mở
   // 1 trong 2 hồ sơ demo "tìm thấy liên thông" — dùng custom event, đúng
@@ -9670,7 +9675,7 @@ export default function App() {
       const data = await mpApi.getPatient(soBenhAn)
       setReport(data.report); setHoSoText(JSON.stringify(data.report)); setAnalysis(data.analysis)
       initChat(data.report); setCurrentId("db-" + soBenhAn); setUploadError(null); setState("report")
-      trackRecentPatient(soBenhAn, data.report?.thong_tin_benh_nhan?.ho_ten || soBenhAn)
+      trackRecentPatient(soBenhAn, normalizeReport(data.report).thong_tin_benh_nhan.ho_ten || soBenhAn)
       // Khôi phục lại đúng hội thoại MedAmi đã lưu trước đó (nếu có) — thay
       // cho lời chào mặc định của initChat(). Lỗi tải lịch sử chat KHÔNG
       // được chặn việc mở hồ sơ — chỉ giữ nguyên lời chào mặc định.

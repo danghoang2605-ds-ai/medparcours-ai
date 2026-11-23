@@ -29,6 +29,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from report_schema import normalize_report
 from clinical_rules import (
     compute_egfr, check_drug_safety, run_priority_screens, build_trend_facts,
     compute_cha2ds2_vasc, compute_has_bled, compute_ttr, detect_care_gaps,
@@ -63,6 +64,7 @@ except ImportError:
 def evaluate_v2(report: dict) -> dict:
     """Điểm vào mới. main.py có thể đổi sang gọi hàm này thay cho
     clinical_rules.evaluate() khi đã test xong (xem ghi chú cuối file)."""
+    report = normalize_report(report)
 
     # ── Layer 4 (một phần, độc lập): eGFR phải có trước để Layer 2 biết CKD
     info = report.get("thong_tin_benh_nhan", {}) or {}

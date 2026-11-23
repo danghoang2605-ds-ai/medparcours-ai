@@ -9,7 +9,7 @@ const serve = process.argv.includes("--serve")
 
 mkdirSync("build", { recursive: true })
 mkdirSync("dist", { recursive: true })
-for (const f of ["App.jsx", "api.js", "localStore.js", "i18n.js", "demoData.en.js", "cloudSync.js"]) copyFileSync(f, `build/${f}`)
+for (const f of ["App.jsx", "api.js", "localStore.js", "i18n.js", "demoData.en.js", "cloudSync.js", "reportSchema.js"]) copyFileSync(f, `build/${f}`)
 copyFileSync("docker_setup/mount.jsx", "build/mount.jsx")
 cpSync("i18n", "build/i18n", { recursive: true })
 copyFileSync("index.html", "dist/index.html")

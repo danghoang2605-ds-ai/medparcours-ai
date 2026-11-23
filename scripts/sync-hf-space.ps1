@@ -16,7 +16,7 @@ Set-Location $SpaceDir
 git pull
 
 # Backend code + the Space's Dockerfile and metadata (deploy/huggingface/).
-$files = "main.py","report_merge.py","cloud_store.py","clinical_rules.py","document_extract.py","ecg_engine.py","requirements.txt"
+$files = "main.py","report_merge.py","report_schema.py","cloud_store.py","clinical_rules.py","document_extract.py","ecg_engine.py","requirements.txt"
 foreach ($f in $files) { Copy-Item "$Repo\$f" -Destination . -Force }
 Copy-Item "$Repo\deploy\huggingface\Dockerfile" -Destination . -Force
 Copy-Item "$Repo\deploy\huggingface\README.md" -Destination . -Force

@@ -323,21 +323,26 @@ def run_priority_screens(report: dict) -> dict:
     elif rr is not None and rr >= 25:
         add("warning", "Theo dõi hô hấp", f"Nhịp thở {rr} lần/phút", "ESC")
     elif spo2 is not None:
-        add("stable", "Hô hấp ổn định", f"SpO2 {spo2}%, nhịp thở {rr} lần/phút", "ESC")
+        add("stable", "Hô hấp ổn định",
+            f"SpO2 {spo2}%" + (f", nhịp thở {rr} lần/phút" if rr is not None else ""), "ESC")
 
-    # Sốc nhiễm khuẩn (Rule Sepsis của bác sĩ): Sốt + Lactate + tụt HA
+    # Sốc nhiễm khuẩn (Rule Sepsis của bác sĩ): Sốt + Lactate + tụt HA.
+    # "Không có dấu hiệu" is only claimed when all three were actually measured;
+    # missing data is not evidence of absence.
     if (temp is not None and temp > 38.5) and (lactate is not None and lactate > 2.0) and (sbp is not None and sbp < 90):
         add("critical", "Nguy cơ sốc nhiễm khuẩn",
             f"Sốt {temp} độ, lactate {lactate} mmol/L, huyết áp tâm thu {sbp} mmHg", "Sepsis 2026")
-    else:
+    elif None not in (temp, lactate, sbp):
+        dia = v.get("ha_ttr")
         add("stable", "Không dấu hiệu sốc nhiễm khuẩn",
-            f"Huyết áp {sbp}/{v.get('ha_ttr','-')}, lactate {lactate} mmol/L, nhiệt độ {temp} độ", "Sepsis 2026")
+            f"Huyết áp {sbp}" + (f"/{dia}" if dia is not None else "") + f", lactate {lactate} mmol/L, nhiệt độ {temp} độ",
+            "Sepsis 2026")
 
     # Suy thận (KDIGO)
     creat = lab_of("Creatinin")
     creat_val = creat.get("rawVal") if creat else None
     egfr = compute_egfr(creat_val, report.get("thong_tin_benh_nhan", {}).get("tuoi"),
-                        "nam" in report.get("thong_tin_benh_nhan", {}).get("gioi_tinh", "").lower())
+                        parse_sex(report.get("thong_tin_benh_nhan", {}).get("gioi_tinh")) == "male")
     if egfr is not None:
         if egfr < 30:
             add("critical", "Suy thận nặng", f"eGFR {egfr} mL/phút/1.73m2 (dưới 30)", "KDIGO 2026")

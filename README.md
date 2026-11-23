@@ -136,7 +136,7 @@ The frontend talks to the hosted API by default; `npm run dev` and Docker point 
 
 ```bash
 pip install -r requirements-dev.txt && pytest -q     # backend: rule engine, endpoints, merge, rate limit, i18n coverage
-npm install && npm test                              # frontend: IndexedDB storage layer, translation layer
+npm install && npm test                              # frontend: storage, translation, schema, and jsdom UI smoke tests
 ```
 
 Everything runs offline: the Claude API is mocked and IndexedDB is simulated with `fake-indexeddb`. CI runs both suites and a production build on every push ([`tests.yml`](.github/workflows/tests.yml)).
@@ -167,6 +167,7 @@ Full schema: https://danghoang2605-mediflow-ai.hf.space/docs
 ├── demoData.en.js           # English synthetic demo case
 ├── main.py                  # FastAPI app: endpoints, extraction pipeline, rate limit
 ├── report_merge.py          # Pure merge logic for follow-up documents
+├── report_schema.py, reportSchema.js  # Repair malformed AI output (backend + browser)
 ├── cde/                     # Deterministic clinical decision engine (+ unit tests)
 ├── clinical_rules.py        # Base clinical rules
 ├── ecg_engine.py            # ECG image digitization
@@ -195,6 +196,9 @@ Full schema: https://danghoang2605-mediflow-ai.hf.space/docs
 - **English report output**: uploaded records are summarized in the selected language; Vietnamese and English records score identically in the rule engine.
 - **Valve detection fix**: "thay van hai lá cơ học" (word order with the valve name in between) is now recognized as a mechanical valve.
 - **Cloud sync (optional)**: reconnects to Turso, with private sync keys instead of accounts; deletions propagate across devices.
+- **Robust to imperfect AI output**: every report is normalized to the expected schema ([`report_schema.py`](report_schema.py), mirrored in [`reportSchema.js`](reportSchema.js)) before the rule engine or UI sees it; fuzz tests feed hundreds of malformed reports through both.
+- **No unfounded "all clear"**: the sepsis and respiratory screens only report "no signs" when the relevant vitals were actually measured.
+- **eGFR fix**: the priority screen read "Male" as female, so English records could be flagged with the wrong renal stage.
 - **Security hardening**: printed reports escape all record text (crafted uploads can't inject scripts); upload, question and merge-text size caps; chat history normalized for the Messages API.
 - **Redesigned Record history**: search, filters, pinning, rename, bulk delete, sync status.
 - **US-friendly English**: MRN instead of record number, dictation and read-aloud in en-US, natural phrasing for sentences the app assembles at runtime ("Analyze 3 documents"), and translated backend error messages.

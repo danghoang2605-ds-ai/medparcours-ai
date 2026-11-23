@@ -28,6 +28,7 @@ from pypdf import PdfReader
 import anthropic
 import document_extract
 import report_merge
+from report_schema import normalize_report
 import cloud_store
 from cde.engine import evaluate_v2
 import ecg_engine
@@ -691,7 +692,7 @@ def _parse_report_json(raw: str) -> dict:
     start, end = json_text.find("{"), json_text.rfind("}")
     if start != -1 and end != -1 and end > start:
         json_text = json_text[start:end + 1]
-    return json.loads(json_text)
+    return normalize_report(json.loads(json_text))
 
 
 def _extract_report_step1_from_upload(filename: str, content: bytes) -> dict:
@@ -802,7 +803,7 @@ def run_analysis_pipeline_from_image(image_bytes: bytes, media_type: str,
             json_text = json_text[start:end + 1]
 
         try:
-            report = json.loads(json_text)
+            report = normalize_report(json.loads(json_text))
         except json.JSONDecodeError:
             return JSONResponse({
                 "success": False,
@@ -915,7 +916,7 @@ def run_analysis_pipeline(ho_so_text: str, pages: int = 0,
             json_text = json_text[start:end + 1]
 
         try:
-            report = json.loads(json_text)
+            report = normalize_report(json.loads(json_text))
         except json.JSONDecodeError:
             return JSONResponse({
                 "success": False,
@@ -1105,7 +1106,8 @@ def _analysis_payload(engine: dict, trend_summary: str) -> dict:
 
 
 def _merge_and_reevaluate(existing_report: dict, report_moi: dict) -> dict:
-    merged_report = report_merge.merge_reports(existing_report, report_moi)
+    # existing_report comes from the browser: treat it as untrusted input too.
+    merged_report = normalize_report(report_merge.merge_reports(normalize_report(existing_report), normalize_report(report_moi)))
     engine = evaluate_v2(merged_report)
     trend_summary = ""
     if engine["trend_facts"]:
@@ -1131,7 +1133,7 @@ def _parse_report_text(raw: str) -> dict:
     start, end = json_text.find("{"), json_text.rfind("}")
     if start != -1 and end != -1 and end > start:
         json_text = json_text[start:end + 1]
-    return json.loads(json_text)
+    return normalize_report(json.loads(json_text))
 
 
 _UNREADABLE_NEW_DOC = ("Không đọc được rõ nội dung tài liệu mới để tạo JSON. "
