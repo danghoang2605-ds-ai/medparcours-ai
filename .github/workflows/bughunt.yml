@@ -1,0 +1,57 @@
+name: Bug hunt
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"   # weekly: new CVEs appear without any code change
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gitleaks reads the whole history, not just the last commit
+
+      - id: detect
+        run: |
+          if [ -n "$(git ls-files '*.py')" ]; then echo "py=true" >> "$GITHUB_OUTPUT"; fi
+          if [ -f package.json ]; then echo "js=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Secrets in git history (gitleaks)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sSfL -o gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gl.tgz" | sha256sum -c -
+          tar xzf gl.tgz gitleaks
+          ./gitleaks git "$GITHUB_WORKSPACE" --redact --no-banner
+
+      - if: steps.detect.outputs.py == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: steps.detect.outputs.py == 'true'
+        run: pip install -q ruff==0.17.6 bandit==1.9.4 pip-audit==2.10.1
+      - name: Python - syntax errors and undefined names (ruff)
+        if: steps.detect.outputs.py == 'true'
+        run: ruff check --select E9,F63,F7,F82 --output-format github .
+      - name: Python - security smells, medium and up (bandit)
+        if: steps.detect.outputs.py == 'true'
+        run: bandit -r . -ll -q -x ./.venv,./venv,./node_modules,./tests
+      - name: Python - dependencies with known vulnerabilities (pip-audit)
+        if: steps.detect.outputs.py == 'true'
+        run: |
+          shopt -s nullglob
+          for f in requirements*.txt; do echo "== $f"; pip-audit -r "$f" --progress-spinner off; done
+
+      - name: JavaScript - dependencies with known vulnerabilities (npm audit)
+        if: steps.detect.outputs.js == 'true'
+        run: |
+          [ -f package-lock.json ] || npm install --package-lock-only --no-audit --no-fund
+          npm audit --audit-level=high

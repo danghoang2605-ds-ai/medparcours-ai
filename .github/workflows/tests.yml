@@ -26,7 +26,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npm install --no-save esbuild@0.28.2 react@19.2.6 react-dom@19.2.6 fake-indexeddb@6 jsdom@24 eslint@8 eslint-plugin-react@7 eslint-plugin-react-hooks@4
+      - run: npm install --no-save esbuild@0.28.2 react@19.2.6 react-dom@19.2.6 fake-indexeddb@6 jsdom@24 eslint@9.39.5 @eslint/js@9.39.5 globals@17.14.0 eslint-plugin-react@7.37.5 eslint-plugin-react-hooks@7.1.1
       - name: Lint (undefined names, rules of hooks)
         run: npx eslint App.jsx api.js localStore.js i18n.js cloudSync.js reportSchema.js demoData.en.js
       - name: Unit and UI tests

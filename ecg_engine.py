@@ -1277,7 +1277,8 @@ def apply_ecg_safety_rules(n_leads: int, redflags: list, findings: list) -> dict
 # ─── TEST nhanh khi chạy trực tiếp ────────────────────────────────────────────
 if __name__ == "__main__":
     synthetic = generate_synthetic_ecg()
-    cv2.imwrite("/tmp/synthetic_ecg_test.png", synthetic)
+    # Manual self-test only (runs under __main__), so a fixed /tmp path is fine.
+    cv2.imwrite("/tmp/synthetic_ecg_test.png", synthetic)  # nosec B108
     result = digitize_ecg_image(synthetic)
     print(f"Width: {result['width']}, columns_with_signal: {result['columns_with_signal']}")
     print(f"Warning: {result['warning']}")

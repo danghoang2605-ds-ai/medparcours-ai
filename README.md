@@ -149,7 +149,7 @@ Everything runs offline (the Claude API is mocked, IndexedDB is simulated). CI r
 | React rules of hooks | [eslint-plugin-react-hooks](https://www.npmjs.com/package/eslint-plugin-react-hooks) | No conditional hooks (crash when a card's data appears later) |
 | UI smoke tests in jsdom | [`tests/ui.test.mjs`](tests/ui.test.mjs) | English-only UI, demo render, malformed saved records, print escaping |
 
-Also run periodically (not in CI): `gitleaks` over the full git history, `pip-audit`, `npm audit`, `bandit`, `ruff`.
+A second workflow ([`bughunt.yml`](.github/workflows/bughunt.yml)) runs on every push and weekly: `gitleaks` over the full git history, `ruff` (syntax errors, undefined names), `bandit`, `pip-audit` and `npm audit`. It runs weekly because new vulnerabilities get published without any code change.
 
 ## API
 

@@ -96,7 +96,9 @@ class _TursoHttp:
             headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            # Bandit B310 is a false positive here: the URL comes from the server's
+            # TURSO_DATABASE_URL setting (libsql:// is rewritten to https://), never from user input.
+            with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
                 data = json.loads(resp.read())
         except urllib.error.HTTPError as e:
             raise CloudError(f"Turso HTTP {e.code}") from e
